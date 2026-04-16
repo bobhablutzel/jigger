@@ -297,35 +297,18 @@ public class JiggerApp {
             cutSheetTab.setForeground(showingViewport[0] ? tabInactiveFg : tabActiveFg);
         };
 
-        // Re-pin the divider to the correct edge when in tabbed mode
-        Runnable pinDivider = () -> {
-            if (executor.getLayoutMode() == ViewLayoutMode.TABBED) {
-                if (showingViewport[0]) {
-                    hSplitPane.setDividerLocation(hSplitPane.getWidth() - hSplitPane.getDividerSize());
-                } else {
-                    hSplitPane.setDividerLocation(2);
-                }
-            }
-        };
-
         viewportTab.addActionListener(e -> {
             showingViewport[0] = true;
-            pinDivider.run();
+            hSplitPane.setResizeWeight(1.0);
+            hSplitPane.setDividerLocation(hSplitPane.getWidth() - hSplitPane.getDividerSize());
             updateTabColors.run();
         });
         cutSheetTab.addActionListener(e -> {
             showingViewport[0] = false;
-            pinDivider.run();
+            hSplitPane.setResizeWeight(0.0);
+            hSplitPane.setDividerLocation(2);
             cutSheetPanel.repaint();
             updateTabColors.run();
-        });
-
-        // Re-pin divider on resize so the hidden panel stays hidden
-        hSplitPane.addComponentListener(new java.awt.event.ComponentAdapter() {
-            @Override
-            public void componentResized(java.awt.event.ComponentEvent e) {
-                pinDivider.run();
-            }
         });
 
         JPanel viewContainer = new JPanel(new BorderLayout());
@@ -334,11 +317,13 @@ public class JiggerApp {
         Runnable applyLayout = () -> {
             if (executor.getLayoutMode() == ViewLayoutMode.SPLIT_PANE) {
                 tabBar.setVisible(false);
+                hSplitPane.setResizeWeight(0.6);
                 hSplitPane.setDividerLocation((int) (frame.getWidth() * 0.6));
             } else {
                 tabBar.setVisible(true);
                 showingViewport[0] = true;
-                pinDivider.run();
+                hSplitPane.setResizeWeight(1.0);
+                hSplitPane.setDividerLocation(1.0);
                 updateTabColors.run();
             }
         };
