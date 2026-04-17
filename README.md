@@ -143,6 +143,12 @@ export cutsheet jpg          — export as JPEG
 
 Cut sheets update automatically when parts change (dirty-flag lazy recompute). The view scrolls vertically when sheets overflow the viewport.
 
+### Mouse Selection
+
+Click on an object in the 3D viewport to select it. If the object is part of an assembly, the entire assembly is selected. Selected objects are highlighted with a blue tint and wireframe overlay. Click empty space to deselect.
+
+Selection info is printed in the command output panel.
+
 ### Inspection
 
 ```
@@ -330,13 +336,13 @@ If built-in templates should use the new joint type, update their definitions in
 
 ### Next Up
 
-- Mouse picking and right-click popup menu in 3D view
+- Right-click context menu on selected objects (move, rotate, delete, info)
 - Export multiple assembled units as a new reusable template
 
 ### Backlog
 
 - Persistent command history across sessions
-- Mouse selection and drag-to-move for parts and assemblies
+- Drag-to-move for selected parts and assemblies
 - Optional 3D background views (floor plane for cabinets, workbench surface, etc.)
 - Shelf count logic for the shelf-unit template
 - Additional joint types: dovetails, biscuits, dowels, splines

@@ -20,13 +20,20 @@ package com.jigger;
 
 import com.jme3.app.state.BaseAppState;
 import com.jme3.app.Application;
+import com.jme3.collision.CollisionResult;
+import com.jme3.collision.CollisionResults;
 import com.jme3.input.InputManager;
 import com.jme3.input.KeyInput;
 import com.jme3.input.MouseInput;
 import com.jme3.input.controls.*;
 import com.jme3.math.FastMath;
+import com.jme3.math.Ray;
+import com.jme3.math.Vector2f;
 import com.jme3.math.Vector3f;
 import com.jme3.renderer.Camera;
+import com.jme3.scene.Geometry;
+import com.jme3.scene.Node;
+import com.jme3.scene.Spatial;
 
 /**
  * Orbital camera controller.
@@ -67,6 +74,8 @@ public class CameraController extends BaseAppState implements AnalogListener, Ac
     private static final float MIN_DISTANCE   = 10f;     // ~1cm
     private static final float MAX_DISTANCE   = 50000f;  // ~50 meters
 
+    private static final float CLICK_THRESHOLD = 5f;  // pixels — less than this = click, not drag
+
     private final Camera cam;
     private final InputManager inputManager;
 
@@ -77,9 +86,20 @@ public class CameraController extends BaseAppState implements AnalogListener, Ac
     private boolean rotating = false;
     private boolean panning  = false;
 
+    // Click detection: track mouse position on left-press
+    private Vector2f leftPressPos = null;
+    private SelectionManager selectionManager;
+    private Node pickableNode;  // the node to ray-cast against (objectsNode)
+
     public CameraController(Camera cam, InputManager inputManager) {
         this.cam = cam;
         this.inputManager = inputManager;
+    }
+
+    /** Set the selection manager and the node to pick against. */
+    public void setSelectionManager(SelectionManager selectionManager, Node pickableNode) {
+        this.selectionManager = selectionManager;
+        this.pickableNode = pickableNode;
     }
 
     @Override
@@ -125,8 +145,66 @@ public class CameraController extends BaseAppState implements AnalogListener, Ac
     public void onAction(String name, boolean isPressed, float tpf) {
         switch (name) {
             case ROTATE_DRAG -> rotating = isPressed;
-            case PAN_DRAG    -> panning = isPressed;
+            case PAN_DRAG -> {
+                panning = isPressed;
+                if (isPressed) {
+                    // Record mouse position on press
+                    leftPressPos = inputManager.getCursorPosition().clone();
+                } else if (leftPressPos != null) {
+                    // On release, check if it was a click (minimal movement)
+                    Vector2f releasePos = inputManager.getCursorPosition();
+                    float dist = leftPressPos.distance(releasePos);
+                    if (dist < CLICK_THRESHOLD) {
+                        handleClick(releasePos);
+                    }
+                    leftPressPos = null;
+                }
+            }
         }
+    }
+
+    /** Ray cast from the camera through the click point and select the hit object. */
+    private void handleClick(Vector2f screenPos) {
+        if (selectionManager == null || pickableNode == null) return;
+
+        // Build a ray from the camera through the click point
+        Vector3f worldPos = cam.getWorldCoordinates(screenPos, 0f);
+        Vector3f direction = cam.getWorldCoordinates(screenPos, 1f)
+                .subtractLocal(worldPos).normalizeLocal();
+        Ray ray = new Ray(worldPos, direction);
+
+        // Collision test against all pickable geometry
+        CollisionResults results = new CollisionResults();
+        pickableNode.collideWith(ray, results);
+
+        if (results.size() > 0) {
+            // Find the closest hit and walk up to the wrapper node
+            CollisionResult closest = results.getClosestCollision();
+            String partName = resolvePartName(closest.getGeometry());
+            if (partName != null) {
+                selectionManager.selectByPartName(partName);
+                return;
+            }
+        }
+
+        // Clicked empty space — deselect
+        selectionManager.deselect();
+    }
+
+    /**
+     * Walk up the scene graph from a hit geometry to find the wrapper node
+     * (named "node_<partName>") and extract the part name.
+     */
+    private String resolvePartName(Geometry geom) {
+        Spatial current = geom;
+        while (current != null) {
+            String nodeName = current.getName();
+            if (nodeName != null && nodeName.startsWith("node_")) {
+                return nodeName.substring(5);  // strip "node_" prefix
+            }
+            current = current.getParent();
+        }
+        return null;
     }
 
     @Override

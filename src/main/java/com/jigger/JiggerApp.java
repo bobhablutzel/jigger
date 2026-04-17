@@ -113,6 +113,41 @@ public class JiggerApp {
 
         CommandPanel commandPanel = new CommandPanel(executor);
 
+        // -- Selection manager --
+        SelectionManager selectionManager = new SelectionManager(sceneManager);
+
+        // Track previously highlighted parts for cleanup
+        final java.util.List<String> previousHighlights = new java.util.ArrayList<>();
+        selectionManager.addSelectionListener(event -> {
+            // Remove old highlights
+            for (String name : previousHighlights) {
+                sceneManager.setHighlight(name, false);
+            }
+            previousHighlights.clear();
+
+            if (event.name() != null) {
+                // Apply new highlights
+                java.util.List<String> parts = selectionManager.getSelectedPartNames();
+                for (String name : parts) {
+                    sceneManager.setHighlight(name, true);
+                }
+                previousHighlights.addAll(parts);
+
+                // Show selection info in command output
+                String info;
+                if (event.isAssembly()) {
+                    info = String.format("Selected assembly '%s'", event.name());
+                    if (event.templateName() != null) info += " [" + event.templateName() + "]";
+                    info += " (" + event.partCount() + " parts)";
+                } else {
+                    info = "Selected '" + event.name() + "'";
+                }
+                String finalInfo = info;
+                javax.swing.SwingUtilities.invokeLater(
+                        () -> commandPanel.appendOutput(finalInfo + "\n"));
+            }
+        });
+
         // -- Settings panel (bottom-right of viewport) --
         JPanel viewportPanel = new JPanel(new BorderLayout());
         viewportPanel.add(canvas, BorderLayout.CENTER);
@@ -397,6 +432,7 @@ public class JiggerApp {
         // window peer exists. This ordering is required on Windows where LWJGL3
         // cannot bind an OpenGL context to an unrealized AWT canvas.
         sceneManager.startCanvas();
+        sceneManager.setSelectionManager(selectionManager);
 
         // Apply initial layout now that the frame is realized
         // (setDividerLocation with proportional values requires a non-zero width)

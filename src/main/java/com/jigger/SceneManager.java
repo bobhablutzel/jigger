@@ -71,6 +71,7 @@ public class SceneManager extends SimpleApplication {
     private float kerfMm = GuillotinePacker.DEFAULT_KERF_MM;
     private volatile boolean cutSheetDirty = true;
     private final List<Runnable> sceneChangeListeners = new ArrayList<>();
+    private CameraController cameraController;
     private BitmapFont labelFont;
 
     /** Immutable record of the parameters used to create an object. */
@@ -83,8 +84,8 @@ public class SceneManager extends SimpleApplication {
         setDisplayStatView(false);
         setDisplayFps(false);
 
-        CameraController camCtrl = new CameraController(cam, inputManager);
-        stateManager.attach(camCtrl);
+        cameraController = new CameraController(cam, inputManager);
+        stateManager.attach(cameraController);
 
         rootNode.attachChild(AxisDisplay.create(assetManager));
         rootNode.attachChild(objectsNode);
@@ -561,6 +562,50 @@ public class SceneManager extends SimpleApplication {
 
     public Map<String, Geometry> getObjects() {
         return Map.copyOf(geometries);
+    }
+
+    /** Get the node containing all user-created objects (for ray-cast picking). */
+    public Node getObjectsNode() {
+        return objectsNode;
+    }
+
+    /** Connect the selection manager to the camera controller for mouse picking. */
+    public void setSelectionManager(SelectionManager selectionManager) {
+        enqueue(() -> {
+            if (cameraController != null) {
+                cameraController.setSelectionManager(selectionManager, objectsNode);
+            }
+        });
+    }
+
+    private static final ColorRGBA HIGHLIGHT_TINT = new ColorRGBA(0.3f, 0.6f, 1.0f, 1f);
+
+    /** Highlight an object by tinting it. Call from render thread. */
+    public void setHighlight(String name, boolean highlighted) {
+        enqueue(() -> {
+            Geometry geom = geometries.get(name);
+            if (geom == null) return;
+            Material mat = geom.getMaterial();
+            if (highlighted) {
+                // Store original colors as user data for restoration
+                ColorRGBA origDiffuse = (ColorRGBA) mat.getParam("Diffuse").getValue();
+                ColorRGBA origAmbient = (ColorRGBA) mat.getParam("Ambient").getValue();
+                geom.setUserData("origDiffuse", new float[]{origDiffuse.r, origDiffuse.g, origDiffuse.b, origDiffuse.a});
+                geom.setUserData("origAmbient", new float[]{origAmbient.r, origAmbient.g, origAmbient.b, origAmbient.a});
+                // Tint toward highlight color
+                mat.setColor("Diffuse", origDiffuse.clone().interpolateLocal(HIGHLIGHT_TINT, 0.4f));
+                mat.setColor("Ambient", origAmbient.clone().interpolateLocal(HIGHLIGHT_TINT, 0.4f));
+                // Add wireframe overlay
+                mat.getAdditionalRenderState().setWireframe(true);
+            } else {
+                // Restore original colors
+                float[] od = (float[]) geom.getUserData("origDiffuse");
+                float[] oa = (float[]) geom.getUserData("origAmbient");
+                if (od != null) mat.setColor("Diffuse", new ColorRGBA(od[0], od[1], od[2], od[3]));
+                if (oa != null) mat.setColor("Ambient", new ColorRGBA(oa[0], oa[1], oa[2], oa[3]));
+                mat.getAdditionalRenderState().setWireframe(false);
+            }
+        });
     }
 
     /**
