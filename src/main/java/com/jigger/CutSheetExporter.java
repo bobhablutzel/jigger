@@ -175,14 +175,13 @@ public class CutSheetExporter {
                 drawPdfGrainLines(cs, px, py, pw, ph, part.isRotated());
             }
 
-            // Rotation indicator
-            if (part.isRotated() && pw > 14 && ph > 14) {
+            // Rotation indicator (text fallback — standard PDF fonts lack U+21BA)
+            if (part.isRotated() && pw > 20 && ph > 14) {
                 setFillColor(cs, CutSheetRenderer.DIM_COLOR);
                 cs.beginText();
-                cs.setFont(fontNormal, 8);
-                // PDF Y is inverted — top-left corner of the part
-                cs.newLineAtOffset(px + 3, py + ph - 10);
-                cs.showText("\u21BA");
+                cs.setFont(fontItalic, 6);
+                cs.newLineAtOffset(px + 2, py + ph - 8);
+                cs.showText("rot");
                 cs.endText();
             }
 
