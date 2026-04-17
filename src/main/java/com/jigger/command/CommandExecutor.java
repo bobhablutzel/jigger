@@ -392,6 +392,7 @@ public class CommandExecutor {
 
         // Instantiate: expand each body line, substitute vars, execute
         Assembly assembly = new Assembly(instanceName);
+        assembly.setTemplateName(templateName);
         List<Part> createdParts = new ArrayList<>();
         StringBuilder output = new StringBuilder();
 
@@ -421,20 +422,28 @@ public class CommandExecutor {
             suppressUndo = false;
         }
 
-        // Apply placement offset if specified
-        boolean hasPlacement = placement[0] != 0 || placement[1] != 0 || placement[2] != 0;
-        if (hasPlacement) {
-            float ox = units.toMm(placement[0]);
-            float oy = units.toMm(placement[1]);
-            float oz = units.toMm(placement[2]);
-            for (Part part : createdParts) {
-                SceneManager.ObjectRecord rec = scene.getObjectRecord(part.getName());
-                if (rec != null) {
-                    com.jme3.math.Vector3f newPos = rec.position().add(ox, oy, oz);
-                    scene.moveObject(part.getName(), newPos);
+        // Normalize assembly position: shift all parts so the bounding box min
+        // is at the target placement (default 0,0,0). This ensures the assembly's
+        // reference point is consistent with the "move" command.
+        {
+            com.jme3.math.Vector3f target = new com.jme3.math.Vector3f(
+                    units.toMm(placement[0]),
+                    units.toMm(placement[1]),
+                    units.toMm(placement[2]));
+            com.jme3.math.Vector3f currentOrigin = assembly.getBoundingBoxMin(
+                    pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.position() : null; },
+                    pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.size() : null; });
+            com.jme3.math.Vector3f delta = target.subtract(currentOrigin);
+            if (delta.lengthSquared() > 0.001f) {
+                for (Part part : createdParts) {
+                    SceneManager.ObjectRecord rec = scene.getObjectRecord(part.getName());
+                    if (rec != null) {
+                        scene.moveObject(part.getName(), rec.position().add(delta));
+                    }
                 }
             }
         }
+        boolean hasPlacement = placement[0] != 0 || placement[1] != 0 || placement[2] != 0;
 
         scene.registerAssembly(assembly);
         pushAction(new CreateTemplateAction(scene, instanceName, templateName, createdParts));

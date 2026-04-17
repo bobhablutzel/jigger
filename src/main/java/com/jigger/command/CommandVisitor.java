@@ -27,6 +27,8 @@ import com.jme3.math.ColorRGBA;
 import com.jme3.math.Vector3f;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -144,9 +146,16 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
             return "Deleted all objects.";
         }
         String name = extractName(ctx.objectName());
+
+        // Check assembly first
+        Assembly assembly = scene.getAssembly(name);
+        if (assembly != null) {
+            return deleteAssembly(assembly);
+        }
+
         SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
         if (rec == null) {
-            return "Object '" + name + "' not found.";
+            return "Object or assembly '" + name + "' not found.";
         }
         Part part = scene.getPart(name);
         scene.deleteObject(name);
@@ -155,12 +164,53 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
         return "Deleted '" + name + "'.";
     }
 
+    private String deleteAssembly(Assembly assembly) {
+        String name = assembly.getName();
+        String templateName = assembly.getTemplateName();
+
+        // Capture all joints involving assembly parts
+        List<Joint> assemblyJoints = new ArrayList<>();
+        for (Part p : assembly.getParts()) {
+            assemblyJoints.addAll(scene.getJointRegistry().getJointsForPart(p.getName()));
+        }
+        // Deduplicate
+        assemblyJoints = assemblyJoints.stream().distinct().toList();
+
+        // Capture snapshots for undo
+        List<DeleteAssemblyAction.PartSnapshot> snapshots = new ArrayList<>();
+        for (Part p : assembly.getParts()) {
+            SceneManager.ObjectRecord rec = scene.getObjectRecord(p.getName());
+            if (rec != null) {
+                snapshots.add(new DeleteAssemblyAction.PartSnapshot(
+                        p, rec.position(), rec.size(), rec.color(),
+                        scene.getRotation(p.getName())));
+            }
+        }
+
+        // Delete all parts
+        for (Part p : assembly.getParts().reversed()) {
+            scene.deleteObject(p.getName());
+        }
+        scene.removeAssembly(name);
+
+        executor.pushAction(new DeleteAssemblyAction(scene, name, templateName,
+                snapshots, assemblyJoints));
+        return String.format("Deleted assembly '%s' (%d parts).", name, snapshots.size());
+    }
+
     @Override
     public String visitMoveCommand(JiggerCommandParser.MoveCommandContext ctx) {
         String name = extractName(ctx.objectName());
+
+        // Check assembly first
+        Assembly assembly = scene.getAssembly(name);
+        if (assembly != null) {
+            return moveAssembly(assembly, parsePosition(ctx.position()));
+        }
+
         SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
         if (rec == null) {
-            return "Object '" + name + "' not found.";
+            return "Object or assembly '" + name + "' not found.";
         }
         Vector3f newPos = parsePosition(ctx.position());
         Vector3f oldPos = rec.position();
@@ -171,18 +221,58 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
                 name, fromMm(newPos.x), fromMm(newPos.y), fromMm(newPos.z), abbr);
     }
 
+    private String moveAssembly(Assembly assembly, Vector3f targetPos) {
+        String name = assembly.getName();
+        String abbr = executor.getUnits().getAbbreviation();
+
+        // Compute the assembly's current origin (bounding box min corner)
+        Vector3f currentOrigin = assembly.getBoundingBoxMin(
+                partName -> {
+                    SceneManager.ObjectRecord r = scene.getObjectRecord(partName);
+                    return r != null ? r.position() : null;
+                },
+                partName -> {
+                    SceneManager.ObjectRecord r = scene.getObjectRecord(partName);
+                    return r != null ? r.size() : null;
+                });
+
+        Vector3f delta = targetPos.subtract(currentOrigin);
+        List<String> partNames = assembly.getParts().stream()
+                .map(Part::getName).toList();
+
+        // Apply delta to all parts
+        for (String partName : partNames) {
+            SceneManager.ObjectRecord rec = scene.getObjectRecord(partName);
+            if (rec != null) {
+                scene.moveObject(partName, rec.position().add(delta));
+            }
+        }
+
+        executor.pushAction(new MoveAssemblyAction(scene, name, delta, partNames));
+        return String.format("Moved assembly '%s' (%d parts) to (%.2f, %.2f, %.2f) %s",
+                name, partNames.size(),
+                fromMm(targetPos.x), fromMm(targetPos.y), fromMm(targetPos.z), abbr);
+    }
+
     @Override
     public String visitRotateCommand(JiggerCommandParser.RotateCommandContext ctx) {
         String name = extractName(ctx.objectName());
-        SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
-        if (rec == null) {
-            return "Object '" + name + "' not found.";
-        }
         var nums = ctx.rotation().NUMBER();
         Vector3f newDegrees = new Vector3f(
                 Float.parseFloat(nums.get(0).getText()),
                 Float.parseFloat(nums.get(1).getText()),
                 Float.parseFloat(nums.get(2).getText()));
+
+        // Check assembly first
+        Assembly assembly = scene.getAssembly(name);
+        if (assembly != null) {
+            return rotateAssembly(assembly, newDegrees);
+        }
+
+        SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
+        if (rec == null) {
+            return "Object or assembly '" + name + "' not found.";
+        }
         Vector3f oldDegrees = scene.getRotation(name);
         scene.rotateObject(name, newDegrees);
         executor.pushAction(new RotateAction(scene, name, oldDegrees, newDegrees));
@@ -190,11 +280,74 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
                 name, newDegrees.x, newDegrees.y, newDegrees.z);
     }
 
+    private String rotateAssembly(Assembly assembly, Vector3f newDegrees) {
+        String name = assembly.getName();
+        List<String> partNames = assembly.getParts().stream()
+                .map(Part::getName).toList();
+
+        // Capture old state for undo
+        Map<String, Vector3f> oldRotations = new LinkedHashMap<>();
+        Map<String, Vector3f> oldPositions = new LinkedHashMap<>();
+        for (String partName : partNames) {
+            oldRotations.put(partName, scene.getRotation(partName).clone());
+            SceneManager.ObjectRecord rec = scene.getObjectRecord(partName);
+            if (rec != null) {
+                oldPositions.put(partName, rec.position().clone());
+            }
+        }
+
+        // Compute the assembly's pivot (bounding box min)
+        Vector3f pivot = assembly.getBoundingBoxMin(
+                pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.position() : null; },
+                pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.size() : null; });
+
+        // Build a quaternion for the assembly rotation
+        com.jme3.math.Quaternion assemblyQuat = new com.jme3.math.Quaternion().fromAngles(
+                newDegrees.x * com.jme3.math.FastMath.DEG_TO_RAD,
+                newDegrees.y * com.jme3.math.FastMath.DEG_TO_RAD,
+                newDegrees.z * com.jme3.math.FastMath.DEG_TO_RAD);
+
+        // Rotate each part's position around the pivot and combine rotations
+        for (String partName : partNames) {
+            SceneManager.ObjectRecord rec = scene.getObjectRecord(partName);
+            if (rec == null) continue;
+
+            // Rotate position around pivot
+            Vector3f relPos = rec.position().subtract(pivot);
+            Vector3f rotatedPos = assemblyQuat.mult(relPos).add(pivot);
+            scene.moveObject(partName, rotatedPos);
+
+            // Combine: apply the assembly rotation on top of the part's existing rotation
+            Vector3f partDegrees = scene.getRotation(partName);
+            com.jme3.math.Quaternion partQuat = new com.jme3.math.Quaternion().fromAngles(
+                    partDegrees.x * com.jme3.math.FastMath.DEG_TO_RAD,
+                    partDegrees.y * com.jme3.math.FastMath.DEG_TO_RAD,
+                    partDegrees.z * com.jme3.math.FastMath.DEG_TO_RAD);
+            com.jme3.math.Quaternion combined = assemblyQuat.mult(partQuat);
+            float[] angles = combined.toAngles(null);
+            Vector3f combinedDegrees = new Vector3f(
+                    angles[0] * com.jme3.math.FastMath.RAD_TO_DEG,
+                    angles[1] * com.jme3.math.FastMath.RAD_TO_DEG,
+                    angles[2] * com.jme3.math.FastMath.RAD_TO_DEG);
+            scene.rotateObject(partName, combinedDegrees);
+        }
+
+        executor.pushAction(new RotateAssemblyAction(scene, name, oldRotations,
+                oldPositions, partNames));
+        return String.format("Rotated assembly '%s' (%d parts) by (%.1f, %.1f, %.1f) degrees",
+                name, partNames.size(), newDegrees.x, newDegrees.y, newDegrees.z);
+    }
+
     @Override
     public String visitResizeCommand(JiggerCommandParser.ResizeCommandContext ctx) {
         String name = extractName(ctx.objectName());
+        // Resize doesn't apply to assemblies — only individual parts
         SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
         if (rec == null) {
+            Assembly assembly = scene.getAssembly(name);
+            if (assembly != null) {
+                return "Cannot resize an assembly. Resize individual parts with '" + name + "/part-name'.";
+            }
             return "Object '" + name + "' not found.";
         }
         Vector3f newSize = parseSizeSpec(ctx.sizeSpec());
@@ -313,10 +466,23 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
     @Override
     public String visitDisplayCommand(JiggerCommandParser.DisplayCommandContext ctx) {
         if (ctx.objectName() != null) {
-            // Single object
             String name = extractName(ctx.objectName());
+            // Check assembly first
+            Assembly assembly = scene.getAssembly(name);
+            if (assembly != null) {
+                int count = 0;
+                for (Part p : assembly.getParts()) {
+                    if (!scene.isNameDisplayed(p.getName())) {
+                        scene.displayName(p.getName());
+                        count++;
+                    }
+                }
+                return count > 0
+                        ? "Displaying names for " + count + " part(s) in assembly '" + name + "'."
+                        : "All names already displayed in assembly '" + name + "'.";
+            }
             if (scene.getObjectRecord(name) == null) {
-                return "Object '" + name + "' not found.";
+                return "Object or assembly '" + name + "' not found.";
             }
             boolean wasDisplayed = scene.isNameDisplayed(name);
             scene.displayName(name);
@@ -335,10 +501,23 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
     @Override
     public String visitHideCommand(JiggerCommandParser.HideCommandContext ctx) {
         if (ctx.objectName() != null) {
-            // Single object
             String name = extractName(ctx.objectName());
+            // Check assembly first
+            Assembly assembly = scene.getAssembly(name);
+            if (assembly != null) {
+                int count = 0;
+                for (Part p : assembly.getParts()) {
+                    if (scene.isNameDisplayed(p.getName())) {
+                        scene.hideName(p.getName());
+                        count++;
+                    }
+                }
+                return count > 0
+                        ? "Hidden names for " + count + " part(s) in assembly '" + name + "'."
+                        : "No names were displayed in assembly '" + name + "'.";
+            }
             if (scene.getObjectRecord(name) == null) {
-                return "Object '" + name + "' not found.";
+                return "Object or assembly '" + name + "' not found.";
             }
             boolean wasDisplayed = scene.isNameDisplayed(name);
             scene.hideName(name);
@@ -574,7 +753,38 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
         if (recs.isEmpty()) return "No objects in scene.";
         String abbr = executor.getUnits().getAbbreviation();
         StringBuilder sb = new StringBuilder("Objects in scene (units: " + abbr + "):\n");
+
+        // Track which parts belong to assemblies so we can list standalone objects separately
+        java.util.Set<String> assemblyPartNames = new java.util.HashSet<>();
+        Map<String, Assembly> assemblies = scene.getAllAssemblies();
+
+        // List assemblies first
+        for (Assembly assembly : assemblies.values()) {
+            String templateLabel = assembly.getTemplateName() != null
+                    ? " [" + assembly.getTemplateName() + "]" : "";
+            sb.append(String.format("\n  %-20s assembly%s (%d parts)%n",
+                    assembly.getName(), templateLabel, assembly.getParts().size()));
+            for (Part p : assembly.getParts()) {
+                assemblyPartNames.add(p.getName());
+                SceneManager.ObjectRecord rec = recs.get(p.getName());
+                if (rec != null) {
+                    Vector3f pos = rec.position();
+                    sb.append(String.format("    %-20s [%s] %.2f x %.2f %s  at (%.2f, %.2f, %.2f)%n",
+                            p.getName(), p.getMaterial().getName(),
+                            fromMm(p.getCutWidthMm()), fromMm(p.getCutHeightMm()), abbr,
+                            fromMm(pos.x), fromMm(pos.y), fromMm(pos.z)));
+                }
+            }
+        }
+
+        // List standalone objects (not in any assembly)
+        boolean hasStandalone = false;
         for (var rec : recs.values()) {
+            if (assemblyPartNames.contains(rec.name())) continue;
+            if (!hasStandalone) {
+                if (!assemblies.isEmpty()) sb.append("\n  Standalone:\n");
+                hasStandalone = true;
+            }
             Vector3f pos = rec.position();
             Part part = scene.getPart(rec.name());
             if (part != null) {
@@ -617,9 +827,15 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
     }
 
     private String showInfo(String name) {
+        // Check assembly first
+        Assembly assembly = scene.getAssembly(name);
+        if (assembly != null) {
+            return showAssemblyInfo(assembly);
+        }
+
         SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
         if (rec == null) {
-            return "Object '" + name + "' not found.";
+            return "Object or assembly '" + name + "' not found.";
         }
         String abbr = executor.getUnits().getAbbreviation();
         StringBuilder sb = new StringBuilder();
@@ -679,6 +895,52 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
                     sb.append(String.format(", depth %.2f %s", fromMm(j.getDepthMm()), abbr));
                 }
                 sb.append(")\n");
+            }
+        }
+
+        return sb.toString().stripTrailing();
+    }
+
+    private String showAssemblyInfo(Assembly assembly) {
+        String abbr = executor.getUnits().getAbbreviation();
+        StringBuilder sb = new StringBuilder();
+        sb.append("=== Assembly: ").append(assembly.getName()).append(" ===\n");
+        if (assembly.getTemplateName() != null) {
+            sb.append(String.format("  Template:  %s%n", assembly.getTemplateName()));
+        }
+        sb.append(String.format("  Parts:     %d%n", assembly.getParts().size()));
+
+        // Bounding box
+        Vector3f bbMin = assembly.getBoundingBoxMin(
+                pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.position() : null; },
+                pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.size() : null; });
+        sb.append(String.format("  Origin:    (%.2f, %.2f, %.2f) %s%n",
+                fromMm(bbMin.x), fromMm(bbMin.y), fromMm(bbMin.z), abbr));
+
+        // List parts
+        sb.append("\n  Parts:\n");
+        for (Part p : assembly.getParts()) {
+            SceneManager.ObjectRecord rec = scene.getObjectRecord(p.getName());
+            if (rec != null) {
+                Vector3f pos = rec.position();
+                sb.append(String.format("    %-25s [%s] %.2f x %.2f %s  at (%.2f, %.2f, %.2f)%n",
+                        p.getName(), p.getMaterial().getName(),
+                        fromMm(p.getCutWidthMm()), fromMm(p.getCutHeightMm()), abbr,
+                        fromMm(pos.x), fromMm(pos.y), fromMm(pos.z)));
+            }
+        }
+
+        // Assembly joints
+        var joints = scene.getJointRegistry().getJointsForAssembly(assembly);
+        if (!joints.isEmpty()) {
+            sb.append("\n  Joints:\n");
+            for (Joint j : joints) {
+                sb.append(String.format("    %-15s  \"%s\" ← \"%s\"",
+                        j.getType().getDisplayName(), j.getReceivingPartName(), j.getInsertedPartName()));
+                if (j.getDepthMm() > 0) {
+                    sb.append(String.format("  depth: %.2f %s", fromMm(j.getDepthMm()), abbr));
+                }
+                sb.append('\n');
             }
         }
 

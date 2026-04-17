@@ -18,6 +18,7 @@
 
 package com.jigger.model;
 
+import com.jme3.math.Vector3f;
 import lombok.Data;
 
 import java.util.ArrayList;
@@ -26,11 +27,12 @@ import java.util.List;
 
 /**
  * A named collection of parts that form a single object (e.g., a cabinet).
- * For Phase 1, assemblies are thin wrappers. Individual parts can also exist standalone.
+ * Assemblies are created by template instantiation and can be operated on as a unit.
  */
 @Data
 public class Assembly {
     private final String name;
+    private String templateName;  // the template that created this assembly
     private final List<Part> parts = new ArrayList<>();
 
     public void addPart(Part part) {
@@ -50,5 +52,28 @@ public class Assembly {
 
     public List<Part> getParts() {
         return Collections.unmodifiableList(parts);
+    }
+
+    /**
+     * Compute the minimum corner of the assembly's bounding box
+     * using the positions from the scene's object records.
+     *
+     * @param positionLookup function to get current position for a part name
+     * @param sizeLookup     function to get current size for a part name
+     * @return the min corner, or ZERO if no parts
+     */
+    public Vector3f getBoundingBoxMin(java.util.function.Function<String, Vector3f> positionLookup,
+                                      java.util.function.Function<String, Vector3f> sizeLookup) {
+        if (parts.isEmpty()) return Vector3f.ZERO;
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
+        for (Part p : parts) {
+            Vector3f pos = positionLookup.apply(p.getName());
+            if (pos != null) {
+                minX = Math.min(minX, pos.x);
+                minY = Math.min(minY, pos.y);
+                minZ = Math.min(minZ, pos.z);
+            }
+        }
+        return new Vector3f(minX, minY, minZ);
     }
 }

@@ -55,10 +55,12 @@ public class CreateTemplateAction implements UndoableAction {
         for (Part part : createdParts) {
             scene.createPart(part);
         }
-        scene.registerAssembly(new com.jigger.model.Assembly(assemblyName));
+        com.jigger.model.Assembly assembly = new com.jigger.model.Assembly(assemblyName);
+        assembly.setTemplateName(templateName);
         for (Part part : createdParts) {
-            scene.getAssembly(assemblyName).addPart(part);
+            assembly.addPart(part);
         }
+        scene.registerAssembly(assembly);
     }
 
     @Override

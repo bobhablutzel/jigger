@@ -1,0 +1,70 @@
+/*
+ * Copyright 2026 Bob Hablutzel
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Source: https://github.com/bobhablutzel/jigger
+ */
+
+package com.jigger.command;
+
+import com.jigger.SceneManager;
+import com.jme3.math.Vector3f;
+
+import java.util.List;
+
+/**
+ * Undoable action for moving an entire assembly.
+ * Stores the delta and applies/reverses it on all member parts.
+ */
+public class MoveAssemblyAction implements UndoableAction {
+
+    private final SceneManager scene;
+    private final String assemblyName;
+    private final Vector3f delta;
+    private final List<String> partNames;
+
+    public MoveAssemblyAction(SceneManager scene, String assemblyName,
+                              Vector3f delta, List<String> partNames) {
+        this.scene = scene;
+        this.assemblyName = assemblyName;
+        this.delta = delta;
+        this.partNames = List.copyOf(partNames);
+    }
+
+    @Override
+    public void undo() {
+        Vector3f reverseDelta = delta.negate();
+        for (String name : partNames) {
+            SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
+            if (rec != null) {
+                scene.moveObject(name, rec.position().add(reverseDelta));
+            }
+        }
+    }
+
+    @Override
+    public void redo() {
+        for (String name : partNames) {
+            SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
+            if (rec != null) {
+                scene.moveObject(name, rec.position().add(delta));
+            }
+        }
+    }
+
+    @Override
+    public String description() {
+        return "move assembly \"" + assemblyName + "\" (" + partNames.size() + " parts)";
+    }
+}

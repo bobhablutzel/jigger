@@ -41,14 +41,12 @@ class DrawerBoxTemplateTest extends HeadlessTestBase {
             debugPart(part);
         }
 
-        // Sides should span full depth in Z
-        // Back should be at the far end (Z ≈ -depth), not in the middle
+        // After normalization, the assembly bounding box min is at the origin.
+        // The back panel should be near z=0 (the back of the box).
         var back = bounds("D/back");
         assertNotNull(back, "back should exist");
 
-        // The back's Z min should be near -depth (far end of the box)
-        float depth = 400f;
-        assertTrue(back[0].z < -depth + 20f,
-                "Back min Z (" + back[0].z + ") should be near -" + depth);
+        assertTrue(back[0].z < 20f,
+                "Back min Z (" + back[0].z + ") should be near 0 (assembly origin)");
     }
 }

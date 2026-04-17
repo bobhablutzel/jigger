@@ -23,7 +23,7 @@ This opens a 3D viewport with a command panel. Type commands to create parts, as
 mvn test
 ```
 
-38 headless tests validate geometry, templates, joinery, and cut list generation without requiring a display.
+68 headless tests validate geometry, templates, joinery, assembly operations, and cut list generation without requiring a display.
 
 ## Commands
 
@@ -81,6 +81,42 @@ end define
 
 Use `show template <name>` to view any built-in template as a copiable `define` block.
 
+### Assembly Operations
+
+Template instances are assemblies — you can operate on them as a unit by name:
+
+```
+create base-cabinet "b" width 600 height 900 depth 400
+move b to 100,0,0           — moves all parts as a unit
+rotate b 0,90,0             — rotates entire assembly around its origin
+delete b                    — deletes all parts in the assembly
+display name b              — show labels on all parts
+show info b                 — assembly details: template, parts, joints
+```
+
+Name resolution checks assemblies first, then individual parts. Use the `assembly/part` notation to target a specific part within an assembly:
+
+```
+move "b/left-side" to 0,0,0     — move just the left side
+show info "b/left-side"          — info on a single part
+```
+
+The `list` command groups parts by assembly.
+
+### Cut Sheet Visualization
+
+Cut sheets are rendered in-app as a 2D view alongside the 3D viewport:
+
+```
+set layout split            — side-by-side view (3D + cut sheets)
+set layout tabs             — toggle between 3D and cut sheet views
+export cutsheet pdf          — export to PDF (vector, one page per sheet)
+export cutsheet png "cuts.png"  — export as PNG image
+export cutsheet jpg          — export as JPEG
+```
+
+Cut sheets update automatically when parts change (dirty-flag lazy recompute).
+
 ### Inspection
 
 ```
@@ -106,6 +142,8 @@ delete all
 set units mm|cm|m|inches|feet
 set material "plywood-18mm"
 set kerf 3.2            — saw blade kerf width (default 3.2mm / 1/8")
+set layout tabs|split   — switch between tabbed and split-pane view
+export cutsheet pdf|png|jpg [file]  — export cut sheets
 display names           — show name labels on all objects
 hide names
 run                     — run a .jigs script (opens file chooser)
@@ -151,14 +189,19 @@ src/main/java/com/jigger/
   SceneManager.java           — 3D scene, object tracking, JointRegistry
   CameraController.java       — Camera controls for workshop-scale viewing
   CommandPanel.java           — Swing command input panel
+  CutSheetPanel.java          — Swing panel for 2D cut sheet display
+  CutSheetRenderer.java       — Shared Graphics2D rendering for cut sheets
+  CutSheetExporter.java       — PDF (PDFBox) and image export
   UnitSystem.java             — Unit conversion (mm, cm, m, inches, feet)
+  ViewLayoutMode.java         — Tabbed vs split-pane layout enum
   command/
     JiggerCommand.g4          — ANTLR4 grammar for command parsing
     CommandExecutor.java      — Command dispatch (pre-parse intercepts + ANTLR)
     CommandVisitor.java       — ANTLR visitor implementing all commands
-    JoinAction.java           — Undo/redo action for joint creation
-    ...Action.java            — Other undoable actions
+    *Action.java              — Undoable actions (move, rotate, delete, join, etc.)
+    *AssemblyAction.java      — Assembly-level undoable actions
   model/
+    Assembly.java             — Named collection of parts (template instance)
     Joint.java                — Joint data class (receiver, inserted, type, depth)
     JointType.java            — Enum of joint types with metadata
     JointRegistry.java        — Central store for all joints in scene
@@ -254,6 +297,26 @@ If built-in templates should use the new joint type, update their definitions in
 - **Unit safety:** Depth values in the `Joint` model are always stored in mm internally. The command visitor handles conversion from the user's current unit system.
 - **Undo/redo:** `JoinAction` handles undo for all joint types generically via the registry — no per-type undo logic needed.
 - **Templates:** Joint commands in templates are plain command strings, so new joint types work in templates automatically once the grammar and visitor support them.
+
+## Roadmap
+
+### Next Up
+
+- Relative positioning between assemblies (`create base-cabinet b to left of "a"`)
+- Export multiple assembled units as a new reusable template
+- Right-click popup menu in 3D view for create/move/delete on assemblies
+
+### Backlog
+
+- Persistent command history across sessions
+- Mouse selection and drag-to-move for parts and assemblies
+- Optional 3D background views (floor plane for cabinets, workbench surface, etc.)
+- Shelf count logic for the shelf-unit template
+- Additional joint types: dovetails, biscuits, dowels, splines
+- Wood grain textures and shaders
+- Save/load projects
+- Export cut lists to CSV
+- Collision detection
 
 ## License
 
