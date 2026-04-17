@@ -25,6 +25,9 @@ import javax.swing.text.DefaultCaret;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.KeyEvent;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -38,6 +41,10 @@ public class CommandPanel extends JPanel {
     private final JTextField inputField;
     private final CommandExecutor executor;
     private final JLabel prompt;
+    private static final int MAX_HISTORY = 500;
+    private static final Path HISTORY_FILE =
+            Path.of(System.getProperty("user.home"), ".jigger", "history");
+
     private final List<String> history = new ArrayList<>();
     private int historyIndex = -1;
     private boolean commandActive = true;
@@ -116,6 +123,7 @@ public class CommandPanel extends JPanel {
             }
         });
 
+        loadHistory();
         appendOutput("Jigger 3D Command Shell — type 'help' for available commands.\n");
         appendOutput("Press Escape to toggle between viewport and command line.\n");
     }
@@ -153,7 +161,11 @@ public class CommandPanel extends JPanel {
         String text = inputField.getText().trim();
         if (text.isEmpty()) return;
 
-        history.add(text);
+        // Avoid consecutive duplicates
+        if (history.isEmpty() || !history.getLast().equals(text)) {
+            history.add(text);
+            saveHistory();
+        }
         historyIndex = history.size();
 
         appendOutput("> " + text + "\n");
@@ -176,5 +188,30 @@ public class CommandPanel extends JPanel {
 
     public void appendOutput(String text) {
         outputArea.append(text);
+    }
+
+    private void loadHistory() {
+        if (Files.exists(HISTORY_FILE)) {
+            try {
+                List<String> lines = Files.readAllLines(HISTORY_FILE);
+                // Keep only the last MAX_HISTORY entries
+                int start = Math.max(0, lines.size() - MAX_HISTORY);
+                history.addAll(lines.subList(start, lines.size()));
+                historyIndex = history.size();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    private void saveHistory() {
+        try {
+            Files.createDirectories(HISTORY_FILE.getParent());
+            // Trim to MAX_HISTORY before saving
+            List<String> toSave = history.size() > MAX_HISTORY
+                    ? history.subList(history.size() - MAX_HISTORY, history.size())
+                    : history;
+            Files.write(HISTORY_FILE, toSave);
+        } catch (IOException ignored) {
+        }
     }
 }
