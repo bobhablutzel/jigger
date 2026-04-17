@@ -24,6 +24,7 @@ command
     | createPartCommand
     | deleteCommand
     | moveCommand
+    | alignCommand
     | resizeCommand
     | rotateCommand
     | joinCommand
@@ -53,6 +54,37 @@ deleteCommand
 
 moveCommand
     : MOVE objectName TO position
+    | MOVE objectName relativePosition
+    ;
+
+relativePosition
+    : TO direction OF? objectName (GAP NUMBER)?
+    ;
+
+direction
+    : LEFT_KW
+    | RIGHT_KW
+    | BEHIND
+    | IN_FRONT
+    | ABOVE
+    | BELOW
+    ;
+
+alignCommand
+    : ALIGN face OF objectNameList WITH objectName
+    ;
+
+face
+    : FRONT
+    | BACK
+    | LEFT_KW
+    | RIGHT_KW
+    | TOP
+    | BOTTOM
+    ;
+
+objectNameList
+    : objectName (COMMA objectName)*
     ;
 
 resizeCommand
@@ -142,7 +174,7 @@ layoutMode
     ;
 
 exportCommand
-    : EXPORT CUTSHEET exportFormat (STRING)?
+    : EXPORT CUTLIST exportFormat (STRING)?
     ;
 
 exportFormat
@@ -235,6 +267,20 @@ LAYOUT     : 'layout' | 'layouts' ;
 KERF       : 'kerf' ;
 TABS       : 'tabs' | 'tabbed' ;
 SPLIT      : 'split' | 'split-pane' | 'side-by-side' ;
+ALIGN      : 'align' ;
+GAP        : 'gap' ;
+OF         : 'of' ;
+// Direction / face tokens (used by both relative positioning and align)
+IN_FRONT   : 'in front' | 'in-front' ;
+LEFT_KW    : 'left' ;
+RIGHT_KW   : 'right' ;
+BEHIND     : 'behind' ;
+ABOVE      : 'above' ;
+BELOW      : 'below' ;
+FRONT      : 'front' ;
+BACK       : 'back' ;
+TOP        : 'top' ;
+BOTTOM     : 'bottom' ;
 TO         : 'to' ;
 DISPLAY    : 'display' ;
 HIDE       : 'hide' ;

@@ -76,4 +76,28 @@ public class Assembly {
         }
         return new Vector3f(minX, minY, minZ);
     }
+
+    /**
+     * Compute the maximum corner of the assembly's bounding box
+     * using positions + sizes from the scene's object records.
+     *
+     * @param positionLookup function to get current position for a part name
+     * @param sizeLookup     function to get current size for a part name
+     * @return the max corner, or ZERO if no parts
+     */
+    public Vector3f getBoundingBoxMax(java.util.function.Function<String, Vector3f> positionLookup,
+                                      java.util.function.Function<String, Vector3f> sizeLookup) {
+        if (parts.isEmpty()) return Vector3f.ZERO;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+        for (Part p : parts) {
+            Vector3f pos = positionLookup.apply(p.getName());
+            Vector3f size = sizeLookup.apply(p.getName());
+            if (pos != null && size != null) {
+                maxX = Math.max(maxX, pos.x + size.x);
+                maxY = Math.max(maxY, pos.y + size.y);
+                maxZ = Math.max(maxZ, pos.z + size.z);
+            }
+        }
+        return new Vector3f(maxX, maxY, maxZ);
+    }
 }

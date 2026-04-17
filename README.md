@@ -23,7 +23,7 @@ This opens a 3D viewport with a command panel. Type commands to create parts, as
 mvn test
 ```
 
-68 headless tests validate geometry, templates, joinery, assembly operations, and cut list generation without requiring a display.
+78 headless tests validate geometry, templates, joinery, assembly operations, relative positioning, alignment, and cut list generation without requiring a display.
 
 ## Commands
 
@@ -103,6 +103,32 @@ show info "b/left-side"          — info on a single part
 
 The `list` command groups parts by assembly.
 
+### Relative Positioning
+
+Place assemblies and parts relative to each other:
+
+```
+create base-cabinet "a" width 600 height 900 depth 400
+create base-cabinet "b" width 600 height 900 depth 400 to right of a
+create wall-cabinet "wc" width 600 height 400 depth 300 to above a gap 50
+move b to left of a
+move b to right of a gap 25     — 25mm gap between them
+```
+
+Directions: `left`, `right`, `behind`, `in front`, `above`, `below`. The optional `gap` adds spacing between the objects.
+
+### Alignment
+
+Align specific faces of multiple assemblies with a reference:
+
+```
+align front of b,c with a       — align the front face of b and c to match a
+align back of b with a
+align top of b with a
+```
+
+Faces: `front`, `back`, `left`, `right`, `top`, `bottom`. This is useful for lining up cabinets of different depths along a wall.
+
 ### Cut Sheet Visualization
 
 Cut sheets are rendered in-app as a 2D view alongside the 3D viewport:
@@ -135,6 +161,8 @@ show templates          — list available templates
 
 ```
 move "name" to x,y,z
+move "name" to left|right|behind|in front|above|below of "ref" [gap N]
+align front|back|left|right|top|bottom of "name"[,...] with "ref"
 rotate "name" rx,ry,rz
 resize "name" size w,h,d
 delete "name"
@@ -302,9 +330,8 @@ If built-in templates should use the new joint type, update their definitions in
 
 ### Next Up
 
-- Relative positioning between assemblies (`create base-cabinet b to left of "a"`)
+- Mouse picking and right-click popup menu in 3D view
 - Export multiple assembled units as a new reusable template
-- Right-click popup menu in 3D view for create/move/delete on assemblies
 
 ### Backlog
 

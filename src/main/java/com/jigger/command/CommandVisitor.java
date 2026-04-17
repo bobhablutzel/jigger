@@ -202,7 +202,12 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
     public String visitMoveCommand(JiggerCommandParser.MoveCommandContext ctx) {
         String name = extractName(ctx.objectName());
 
-        // Check assembly first
+        // Relative positioning: move b to left of "a" [gap N]
+        if (ctx.relativePosition() != null) {
+            return moveRelative(name, ctx.relativePosition());
+        }
+
+        // Absolute positioning: move b to x,y,z
         Assembly assembly = scene.getAssembly(name);
         if (assembly != null) {
             return moveAssembly(assembly, parsePosition(ctx.position()));
@@ -221,20 +226,42 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
                 name, fromMm(newPos.x), fromMm(newPos.y), fromMm(newPos.z), abbr);
     }
 
+    private String moveRelative(String name, JiggerCommandParser.RelativePositionContext relCtx) {
+        String refName = extractName(relCtx.objectName());
+        String dir = directionText(relCtx.direction());
+        float gapMm = 0;
+        if (relCtx.GAP() != null) {
+            gapMm = toMm(Float.parseFloat(relCtx.NUMBER().getText()));
+        }
+
+        Vector3f[] srcBBox = getBBox(name);
+        Vector3f[] refBBox = getBBox(refName);
+        if (srcBBox == null) return "Object or assembly '" + name + "' not found.";
+        if (refBBox == null) return "Reference '" + refName + "' not found.";
+
+        Vector3f targetPos = computeRelativePosition(dir, refBBox, srcBBox, gapMm);
+        String abbr = executor.getUnits().getAbbreviation();
+
+        // Delegate to assembly or single-object move
+        Assembly assembly = scene.getAssembly(name);
+        if (assembly != null) {
+            return moveAssembly(assembly, targetPos);
+        }
+
+        SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
+        Vector3f oldPos = rec.position();
+        scene.moveObject(name, targetPos);
+        executor.pushAction(new MoveAction(scene, name, oldPos, targetPos));
+        return String.format("Moved '%s' %s '%s' to (%.2f, %.2f, %.2f) %s",
+                name, dir, refName,
+                fromMm(targetPos.x), fromMm(targetPos.y), fromMm(targetPos.z), abbr);
+    }
+
     private String moveAssembly(Assembly assembly, Vector3f targetPos) {
         String name = assembly.getName();
         String abbr = executor.getUnits().getAbbreviation();
 
-        // Compute the assembly's current origin (bounding box min corner)
-        Vector3f currentOrigin = assembly.getBoundingBoxMin(
-                partName -> {
-                    SceneManager.ObjectRecord r = scene.getObjectRecord(partName);
-                    return r != null ? r.position() : null;
-                },
-                partName -> {
-                    SceneManager.ObjectRecord r = scene.getObjectRecord(partName);
-                    return r != null ? r.size() : null;
-                });
+        Vector3f currentOrigin = assembly.getBoundingBoxMin(posLookup(), sizeLookup());
 
         Vector3f delta = targetPos.subtract(currentOrigin);
         List<String> partNames = assembly.getParts().stream()
@@ -252,6 +279,94 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
         return String.format("Moved assembly '%s' (%d parts) to (%.2f, %.2f, %.2f) %s",
                 name, partNames.size(),
                 fromMm(targetPos.x), fromMm(targetPos.y), fromMm(targetPos.z), abbr);
+    }
+
+    @Override
+    public String visitAlignCommand(JiggerCommandParser.AlignCommandContext ctx) {
+        String faceStr = faceText(ctx.face());
+
+        // Reference object (the one to align WITH)
+        String refName = extractName(ctx.objectName());
+        Vector3f[] refBBox = getBBox(refName);
+        if (refBBox == null) {
+            return "Reference '" + refName + "' not found.";
+        }
+
+        // Get the face coordinate from the reference
+        float refFaceCoord = switch (faceStr) {
+            case "front" -> refBBox[1].z;   // max Z
+            case "back" -> refBBox[0].z;    // min Z
+            case "left" -> refBBox[0].x;    // min X
+            case "right" -> refBBox[1].x;   // max X
+            case "top" -> refBBox[1].y;     // max Y
+            case "bottom" -> refBBox[0].y;  // min Y
+            default -> 0;
+        };
+
+        // Targets to align
+        var targetNames = ctx.objectNameList().objectName();
+        String abbr = executor.getUnits().getAbbreviation();
+        StringBuilder result = new StringBuilder();
+        int aligned = 0;
+
+        for (var targetCtx : targetNames) {
+            String targetName = extractName(targetCtx);
+            Vector3f[] targetBBox = getBBox(targetName);
+            if (targetBBox == null) {
+                result.append("  '").append(targetName).append("' not found.\n");
+                continue;
+            }
+
+            // Compute how far to shift the target so its face matches the reference face
+            float delta = switch (faceStr) {
+                case "front" -> refFaceCoord - targetBBox[1].z;   // align max Z
+                case "back" -> refFaceCoord - targetBBox[0].z;    // align min Z
+                case "left" -> refFaceCoord - targetBBox[0].x;    // align min X
+                case "right" -> refFaceCoord - targetBBox[1].x;   // align max X
+                case "top" -> refFaceCoord - targetBBox[1].y;     // align max Y
+                case "bottom" -> refFaceCoord - targetBBox[0].y;  // align min Y
+                default -> 0;
+            };
+
+            if (Math.abs(delta) < 0.01f) {
+                result.append("  '").append(targetName).append("' already aligned.\n");
+                aligned++;
+                continue;
+            }
+
+            // Build the movement vector (only one axis moves)
+            Vector3f moveVec = switch (faceStr) {
+                case "front", "back" -> new Vector3f(0, 0, delta);
+                case "left", "right" -> new Vector3f(delta, 0, 0);
+                case "top", "bottom" -> new Vector3f(0, delta, 0);
+                default -> Vector3f.ZERO;
+            };
+
+            // Apply to assembly or individual object
+            Assembly assembly = scene.getAssembly(targetName);
+            if (assembly != null) {
+                List<String> partNames = assembly.getParts().stream()
+                        .map(Part::getName).toList();
+                for (String pn : partNames) {
+                    SceneManager.ObjectRecord rec = scene.getObjectRecord(pn);
+                    if (rec != null) {
+                        scene.moveObject(pn, rec.position().add(moveVec));
+                    }
+                }
+                executor.pushAction(new MoveAssemblyAction(scene, targetName, moveVec, partNames));
+            } else {
+                SceneManager.ObjectRecord rec = scene.getObjectRecord(targetName);
+                if (rec != null) {
+                    Vector3f oldPos = rec.position();
+                    scene.moveObject(targetName, oldPos.add(moveVec));
+                    executor.pushAction(new MoveAction(scene, targetName, oldPos, oldPos.add(moveVec)));
+                }
+            }
+            aligned++;
+        }
+
+        return String.format("Aligned %s of %d object(s) with '%s'.",
+                faceStr, aligned, refName);
     }
 
     @Override
@@ -297,9 +412,7 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
         }
 
         // Compute the assembly's pivot (bounding box min)
-        Vector3f pivot = assembly.getBoundingBoxMin(
-                pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.position() : null; },
-                pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.size() : null; });
+        Vector3f pivot = assembly.getBoundingBoxMin(posLookup(), sizeLookup());
 
         // Build a quaternion for the assembly rotation
         com.jme3.math.Quaternion assemblyQuat = new com.jme3.math.Quaternion().fromAngles(
@@ -1200,6 +1313,75 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
         return sb.toString();
     }
 
+    // -- Bounding box helpers (work for assemblies or individual objects) --
+
+    private java.util.function.Function<String, Vector3f> posLookup() {
+        return pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.position() : null; };
+    }
+
+    private java.util.function.Function<String, Vector3f> sizeLookup() {
+        return pn -> { var r = scene.getObjectRecord(pn); return r != null ? r.size() : null; };
+    }
+
+    /** Get bounding box [min, max] for a name — assembly or individual object. Returns null if not found. */
+    private Vector3f[] getBBox(String name) {
+        Assembly assembly = scene.getAssembly(name);
+        if (assembly != null) {
+            return new Vector3f[]{
+                    assembly.getBoundingBoxMin(posLookup(), sizeLookup()),
+                    assembly.getBoundingBoxMax(posLookup(), sizeLookup())
+            };
+        }
+        SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
+        if (rec != null) {
+            return new Vector3f[]{rec.position(), rec.position().add(rec.size())};
+        }
+        return null;
+    }
+
+    /**
+     * Compute the target position for placing 'source' relative to 'reference'.
+     * Returns the position for source's bounding box min corner.
+     */
+    private Vector3f computeRelativePosition(String directionText, Vector3f[] refBBox,
+                                              Vector3f[] srcBBox, float gapMm) {
+        Vector3f refMin = refBBox[0], refMax = refBBox[1];
+        Vector3f srcMin = srcBBox[0], srcMax = srcBBox[1];
+        Vector3f srcSize = srcMax.subtract(srcMin);
+
+        return switch (directionText) {
+            case "left" -> new Vector3f(refMin.x - srcSize.x - gapMm, refMin.y, refMin.z);
+            case "right" -> new Vector3f(refMax.x + gapMm, refMin.y, refMin.z);
+            case "behind" -> new Vector3f(refMin.x, refMin.y, refMin.z - srcSize.z - gapMm);
+            case "in front", "in-front" -> new Vector3f(refMin.x, refMin.y, refMax.z + gapMm);
+            case "above" -> new Vector3f(refMin.x, refMax.y + gapMm, refMin.z);
+            case "below" -> new Vector3f(refMin.x, refMin.y - srcSize.y - gapMm, refMin.z);
+            default -> refMin.clone();
+        };
+    }
+
+    /** Normalize a direction context to a lowercase string. */
+    private String directionText(JiggerCommandParser.DirectionContext ctx) {
+        if (ctx.LEFT_KW() != null) return "left";
+        if (ctx.RIGHT_KW() != null) return "right";
+        if (ctx.BEHIND() != null) return "behind";
+        if (ctx.IN_FRONT() != null) return "in front";
+        if (ctx.ABOVE() != null) return "above";
+        if (ctx.BELOW() != null) return "below";
+        return "";
+    }
+
+    /** Normalize a face context to a lowercase string. */
+    private String faceText(JiggerCommandParser.FaceContext ctx) {
+        if (ctx.FRONT() != null) return "front";
+        if (ctx.BACK() != null) return "back";
+        if (ctx.LEFT_KW() != null) return "left";
+        if (ctx.RIGHT_KW() != null) return "right";
+        if (ctx.TOP() != null) return "top";
+        if (ctx.BOTTOM() != null) return "bottom";
+        return "";
+    }
+
     // -- Unit conversion shortcuts --
 
     private float toMm(float value) {
@@ -1255,7 +1437,9 @@ public class CommandVisitor extends JiggerCommandBaseVisitor<String> {
                       color:  red, green, blue, yellow, white, #rrggbb
 
                 Common:
-                  move <name> to x,y,z             — move an object
+                  move <name> to x,y,z             — move an object or assembly
+                  move <name> to left|right|behind|in front|above|below of <ref> [gap N]
+                  align front|back|left|right|top|bottom of <name>[,<name>,...] with <ref>
                   rotate <name> rx,ry,rz           — rotate in degrees (absolute)
                   resize <name> <size>             — resize an object
                   join <part1> to <part2> with <type> [depth N] [screws N] [spacing N]

@@ -363,6 +363,11 @@ public class CommandExecutor {
             return "Assembly '" + instanceName + "' already exists.";
         }
 
+        // Extract optional relative placement ("to left of a [gap N]")
+        String[] remainingParams = {paramsStr};
+        RelativePlacement relativePlacement = extractRelativePlacement(paramsStr, remainingParams);
+        paramsStr = remainingParams[0];
+
         // Extract optional "at x,y,z" placement from the params string
         float[] placement = {0, 0, 0};
         paramsStr = extractPlacement(paramsStr, placement);
@@ -446,11 +451,72 @@ public class CommandExecutor {
         boolean hasPlacement = placement[0] != 0 || placement[1] != 0 || placement[2] != 0;
 
         scene.registerAssembly(assembly);
+
+        // Apply relative placement if specified (after registration so we can use assembly bbox)
+        String posStr = "";
+        if (relativePlacement != null) {
+            String refName = relativePlacement.referenceName();
+            Assembly refAssembly = scene.getAssembly(refName);
+            SceneManager.ObjectRecord refRec = scene.getObjectRecord(refName);
+            if (refAssembly == null && refRec == null) {
+                // Still return success but warn
+                posStr = " (warning: reference '" + refName + "' not found, placed at origin)";
+            } else {
+                com.jme3.math.Vector3f[] refBBox;
+                if (refAssembly != null) {
+                    var pl = (java.util.function.Function<String, com.jme3.math.Vector3f>)
+                            (String pn) -> { var r = scene.getObjectRecord(pn); return r != null ? r.position() : null; };
+                    var sl = (java.util.function.Function<String, com.jme3.math.Vector3f>)
+                            (String pn) -> { var r = scene.getObjectRecord(pn); return r != null ? r.size() : null; };
+                    refBBox = new com.jme3.math.Vector3f[]{
+                            refAssembly.getBoundingBoxMin(pl, sl),
+                            refAssembly.getBoundingBoxMax(pl, sl)};
+                } else {
+                    refBBox = new com.jme3.math.Vector3f[]{refRec.position(), refRec.position().add(refRec.size())};
+                }
+
+                var pl2 = (java.util.function.Function<String, com.jme3.math.Vector3f>)
+                        (String pn) -> { var r = scene.getObjectRecord(pn); return r != null ? r.position() : null; };
+                var sl2 = (java.util.function.Function<String, com.jme3.math.Vector3f>)
+                        (String pn) -> { var r = scene.getObjectRecord(pn); return r != null ? r.size() : null; };
+                com.jme3.math.Vector3f[] srcBBox = new com.jme3.math.Vector3f[]{
+                        assembly.getBoundingBoxMin(pl2, sl2),
+                        assembly.getBoundingBoxMax(pl2, sl2)};
+
+                com.jme3.math.Vector3f refMin = refBBox[0], refMax = refBBox[1];
+                com.jme3.math.Vector3f srcSize = srcBBox[1].subtract(srcBBox[0]);
+                float gapMm = units.toMm(relativePlacement.gapUnits());
+
+                com.jme3.math.Vector3f targetPos = switch (relativePlacement.direction()) {
+                    case "left" -> new com.jme3.math.Vector3f(refMin.x - srcSize.x - gapMm, refMin.y, refMin.z);
+                    case "right" -> new com.jme3.math.Vector3f(refMax.x + gapMm, refMin.y, refMin.z);
+                    case "behind" -> new com.jme3.math.Vector3f(refMin.x, refMin.y, refMin.z - srcSize.z - gapMm);
+                    case "in front", "in-front" -> new com.jme3.math.Vector3f(refMin.x, refMin.y, refMax.z + gapMm);
+                    case "above" -> new com.jme3.math.Vector3f(refMin.x, refMax.y + gapMm, refMin.z);
+                    case "below" -> new com.jme3.math.Vector3f(refMin.x, refMin.y - srcSize.y - gapMm, refMin.z);
+                    default -> srcBBox[0];
+                };
+
+                com.jme3.math.Vector3f moveDelta = targetPos.subtract(srcBBox[0]);
+                if (moveDelta.lengthSquared() > 0.001f) {
+                    for (Part part : createdParts) {
+                        SceneManager.ObjectRecord rec = scene.getObjectRecord(part.getName());
+                        if (rec != null) {
+                            scene.moveObject(part.getName(), rec.position().add(moveDelta));
+                        }
+                    }
+                }
+                posStr = " " + relativePlacement.direction() + " '" + refName + "'";
+                if (relativePlacement.gapUnits() != 0) {
+                    posStr += String.format(" (gap %.2f %s)", relativePlacement.gapUnits(), units.getAbbreviation());
+                }
+            }
+        } else if (hasPlacement) {
+            posStr = String.format(" at (%.2f, %.2f, %.2f)", placement[0], placement[1], placement[2]);
+        }
+
         pushAction(new CreateTemplateAction(scene, instanceName, templateName, createdParts));
 
-        String posStr = hasPlacement
-                ? String.format(" at (%.2f, %.2f, %.2f)", placement[0], placement[1], placement[2])
-                : "";
         return "Created " + templateName + " '" + instanceName + "' (" + createdParts.size() + " parts)" + posStr + ":\n"
                 + output.toString().stripTrailing();
     }
@@ -518,6 +584,29 @@ public class CommandExecutor {
             return (paramsStr.substring(0, m.start()) + paramsStr.substring(m.end())).trim();
         }
         return paramsStr;
+    }
+
+    /**
+     * Extract "to left/right/behind/in front/above/below of <name> [gap N]" from params.
+     * Returns the relative placement info or null if not found.
+     */
+    private record RelativePlacement(String direction, String referenceName, float gapUnits) {}
+
+    private RelativePlacement extractRelativePlacement(String paramsStr, String[] remaining) {
+        Pattern relPattern = Pattern.compile(
+                "(?i)to\\s+(left|right|behind|in[- ]front|above|below)\\s+of\\s+" +
+                "(?:\"([^\"]+)\"|([a-zA-Z_][a-zA-Z0-9_-]*))" +
+                "(?:\\s+gap\\s+(-?[0-9]*\\.?[0-9]+))?");
+        Matcher m = relPattern.matcher(paramsStr);
+        if (m.find()) {
+            String dir = m.group(1).toLowerCase();
+            String ref = m.group(2) != null ? m.group(2) : m.group(3);
+            float gap = m.group(4) != null ? Float.parseFloat(m.group(4)) : 0;
+            remaining[0] = (paramsStr.substring(0, m.start()) + paramsStr.substring(m.end())).trim();
+            return new RelativePlacement(dir, ref, gap);
+        }
+        remaining[0] = paramsStr;
+        return null;
     }
 
     /** Common parameter name aliases. */
