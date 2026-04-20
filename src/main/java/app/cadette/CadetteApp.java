@@ -84,7 +84,7 @@ public class CadetteApp {
             JFileChooser chooser = new JFileChooser();
             chooser.setDialogTitle("Open CADette Script");
             chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-                    "CADette Scripts (*.cds)", "jigs"));
+                    "CADette Scripts (*.cds)", "cds"));
             int result = chooser.showOpenDialog(frame);
             if (result == JFileChooser.APPROVE_OPTION) {
                 return chooser.getSelectedFile().toPath();
