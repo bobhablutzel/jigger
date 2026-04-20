@@ -19,20 +19,16 @@
 package app.cadette.command;
 
 import app.cadette.UnitSystem;
+import lombok.RequiredArgsConstructor;
 
 import java.util.function.Consumer;
 
+@RequiredArgsConstructor
 public class SetUnitsAction implements UndoableAction {
 
     private final Consumer<UnitSystem> setter;
     private final UnitSystem oldUnits;
     private final UnitSystem newUnits;
-
-    public SetUnitsAction(Consumer<UnitSystem> setter, UnitSystem oldUnits, UnitSystem newUnits) {
-        this.setter = setter;
-        this.oldUnits = oldUnits;
-        this.newUnits = newUnits;
-    }
 
     @Override
     public void undo() {

@@ -34,6 +34,7 @@ import com.jme3.renderer.Camera;
 import com.jme3.scene.Geometry;
 import com.jme3.scene.Node;
 import com.jme3.scene.Spatial;
+import lombok.RequiredArgsConstructor;
 
 /**
  * Orbital camera controller.
@@ -41,6 +42,7 @@ import com.jme3.scene.Spatial;
  * - Right-mouse-drag or arrow keys rotate the view around the target.
  * - Mouse wheel zooms in/out.
  */
+@RequiredArgsConstructor
 public class CameraController extends BaseAppState implements AnalogListener, ActionListener {
 
     // Keyboard rotation
@@ -92,11 +94,6 @@ public class CameraController extends BaseAppState implements AnalogListener, Ac
     private boolean shiftHeld = false;
     private SelectionManager selectionManager;
     private Node pickableNode;  // the node to ray-cast against (objectsNode)
-
-    public CameraController(Camera cam, InputManager inputManager) {
-        this.cam = cam;
-        this.inputManager = inputManager;
-    }
 
     /** Set the selection manager and the node to pick against. */
     public void setSelectionManager(SelectionManager selectionManager, Node pickableNode) {

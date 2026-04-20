@@ -20,11 +20,13 @@ package app.cadette;
 
 import app.cadette.model.MeasurementSystem;
 import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 
 /**
  * Length units with conversion to/from millimeters (the internal unit).
  */
 @Getter
+@RequiredArgsConstructor
 public enum UnitSystem {
 
     MILLIMETERS("mm",     1.0f),
@@ -36,11 +38,6 @@ public enum UnitSystem {
 
     private final String abbreviation;
     private final float mmPerUnit;  // how many mm in one of this unit
-
-    UnitSystem(String abbreviation, float mmPerUnit) {
-        this.abbreviation = abbreviation;
-        this.mmPerUnit = mmPerUnit;
-    }
 
     /** Convert a value in this unit to internal millimeters. */
     public float toMm(float value) {

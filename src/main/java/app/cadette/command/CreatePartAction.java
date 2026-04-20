@@ -20,16 +20,13 @@ package app.cadette.command;
 
 import app.cadette.SceneManager;
 import app.cadette.model.Part;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class CreatePartAction implements UndoableAction {
 
     private final SceneManager scene;
     private final Part part;
-
-    public CreatePartAction(SceneManager scene, Part part) {
-        this.scene = scene;
-        this.part = part;
-    }
 
     @Override
     public void undo() {

@@ -20,20 +20,15 @@ package app.cadette.command;
 
 import app.cadette.SceneManager;
 import com.jme3.math.Vector3f;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class ResizeAction implements UndoableAction {
 
     private final SceneManager scene;
     private final String name;
     private final Vector3f oldSize;
     private final Vector3f newSize;
-
-    public ResizeAction(SceneManager scene, String name, Vector3f oldSize, Vector3f newSize) {
-        this.scene = scene;
-        this.name = name;
-        this.oldSize = oldSize;
-        this.newSize = newSize;
-    }
 
     @Override
     public void undo() {

@@ -19,6 +19,7 @@
 package app.cadette;
 
 import app.cadette.model.Assembly;
+import lombok.RequiredArgsConstructor;
 
 import java.util.*;
 import java.util.function.Consumer;
@@ -32,6 +33,7 @@ import java.util.function.Consumer;
  *   - Shift+click → toggle add/remove from selection
  *   - Click empty space → deselect all
  */
+@RequiredArgsConstructor
 public class SelectionManager {
 
     private final SceneManager sceneManager;
@@ -39,10 +41,6 @@ public class SelectionManager {
     private final List<Consumer<SelectionChange>> listeners = new ArrayList<>();
 
     public record SelectionChange(List<String> selectedNames, String lastChanged) {}
-
-    public SelectionManager(SceneManager sceneManager) {
-        this.sceneManager = sceneManager;
-    }
 
     /**
      * Select by geometry name, with optional shift for multi-select.

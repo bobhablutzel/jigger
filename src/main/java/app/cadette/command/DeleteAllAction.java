@@ -22,12 +22,14 @@ import app.cadette.SceneManager;
 import app.cadette.model.Part;
 import com.jme3.math.ColorRGBA;
 import com.jme3.math.Vector3f;
+import lombok.RequiredArgsConstructor;
 
 import java.util.List;
 
 /**
  * Records all objects that existed before a "delete all" so they can be restored.
  */
+@RequiredArgsConstructor
 public class DeleteAllAction implements UndoableAction {
 
     private final SceneManager scene;
@@ -41,11 +43,6 @@ public class DeleteAllAction implements UndoableAction {
                               Vector3f size, ColorRGBA color) {
             this(name, shapeType, position, size, color, null);
         }
-    }
-
-    public DeleteAllAction(SceneManager scene, List<ObjectSnapshot> snapshots) {
-        this.scene = scene;
-        this.snapshots = snapshots;
     }
 
     @Override

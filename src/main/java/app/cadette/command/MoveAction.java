@@ -20,20 +20,15 @@ package app.cadette.command;
 
 import app.cadette.SceneManager;
 import com.jme3.math.Vector3f;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class MoveAction implements UndoableAction {
 
     private final SceneManager scene;
     private final String name;
     private final Vector3f oldPosition;
     private final Vector3f newPosition;
-
-    public MoveAction(SceneManager scene, String name, Vector3f oldPosition, Vector3f newPosition) {
-        this.scene = scene;
-        this.name = name;
-        this.oldPosition = oldPosition;
-        this.newPosition = newPosition;
-    }
 
     @Override
     public void undo() {

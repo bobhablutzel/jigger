@@ -21,7 +21,9 @@ package app.cadette.command;
 import app.cadette.SceneManager;
 import com.jme3.math.ColorRGBA;
 import com.jme3.math.Vector3f;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class CreateAction implements UndoableAction {
 
     private final SceneManager scene;
@@ -30,16 +32,6 @@ public class CreateAction implements UndoableAction {
     private final Vector3f position;
     private final Vector3f size;
     private final ColorRGBA color;
-
-    public CreateAction(SceneManager scene, String name, String shapeType,
-                        Vector3f position, Vector3f size, ColorRGBA color) {
-        this.scene = scene;
-        this.name = name;
-        this.shapeType = shapeType;
-        this.position = position;
-        this.size = size;
-        this.color = color;
-    }
 
     @Override
     public void undo() {

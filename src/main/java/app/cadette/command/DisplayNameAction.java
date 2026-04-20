@@ -19,18 +19,14 @@
 package app.cadette.command;
 
 import app.cadette.SceneManager;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class DisplayNameAction implements UndoableAction {
 
     private final SceneManager scene;
     private final String objectName;
     private final boolean wasDisplayed;
-
-    public DisplayNameAction(SceneManager scene, String objectName, boolean wasDisplayed) {
-        this.scene = scene;
-        this.objectName = objectName;
-        this.wasDisplayed = wasDisplayed;
-    }
 
     @Override
     public void undo() {

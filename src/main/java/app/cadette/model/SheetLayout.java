@@ -19,6 +19,7 @@
 package app.cadette.model;
 
 import lombok.Data;
+import lombok.RequiredArgsConstructor;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,17 +30,12 @@ import java.util.List;
  * export to PDF, image, or CNC G-code.
  */
 @Data
+@RequiredArgsConstructor
 public class SheetLayout {
     private final Material material;
     private final float sheetWidthMm;
     private final float sheetHeightMm;
     private final List<PlacedPart> placements = new ArrayList<>();
-
-    public SheetLayout(Material material, float sheetWidthMm, float sheetHeightMm) {
-        this.material = material;
-        this.sheetWidthMm = sheetWidthMm;
-        this.sheetHeightMm = sheetHeightMm;
-    }
 
     /** Total area used by placed parts (excluding kerf). */
     public float getUsedAreaMm2() {

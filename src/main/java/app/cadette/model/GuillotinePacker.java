@@ -18,7 +18,9 @@
 
 package app.cadette.model;
 
+import lombok.AccessLevel;
 import lombok.Data;
+import lombok.RequiredArgsConstructor;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -31,6 +33,7 @@ import java.util.List;
  * woodworkers actually cut sheet goods on a table saw or panel saw.
  * Parts are sorted largest-first and placed using best-area-fit.
  */
+@RequiredArgsConstructor(access = AccessLevel.PRIVATE)
 public class GuillotinePacker {
 
     public static final float DEFAULT_KERF_MM = 3.2f;
@@ -55,11 +58,6 @@ public class GuillotinePacker {
     private final List<List<FreeRect>> sheetFreeRects = new ArrayList<>();
     private final Material material;
     private final float kerfMm;
-
-    private GuillotinePacker(Material material, float kerfMm) {
-        this.material = material;
-        this.kerfMm = kerfMm;
-    }
 
     /**
      * Pack parts onto sheets of the given material, respecting grain and kerf.

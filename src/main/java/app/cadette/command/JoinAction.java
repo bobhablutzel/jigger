@@ -20,16 +20,13 @@ package app.cadette.command;
 
 import app.cadette.SceneManager;
 import app.cadette.model.Joint;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class JoinAction implements UndoableAction {
 
     private final SceneManager scene;
     private final Joint joint;
-
-    public JoinAction(SceneManager scene, Joint joint) {
-        this.scene = scene;
-        this.joint = joint;
-    }
 
     @Override
     public void undo() {

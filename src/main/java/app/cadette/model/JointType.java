@@ -19,8 +19,10 @@
 package app.cadette.model;
 
 import lombok.Getter;
+import lombok.RequiredArgsConstructor;
 
 @Getter
+@RequiredArgsConstructor
 public enum JointType {
     BUTT("Butt joint", false),
     DADO("Dado", true),
@@ -30,11 +32,6 @@ public enum JointType {
 
     private final String displayName;
     private final boolean affectsGeometry;
-
-    JointType(String displayName, boolean affectsGeometry) {
-        this.displayName = displayName;
-        this.affectsGeometry = affectsGeometry;
-    }
 
     public static JointType fromString(String text) {
         String lower = text.toLowerCase().replace('-', '_').replace(' ', '_');
