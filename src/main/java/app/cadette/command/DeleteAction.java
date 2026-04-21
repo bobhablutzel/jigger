@@ -33,15 +33,8 @@ public class DeleteAction implements UndoableAction {
     private final Vector3f position;
     private final Vector3f size;
     private final ColorRGBA color;
+    private final Vector3f rotation;  // degrees; may be ZERO
     private final Part part;  // non-null if this was a part, null for primitives
-
-    // Hand-coded: delegating convenience ctor for primitives (no Part to
-    // restore). @RequiredArgsConstructor generates the full 7-arg ctor;
-    // this 6-arg overload supplies part=null so callers don't have to.
-    public DeleteAction(SceneManager scene, String name, String shapeType,
-                        Vector3f position, Vector3f size, ColorRGBA color) {
-        this(scene, name, shapeType, position, size, color, null);
-    }
 
     @Override
     public void undo() {
@@ -49,6 +42,10 @@ public class DeleteAction implements UndoableAction {
             scene.createPart(part);
         } else {
             scene.createObject(name, shapeType, position, size, color);
+        }
+        // Restore rotation (omitted restores stays (0,0,0), same as created)
+        if (rotation != null && !rotation.equals(Vector3f.ZERO)) {
+            scene.rotateObject(name, rotation);
         }
     }
 

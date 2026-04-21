@@ -176,6 +176,7 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             List<DeleteAllAction.ObjectSnapshot> snapshots = recs.values().stream()
                     .map(r -> new DeleteAllAction.ObjectSnapshot(
                             r.name(), r.shapeType(), r.position(), r.size(), r.color(),
+                            scene.getRotation(r.name()).clone(),
                             scene.getPart(r.name())))
                     .toList();
             scene.deleteAllObjects();
@@ -195,9 +196,10 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             return "Object or assembly '" + name + "' not found.";
         }
         Part part = scene.getPart(name);
+        Vector3f rotation = scene.getRotation(name).clone();
         scene.deleteObject(name);
         executor.pushAction(new DeleteAction(scene, rec.name(), rec.shapeType(),
-                rec.position(), rec.size(), rec.color(), part));
+                rec.position(), rec.size(), rec.color(), rotation, part));
         return "Deleted '" + name + "'.";
     }
 

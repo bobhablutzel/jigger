@@ -37,12 +37,7 @@ public class DeleteAllAction implements UndoableAction {
 
     /** Snapshot of an object — includes the Part if it was a part-based object. */
     public record ObjectSnapshot(String name, String shapeType, Vector3f position,
-                                 Vector3f size, ColorRGBA color, Part part) {
-        /** Convenience constructor for primitives. */
-        public ObjectSnapshot(String name, String shapeType, Vector3f position,
-                              Vector3f size, ColorRGBA color) {
-            this(name, shapeType, position, size, color, null);
-        }
+                                 Vector3f size, ColorRGBA color, Vector3f rotation, Part part) {
     }
 
     @Override
@@ -52,6 +47,9 @@ public class DeleteAllAction implements UndoableAction {
                 scene.createPart(s.part());
             } else {
                 scene.createObject(s.name(), s.shapeType(), s.position(), s.size(), s.color());
+            }
+            if (s.rotation() != null && !s.rotation().equals(Vector3f.ZERO)) {
+                scene.rotateObject(s.name(), s.rotation());
             }
         }
     }
