@@ -21,14 +21,20 @@ package app.cadette;
 import app.cadette.command.CommandExecutor;
 import app.cadette.model.Material;
 import app.cadette.model.MaterialCatalog;
+import app.cadette.model.MeasurementSystem;
 import com.jme3.system.AppSettings;
 import com.jme3.system.JmeCanvasContext;
 
 import javax.swing.*;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.*;
 import java.awt.event.*;
-
-
+import java.io.File;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.function.BiFunction;
+import java.util.function.Supplier;
 
 /**
  * Main entry point. Creates a Swing frame with a jME3 3D canvas on top
@@ -37,7 +43,6 @@ import java.awt.event.*;
 public class CadetteApp {
 
     private static SceneManager sceneManager;
-
     private static volatile boolean shuttingDown = false;
 
     public static void main(String[] args) {
@@ -53,123 +58,194 @@ public class CadetteApp {
         frame.setSize(1280, 900);
         frame.setLocationRelativeTo(null);
 
-        // -- jME3 canvas setup --
+        sceneManager = buildSceneManager();
+        Canvas canvas = ((JmeCanvasContext) sceneManager.getContext()).getCanvas();
+        canvas.setPreferredSize(new Dimension(1280, 600));
+
+        CommandExecutor executor = new CommandExecutor(sceneManager);
+        executor.setOnExit(() -> shutdown(frame));
+        executor.setFileChooser(scriptOpenChooser(frame));
+        executor.setSaveFileChooser(exportSaveChooser(frame));
+
+        CommandPanel commandPanel = new CommandPanel(executor);
+        SelectionManager selectionManager = new SelectionManager(sceneManager);
+        wireSelectionHighlights(selectionManager, commandPanel);
+
+        // Viewport panel = canvas + settings bar along the bottom edge
+        JPanel viewportPanel = new JPanel(new BorderLayout());
+        viewportPanel.add(canvas, BorderLayout.CENTER);
+        viewportPanel.add(buildSettingsBar(executor), BorderLayout.SOUTH);
+
+        // Cut sheet panel (scrollable)
+        CutSheetPanel cutSheetPanel = new CutSheetPanel(sceneManager, executor::getUnits);
+        cutSheetPanel.setSelectionManager(selectionManager);
+        JScrollPane cutSheetScroll = new JScrollPane(cutSheetPanel);
+        cutSheetScroll.setBorder(null);
+        cutSheetScroll.getVerticalScrollBar().setUnitIncrement(40);
+
+        // View layout: permanent horizontal JSplitPane.
+        // The jME3 AWT Canvas cannot be reparented (moving it between containers
+        // invalidates the OpenGL context and crashes GPU drivers), so we use a
+        // permanent split and drive the divider to show/hide panels.
+        JSplitPane hSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, viewportPanel, cutSheetScroll);
+        hSplitPane.setResizeWeight(0.6);
+        hSplitPane.setContinuousLayout(true);
+
+        ViewContainer view = buildViewContainer(hSplitPane, cutSheetPanel, executor, frame);
+
+        JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, view.panel(), commandPanel);
+        splitPane.setResizeWeight(0.75);
+        splitPane.setDividerLocation(620);
+        frame.getContentPane().add(splitPane, BorderLayout.CENTER);
+
+        // Escape handoff: command panel releases focus → give it to the canvas
+        commandPanel.setOnFocusToggle(canvas::requestFocusInWindow);
+        canvas.addKeyListener(canvasKeyAdapter(executor, commandPanel, frame));
+        installGlobalEscapeKey(commandPanel);
+
+        frame.addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                shutdown(frame);
+            }
+        });
+
+        frame.setVisible(true);
+
+        // Start the jME3 canvas now that the frame is visible and the native
+        // window peer exists. This ordering is required on Windows where LWJGL3
+        // cannot bind an OpenGL context to an unrealized AWT canvas.
+        sceneManager.startCanvas();
+        sceneManager.setSelectionManager(selectionManager);
+
+        // Apply initial layout now that the frame is realized
+        // (setDividerLocation with proportional values requires a non-zero width)
+        view.applyLayout().run();
+
+        // Run startup script if it exists (~/.cadette/startup.cds)
+        String startupResult = executor.runStartupScript();
+        if (startupResult != null) {
+            commandPanel.appendOutput(startupResult + "\n");
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Scene manager setup
+    // ---------------------------------------------------------------------
+
+    private static SceneManager buildSceneManager() {
         AppSettings settings = new AppSettings(true);
         settings.setWidth(1280);
         settings.setHeight(600);
         settings.setFrameRate(60);
         // MSAA: try 4x, but can be disabled with -Dcadette.msaa=0 for GPUs that don't support it
-        int msaa = Integer.getInteger("cadette.msaa", 4);
-        settings.setSamples(msaa);
+        settings.setSamples(Integer.getInteger("cadette.msaa", 4));
         settings.setAudioRenderer(null);  // no audio needed for a CAD app
 
-        sceneManager = new SceneManager();
-        sceneManager.setPauseOnLostFocus(false);
-        sceneManager.setSettings(settings);
-        sceneManager.createCanvas();
-        // startCanvas() is called after frame.setVisible() — see below.
-        // LWJGL3 on Windows needs a realized native window before it can bind
-        // an OpenGL context; starting too early produces a blank canvas.
+        SceneManager sm = new SceneManager();
+        sm.setPauseOnLostFocus(false);
+        sm.setSettings(settings);
+        sm.createCanvas();
+        // startCanvas() is called after frame.setVisible() in createAndShowGUI.
+        return sm;
+    }
 
-        JmeCanvasContext ctx = (JmeCanvasContext) sceneManager.getContext();
-        Canvas canvas = ctx.getCanvas();
-        canvas.setPreferredSize(new Dimension(1280, 600));
+    // ---------------------------------------------------------------------
+    // File choosers
+    // ---------------------------------------------------------------------
 
-        // -- Command panel --
-        CommandExecutor executor = new CommandExecutor(sceneManager);
-        executor.setOnExit(() -> shutdown(frame));
-
-        // File chooser for "run" command with no argument
-        executor.setFileChooser(() -> {
+    /** Chooser for the `run` command when invoked with no path argument. */
+    private static Supplier<Path> scriptOpenChooser(JFrame frame) {
+        return () -> {
             JFileChooser chooser = new JFileChooser();
             chooser.setDialogTitle("Open CADette Script");
-            chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-                    "CADette Scripts (*.cds)", "cds"));
+            chooser.setFileFilter(new FileNameExtensionFilter("CADette Scripts (*.cds)", "cds"));
             int result = chooser.showOpenDialog(frame);
-            if (result == JFileChooser.APPROVE_OPTION) {
-                return chooser.getSelectedFile().toPath();
-            }
-            return null;
-        });
+            return result == JFileChooser.APPROVE_OPTION
+                    ? chooser.getSelectedFile().toPath()
+                    : null;
+        };
+    }
 
-        // Save file chooser for "export" commands
-        executor.setSaveFileChooser((description, extensions) -> {
+    /** Chooser for `export` commands that need a target path. */
+    private static BiFunction<String, String[], Path> exportSaveChooser(JFrame frame) {
+        return (description, extensions) -> {
             JFileChooser chooser = new JFileChooser();
             chooser.setDialogTitle("Export Cut Sheet");
-            chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-                    description, extensions));
-            int result = chooser.showSaveDialog(frame);
-            if (result == JFileChooser.APPROVE_OPTION) {
-                java.io.File file = chooser.getSelectedFile();
-                // Add extension if the user didn't type one
-                String name = file.getName();
-                if (!name.contains(".") && extensions.length > 0) {
-                    file = new java.io.File(file.getParentFile(), name + "." + extensions[0]);
-                }
-                return file.toPath();
+            chooser.setFileFilter(new FileNameExtensionFilter(description, extensions));
+            if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return null;
+            File file = chooser.getSelectedFile();
+            // Auto-append extension if the user didn't type one
+            if (!file.getName().contains(".") && extensions.length > 0) {
+                file = new File(file.getParentFile(), file.getName() + "." + extensions[0]);
             }
-            return null;
-        });
+            return file.toPath();
+        };
+    }
 
-        CommandPanel commandPanel = new CommandPanel(executor);
+    // ---------------------------------------------------------------------
+    // Selection highlight wiring
+    // ---------------------------------------------------------------------
 
-        // -- Selection manager --
-        SelectionManager selectionManager = new SelectionManager(sceneManager);
-
-        // Track previously highlighted parts for cleanup
-        final java.util.List<String> previousHighlights = new java.util.ArrayList<>();
+    /**
+     * Subscribe to selection changes: toggle scene highlights for selected parts
+     * and echo a summary to the command output.
+     */
+    private static void wireSelectionHighlights(SelectionManager selectionManager,
+                                                 CommandPanel commandPanel) {
+        final List<String> previousHighlights = new ArrayList<>();
         selectionManager.addSelectionListener(event -> {
-            // Remove old highlights
             for (String name : previousHighlights) {
                 sceneManager.setHighlight(name, false);
             }
             previousHighlights.clear();
 
-            // Apply new highlights
-            java.util.List<String> parts = selectionManager.getSelectedPartNames();
+            List<String> parts = selectionManager.getSelectedPartNames();
             for (String name : parts) {
                 sceneManager.setHighlight(name, true);
             }
             previousHighlights.addAll(parts);
 
-            // Show selection info in command output
-            java.util.List<String> names = event.selectedNames();
+            List<String> names = event.selectedNames();
             if (!names.isEmpty()) {
                 String info = names.size() == 1
                         ? "Selected '" + names.getFirst() + "'"
                         : "Selected " + names.size() + " objects: " + String.join(", ", names);
-                javax.swing.SwingUtilities.invokeLater(
-                        () -> commandPanel.appendOutput(info + "\n"));
+                SwingUtilities.invokeLater(() -> commandPanel.appendOutput(info + "\n"));
             }
         });
+    }
 
-        // -- Settings panel (bottom-right of viewport) --
-        JPanel viewportPanel = new JPanel(new BorderLayout());
-        viewportPanel.add(canvas, BorderLayout.CENTER);
+    // ---------------------------------------------------------------------
+    // Settings bar (units + material dropdowns)
+    // ---------------------------------------------------------------------
 
-        Color panelBg = new Color(40, 40, 48);
-        Color labelColor = new Color(180, 180, 180);
-        Font labelFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+    private static final Color PANEL_BG = new Color(40, 40, 48);
+    private static final Color LABEL_FG = new Color(180, 180, 180);
+    private static final Font LABEL_FONT = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
 
-        // Guard flags to prevent action listener re-entry loops
+    /**
+     * Build the settings row containing the units and material combo boxes,
+     * wired bidirectionally to the executor so command changes sync to the UI
+     * and vice versa. Re-entry guards prevent listener loops.
+     */
+    private static JPanel buildSettingsBar(CommandExecutor executor) {
         final boolean[] updatingUnits = {false};
         final boolean[] updatingMaterial = {false};
+        MaterialCatalog catalog = MaterialCatalog.instance();
+        final int[] separatorIndex = { catalog.preferredCount(executor.getUnits().getMeasurementSystem()) };
 
-        JPanel settingsGrid = new JPanel(new java.awt.GridBagLayout());
-        settingsGrid.setOpaque(true);
-        settingsGrid.setBackground(panelBg);
-        var gbc = new java.awt.GridBagConstraints();
+        JPanel grid = new JPanel(new GridBagLayout());
+        grid.setOpaque(true);
+        grid.setBackground(PANEL_BG);
+        GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(2, 6, 2, 6);
-        gbc.anchor = java.awt.GridBagConstraints.WEST;
+        gbc.anchor = GridBagConstraints.WEST;
 
-        // -- Units row --
-        gbc.gridx = 0; gbc.gridy = 0; gbc.fill = java.awt.GridBagConstraints.NONE; gbc.weightx = 0;
-        JLabel unitsLabel = new JLabel("Units:");
-        unitsLabel.setForeground(labelColor);
-        unitsLabel.setFont(labelFont);
-        settingsGrid.add(unitsLabel, gbc);
+        // Units row
+        gbc.gridx = 0; gbc.gridy = 0; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        grid.add(styledLabel("Units:"), gbc);
 
-        gbc.gridx = 1; gbc.fill = java.awt.GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         JComboBox<UnitSystem> unitsCombo = new JComboBox<>(UnitSystem.values());
         unitsCombo.setSelectedItem(executor.getUnits());
         unitsCombo.setRenderer(new DefaultListCellRenderer() {
@@ -187,26 +263,17 @@ public class CadetteApp {
         unitsCombo.addActionListener(e -> {
             if (updatingUnits[0]) return;
             UnitSystem selected = (UnitSystem) unitsCombo.getSelectedItem();
-            if (selected != null) {
-                executor.setUnits(selected);
-            }
+            if (selected != null) executor.setUnits(selected);
         });
-        settingsGrid.add(unitsCombo, gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        grid.add(unitsCombo, gbc);
 
-        // -- Material row --
-        gbc.gridx = 0; gbc.gridy = 1; gbc.fill = java.awt.GridBagConstraints.NONE; gbc.weightx = 0;
-        JLabel matLabel = new JLabel("Material:");
-        matLabel.setForeground(labelColor);
-        matLabel.setFont(labelFont);
-        settingsGrid.add(matLabel, gbc);
+        // Material row
+        gbc.gridx = 0; gbc.gridy = 1; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
+        grid.add(styledLabel("Material:"), gbc);
 
-        gbc.gridx = 1; gbc.fill = java.awt.GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         JComboBox<Material> materialCombo = new JComboBox<>();
         materialCombo.setFocusable(false);
-
-        MaterialCatalog catalog = MaterialCatalog.instance();
-        final int[] separatorIndex = { catalog.preferredCount(executor.getUnits().getMeasurementSystem()) };
-
         materialCombo.setRenderer(new DefaultListCellRenderer() {
             @Override
             public Component getListCellRendererComponent(JList<?> list, Object value,
@@ -229,11 +296,10 @@ public class CadetteApp {
             }
         });
 
-        // Populate materials sorted for current units (with guard to suppress action events)
         Runnable refreshMaterials = () -> {
             updatingMaterial[0] = true;
             try {
-                var ms = executor.getUnits().getMeasurementSystem();
+                MeasurementSystem ms = executor.getUnits().getMeasurementSystem();
                 separatorIndex[0] = catalog.preferredCount(ms);
                 Material currentSelection = executor.getDefaultMaterial();
                 materialCombo.removeAllItems();
@@ -250,13 +316,12 @@ public class CadetteApp {
         materialCombo.addActionListener(e -> {
             if (updatingMaterial[0]) return;
             Material selected = (Material) materialCombo.getSelectedItem();
-            if (selected != null) {
-                executor.setDefaultMaterial(selected);
-            }
+            if (selected != null) executor.setDefaultMaterial(selected);
         });
-        settingsGrid.add(materialCombo, gbc);
+        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        grid.add(materialCombo, gbc);
 
-        // Sync dropdowns when values change via commands
+        // Sync UI when values change via commands
         executor.addUnitChangeListener(u -> SwingUtilities.invokeLater(() -> {
             updatingUnits[0] = true;
             try {
@@ -264,9 +329,7 @@ public class CadetteApp {
             } finally {
                 updatingUnits[0] = false;
             }
-            // Re-sort materials and switch default for the new measurement system
-            var newDefault = catalog.getDefaultFor(u.getMeasurementSystem());
-            executor.setDefaultMaterial(newDefault);
+            executor.setDefaultMaterial(catalog.getDefaultFor(u.getMeasurementSystem()));
             refreshMaterials.run();
         }));
         executor.addMaterialChangeListener(m -> SwingUtilities.invokeLater(() -> {
@@ -278,57 +341,54 @@ public class CadetteApp {
             }
         }));
 
-        // Wrap in a right-aligned container so it doesn't stretch across the full width
+        // Right-align the grid so it doesn't stretch across the full width
         JPanel bottomBar = new JPanel(new BorderLayout());
         bottomBar.setOpaque(true);
-        bottomBar.setBackground(panelBg);
-        bottomBar.add(settingsGrid, BorderLayout.EAST);
+        bottomBar.setBackground(PANEL_BG);
+        bottomBar.add(grid, BorderLayout.EAST);
+        return bottomBar;
+    }
 
-        viewportPanel.add(bottomBar, BorderLayout.SOUTH);
+    private static JLabel styledLabel(String text) {
+        JLabel label = new JLabel(text);
+        label.setForeground(LABEL_FG);
+        label.setFont(LABEL_FONT);
+        return label;
+    }
 
-        // -- Cut sheet panel (scrollable) --
-        CutSheetPanel cutSheetPanel = new CutSheetPanel(sceneManager, executor::getUnits);
-        cutSheetPanel.setSelectionManager(selectionManager);
-        JScrollPane cutSheetScroll = new JScrollPane(cutSheetPanel);
-        cutSheetScroll.setBorder(null);
-        cutSheetScroll.getVerticalScrollBar().setUnitIncrement(40);
+    // ---------------------------------------------------------------------
+    // View container (tab bar + split-pane layout toggle)
+    // ---------------------------------------------------------------------
 
-        // -- View layout: permanent horizontal JSplitPane --
-        // The jME3 AWT Canvas cannot be reparented (moving it between containers
-        // invalidates the OpenGL context and crashes GPU drivers). So we use a
-        // permanent JSplitPane and control the divider position to show/hide panels.
-        JSplitPane hSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, viewportPanel, cutSheetScroll);
-        hSplitPane.setResizeWeight(0.6);
-        hSplitPane.setContinuousLayout(true);
+    private static final Color TAB_BG = new Color(50, 50, 58);
+    private static final Color TAB_ACTIVE_FG = new Color(220, 220, 220);
+    private static final Color TAB_INACTIVE_FG = new Color(120, 120, 120);
+    private static final Font TAB_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 11);
 
-        // Tab-style toggle bar for tabbed mode
-        Color tabBg = new Color(50, 50, 58);
-        Color tabActiveFg = new Color(220, 220, 220);
-        Color tabInactiveFg = new Color(120, 120, 120);
-        Font tabFont = new Font(Font.SANS_SERIF, Font.BOLD, 11);
+    /** The view container plus the Runnable that applies the initial layout. */
+    private record ViewContainer(JPanel panel, Runnable applyLayout) {}
 
-        JButton viewportTab = new JButton("3D Viewport");
-        JButton cutSheetTab = new JButton("Cut Sheets");
-        for (JButton btn : new JButton[]{viewportTab, cutSheetTab}) {
-            btn.setFont(tabFont);
-            btn.setFocusable(false);
-            btn.setBorderPainted(false);
-            btn.setContentAreaFilled(false);
-            btn.setOpaque(true);
-            btn.setBackground(tabBg);
-        }
+    /**
+     * Build the container around {@code hSplitPane} (viewport + cut sheet) with a
+     * tab bar for tabbed mode. The caller must invoke {@link ViewContainer#applyLayout()}
+     * after the frame is realized (proportional divider locations need a non-zero width).
+     */
+    private static ViewContainer buildViewContainer(JSplitPane hSplitPane,
+                                                     CutSheetPanel cutSheetPanel,
+                                                     CommandExecutor executor,
+                                                     JFrame frame) {
+        JButton viewportTab = tabButton("3D Viewport");
+        JButton cutSheetTab = tabButton("Cut Sheets");
 
         JPanel tabBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        tabBar.setBackground(tabBg);
+        tabBar.setBackground(TAB_BG);
         tabBar.add(viewportTab);
         tabBar.add(cutSheetTab);
 
-        // Tab button state: tracks which tab is active in tabbed mode
         final boolean[] showingViewport = {true};
-
         Runnable updateTabColors = () -> {
-            viewportTab.setForeground(showingViewport[0] ? tabActiveFg : tabInactiveFg);
-            cutSheetTab.setForeground(showingViewport[0] ? tabInactiveFg : tabActiveFg);
+            viewportTab.setForeground(showingViewport[0] ? TAB_ACTIVE_FG : TAB_INACTIVE_FG);
+            cutSheetTab.setForeground(showingViewport[0] ? TAB_INACTIVE_FG : TAB_ACTIVE_FG);
         };
 
         viewportTab.addActionListener(e -> {
@@ -347,6 +407,7 @@ public class CadetteApp {
 
         JPanel viewContainer = new JPanel(new BorderLayout());
         viewContainer.add(hSplitPane, BorderLayout.CENTER);
+        viewContainer.add(tabBar, BorderLayout.NORTH);
 
         Runnable applyLayout = () -> {
             if (executor.getLayoutMode() == ViewLayoutMode.SPLIT_PANE) {
@@ -361,50 +422,58 @@ public class CadetteApp {
                 updateTabColors.run();
             }
         };
-
-        viewContainer.add(tabBar, BorderLayout.NORTH);
         executor.addLayoutChangeListener(mode -> SwingUtilities.invokeLater(applyLayout));
-        // Initial layout applied after frame is visible (see below)
 
-        // -- Layout: view container on top, command line on bottom --
-        JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, viewContainer, commandPanel);
-        splitPane.setResizeWeight(0.75);
-        splitPane.setDividerLocation(620);
+        return new ViewContainer(viewContainer, applyLayout);
+    }
 
-        frame.getContentPane().add(splitPane, BorderLayout.CENTER);
+    private static JButton tabButton(String text) {
+        JButton btn = new JButton(text);
+        btn.setFont(TAB_FONT);
+        btn.setFocusable(false);
+        btn.setBorderPainted(false);
+        btn.setContentAreaFilled(false);
+        btn.setOpaque(true);
+        btn.setBackground(TAB_BG);
+        return btn;
+    }
 
-        // -- Escape key: toggle between viewport and command panel --
-        // When command panel releases focus, give it to the canvas
-        commandPanel.setOnFocusToggle(() -> canvas.requestFocusInWindow());
+    // ---------------------------------------------------------------------
+    // Key handling
+    // ---------------------------------------------------------------------
 
-        // AWT KeyListener on the jME3 canvas (AWT Canvas doesn't participate
-        // in Swing's KeyboardFocusManager dispatch).
-        canvas.addKeyListener(new KeyAdapter() {
+    /** Hotkeys applied to the jME3 canvas (AWT Canvas bypasses Swing's KeyboardFocusManager). */
+    private static KeyAdapter canvasKeyAdapter(CommandExecutor executor,
+                                                CommandPanel commandPanel,
+                                                JFrame frame) {
+        return new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
-                if (e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+                int code = e.getKeyCode();
+                if (code == KeyEvent.VK_ESCAPE) {
                     SwingUtilities.invokeLater(commandPanel::activate);
-                } else if (e.getKeyCode() == KeyEvent.VK_Z && e.isControlDown()) {
+                } else if (code == KeyEvent.VK_Z && e.isControlDown()) {
                     String msg = e.isShiftDown() ? executor.redo() : executor.undo();
                     SwingUtilities.invokeLater(() -> commandPanel.appendOutput(msg + "\n"));
-                } else if (e.getKeyCode() == KeyEvent.VK_R && !e.isControlDown() && !e.isAltDown()) {
-                    SwingUtilities.invokeLater(() -> {
-                        String result = executor.execute("run");
-                        commandPanel.appendOutput(result + "\n");
-                    });
-                } else if (e.getKeyCode() == KeyEvent.VK_Q && !e.isControlDown() && !e.isAltDown()) {
+                } else if (code == KeyEvent.VK_R && !e.isControlDown() && !e.isAltDown()) {
+                    SwingUtilities.invokeLater(() ->
+                            commandPanel.appendOutput(executor.execute("run") + "\n"));
+                } else if (code == KeyEvent.VK_Q && !e.isControlDown() && !e.isAltDown()) {
                     shutdown(frame);
-                } else if (e.getKeyCode() == KeyEvent.VK_L && !e.isControlDown() && !e.isAltDown()) {
-                    SwingUtilities.invokeLater(() -> {
-                        String result = executor.execute("list");
-                        commandPanel.appendOutput(result + "\n");
-                    });
+                } else if (code == KeyEvent.VK_L && !e.isControlDown() && !e.isAltDown()) {
+                    SwingUtilities.invokeLater(() ->
+                            commandPanel.appendOutput(executor.execute("list") + "\n"));
                 }
             }
-        });
+        };
+    }
 
-        // Catch-all for Escape when focus is on any other Swing component
-        // (e.g., split pane divider, toolbar, etc.)
+    /**
+     * Catch-all for Escape when focus is on any other Swing component (e.g. split
+     * pane divider). The canvas key listener handles Escape while the canvas has
+     * focus; this picks up the cases where it doesn't.
+     */
+    private static void installGlobalEscapeKey(CommandPanel commandPanel) {
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
             if (e.getID() == KeyEvent.KEY_PRESSED && e.getKeyCode() == KeyEvent.VK_ESCAPE) {
                 if (!commandPanel.isCommandActive()) {
@@ -414,32 +483,11 @@ public class CadetteApp {
             }
             return false;
         });
-
-        frame.addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                shutdown(frame);
-            }
-        });
-
-        frame.setVisible(true);
-
-        // Start the jME3 canvas now that the frame is visible and the native
-        // window peer exists. This ordering is required on Windows where LWJGL3
-        // cannot bind an OpenGL context to an unrealized AWT canvas.
-        sceneManager.startCanvas();
-        sceneManager.setSelectionManager(selectionManager);
-
-        // Apply initial layout now that the frame is realized
-        // (setDividerLocation with proportional values requires a non-zero width)
-        applyLayout.run();
-
-        // Run startup script if it exists (~/.cadette/startup.cds)
-        String startupResult = executor.runStartupScript();
-        if (startupResult != null) {
-            commandPanel.appendOutput(startupResult + "\n");
-        }
     }
+
+    // ---------------------------------------------------------------------
+    // Shutdown
+    // ---------------------------------------------------------------------
 
     private static void shutdown(JFrame frame) {
         if (shuttingDown) return;
