@@ -18,6 +18,7 @@
 
 package app.cadette.command;
 
+import app.cadette.CutListExporter;
 import app.cadette.CutSheetExporter;
 import app.cadette.SceneManager;
 import app.cadette.UnitSystem;
@@ -774,17 +775,16 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             return "No parts in scene — nothing to export.";
         }
 
-        var layouts = SheetLayoutGenerator.generateLayouts(parts, scene.getKerfMm());
-        if (layouts.isEmpty()) {
-            return "No sheet goods in scene (only hardwood/metal parts) — nothing to export.";
-        }
-
-        // Determine format
         var fmt = ctx.exportFormat();
+        boolean isCsv = fmt.CSV() != null;
         boolean isPdf = fmt.PDF() != null;
         boolean isPng = fmt.PNG() != null;
-        String extension = isPdf ? "pdf" : isPng ? "png" : "jpeg";
-        String description = isPdf ? "PDF files" : isPng ? "PNG images" : "JPEG images";
+
+        String extension = isCsv ? "csv" : isPdf ? "pdf" : isPng ? "png" : "jpeg";
+        String description = isCsv ? "CSV files"
+                : isPdf ? "PDF files"
+                : isPng ? "PNG images"
+                : "JPEG images";
 
         // Determine output path
         Path outputPath;
@@ -792,7 +792,6 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             String path = ctx.STRING().getText();
             path = path.substring(1, path.length() - 1); // strip quotes
             outputPath = Path.of(path);
-            // Add extension if missing
             if (!path.contains(".")) {
                 outputPath = Path.of(path + "." + extension);
             }
@@ -805,6 +804,17 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
 
         try {
             UnitSystem units = executor.getUnits();
+            if (isCsv) {
+                var entries = CutListGenerator.generateCutList(parts, scene.getJointRegistry());
+                CutListExporter.exportCsv(entries, units, outputPath);
+                return "Exported cut list to " + outputPath.toAbsolutePath();
+            }
+
+            // Sheet-layout exports (PDF/PNG/JPEG) need actual sheet goods.
+            var layouts = SheetLayoutGenerator.generateLayouts(parts, scene.getKerfMm());
+            if (layouts.isEmpty()) {
+                return "No sheet goods in scene (only hardwood/metal parts) — nothing to export.";
+            }
             if (isPdf) {
                 CutSheetExporter.exportPdf(layouts, units, outputPath);
             } else {
@@ -1577,6 +1587,7 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                   export cutsheet pdf [file]      — export cut sheets to PDF (opens save dialog if no file)
                   export cutsheet png [file]      — export cut sheets to PNG image
                   export cutsheet jpg [file]      — export cut sheets to JPEG image
+                  export cutlist csv [file]       — export cut list as CSV (one row per part)
                       units: """ + UnitSystem.allNames() + """
 
                   run [file]                       — run a .cds script (opens file dialog if omitted)

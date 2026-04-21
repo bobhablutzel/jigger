@@ -243,6 +243,7 @@ exportFormat
     : PDF
     | PNG
     | JPEG
+    | CSV
     ;
 
 undoCommand

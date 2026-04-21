@@ -139,6 +139,7 @@ set layout tabs             — toggle between 3D and cut sheet views
 export cutsheet pdf          — export to PDF (vector, one page per sheet)
 export cutsheet png "cuts.png"  — export as PNG image
 export cutsheet jpg          — export as JPEG
+export cutlist csv           — export the cut list as CSV (one row per part)
 ```
 
 Cut sheets update automatically when parts change (dirty-flag lazy recompute). The view scrolls vertically when sheets overflow the viewport.
@@ -184,6 +185,7 @@ set material "plywood-18mm"
 set kerf 3.2            — saw blade kerf width (default 3.2mm / 1/8")
 set layout tabs|split   — switch between tabbed and split-pane view
 export cutsheet pdf|png|jpg [file]  — export cut sheets
+export cutlist csv [file]           — export cut list as CSV
 display names           — show name labels on all objects
 hide names
 run                     — run a .cds script (opens file chooser)
@@ -354,7 +356,6 @@ If built-in templates should use the new joint type, update their definitions in
 - Additional joint types: dovetails, biscuits, dowels, splines
 - Wood grain textures and shaders
 - Save/load projects
-- Export cut lists to CSV
 - Collision detection
 - Native app packaging (jpackage)
 

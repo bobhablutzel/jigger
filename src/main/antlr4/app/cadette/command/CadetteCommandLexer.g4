@@ -44,6 +44,7 @@ EXPORT     : 'export' ;
 PDF        : 'pdf' ;
 PNG        : 'png' ;
 JPEG       : 'jpeg' | 'jpg' ;
+CSV        : 'csv' ;
 LAYOUT     : 'layout' | 'layouts' ;
 KERF       : 'kerf' ;
 TABS       : 'tabs' | 'tabbed' ;
