@@ -1,0 +1,62 @@
+<svg
+  width="80"
+  height="80"
+  viewBox="0 0 80 80"
+  fill="none"
+  xmlns="http://www.w3.org/2000/svg"
+  style="filter: drop-shadow(0 10px 15px rgba(0, 0, 0, 0.1)) drop-shadow(0 4px 6px rgba(0, 0, 0, 0.05));"
+>
+  <!-- Wood plank background shape -->
+  <rect
+    x="0"
+    y="0"
+    width="80"
+    height="80"
+    rx="8"
+    fill="#8B4513"
+    opacity="0.9"
+  />
+
+  <!-- Wood grain lines -->
+  <path
+    d="M 20 30 Q 30 50, 25 70 M 35 25 Q 45 55, 40 85 M 50 30 Q 60 50, 55 75 M 65 35 Q 75 55, 70 80"
+    stroke="#6B3410"
+    stroke-width="1.5"
+    opacity="0.4"
+    fill="none"
+  />
+
+  <!-- Compass/divider tool overlaying the wood -->
+  <g transform="translate(40, 40)">
+    <!-- Left leg of compass -->
+    <line
+      x1="0"
+      y1="-20"
+      x2="-11"
+      y2="25"
+      stroke="#1e40af"
+      stroke-width="3"
+      stroke-linecap="round"
+    />
+    <!-- Right leg of compass -->
+    <line
+      x1="0"
+      y1="-20"
+      x2="11"
+      y2="25"
+      stroke="#1e40af"
+      stroke-width="3"
+      stroke-linecap="round"
+    />
+    <!-- Pivot point -->
+    <circle cx="0" cy="-20" r="4" fill="#1e40af" />
+    <!-- Left foot -->
+    <circle cx="-11" cy="25" r="2.5" fill="#1e40af" />
+    <!-- Right pencil tip -->
+    <path
+      d="M 9 25 L 13 25 L 11 30 Z"
+      fill="#1e40af"
+    />
+  </g>
+
+</svg>

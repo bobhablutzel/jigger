@@ -45,14 +45,23 @@ public class CadetteApp {
     private static SceneManager sceneManager;
     private static volatile boolean shuttingDown = false;
 
+    // Minimum time the splash stays visible before the main frame takes over.
+    private static final int SPLASH_MIN_DISPLAY_MS = 2500;
+
     public static void main(String[] args) {
         // Prevent Java2D from using DirectDraw/D3D on Windows, which can conflict
         // with LWJGL3's OpenGL context in the embedded canvas.
         System.setProperty("sun.java2d.noddraw", "true");
-        SwingUtilities.invokeLater(CadetteApp::createAndShowGUI);
+        SwingUtilities.invokeLater(() -> {
+            long splashStart = System.currentTimeMillis();
+            JWindow splash = SplashScreen.show();
+            // Yield the EDT so the splash actually paints before createAndShowGUI
+            // starts its heavier initialization work.
+            SwingUtilities.invokeLater(() -> createAndShowGUI(splash, splashStart));
+        });
     }
 
-    private static void createAndShowGUI() {
+    private static void createAndShowGUI(JWindow splash, long splashStart) {
         JFrame frame = new JFrame("CADette - 3D Command Shell");
         frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         frame.setSize(1280, 900);
@@ -120,6 +129,7 @@ public class CadetteApp {
         });
 
         frame.setVisible(true);
+        scheduleSplashDispose(splash, splashStart);
 
         // Start the jME3 canvas now that the frame is visible and the native
         // window peer exists. This ordering is required on Windows where LWJGL3
@@ -492,6 +502,24 @@ public class CadetteApp {
             }
             return false;
         });
+    }
+
+    // ---------------------------------------------------------------------
+    // Splash
+    // ---------------------------------------------------------------------
+
+    /**
+     * Dispose the splash after {@link #SPLASH_MIN_DISPLAY_MS} has elapsed since
+     * it first became visible. The main frame has already been shown by the time
+     * we're called, so the splash (which is always-on-top) hides it briefly.
+     */
+    private static void scheduleSplashDispose(JWindow splash, long splashStart) {
+        if (splash == null) return;
+        long elapsed = System.currentTimeMillis() - splashStart;
+        int remaining = (int) Math.max(0, SPLASH_MIN_DISPLAY_MS - elapsed);
+        Timer timer = new Timer(remaining, e -> splash.dispose());
+        timer.setRepeats(false);
+        timer.start();
     }
 
     // ---------------------------------------------------------------------
