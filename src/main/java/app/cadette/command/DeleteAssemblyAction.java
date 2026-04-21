@@ -42,6 +42,9 @@ public class DeleteAssemblyAction implements UndoableAction {
     public record PartSnapshot(Part part, Vector3f position, Vector3f size,
                                ColorRGBA color, Vector3f rotation) {}
 
+    // Hand-coded: defensive List.copyOf on both collection fields so the
+    // captured undo state is insulated from post-construction mutation.
+    // @RequiredArgsConstructor would store the caller's references directly.
     public DeleteAssemblyAction(SceneManager scene, String assemblyName, String templateName,
                                 List<PartSnapshot> snapshots, List<Joint> joints) {
         this.scene = scene;

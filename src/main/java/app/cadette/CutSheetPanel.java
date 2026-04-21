@@ -45,6 +45,8 @@ public class CutSheetPanel extends JPanel implements javax.swing.Scrollable {
     private final List<CutSheetRenderer.PartRect> hitRects = new ArrayList<>();
     private SelectionManager selectionManager;
 
+    // Hand-coded: sets the panel background and wires both a scene-change
+    // listener and a mouse listener. Not a @RequiredArgsConstructor candidate.
     public CutSheetPanel(SceneManager sceneManager, Supplier<UnitSystem> unitsSupplier) {
         this.sceneManager = sceneManager;
         this.unitsSupplier = unitsSupplier;

@@ -25,6 +25,7 @@ import app.cadette.ViewLayoutMode;
 import app.cadette.model.*;
 import com.jme3.math.ColorRGBA;
 import com.jme3.math.Vector3f;
+import lombok.RequiredArgsConstructor;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -36,15 +37,11 @@ import java.util.Map;
  * ANTLR visitor that executes parsed commands against the SceneManager.
  * Each visit method returns a feedback string for the console.
  */
+@RequiredArgsConstructor
 public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
 
     private final CommandExecutor executor;
     private final SceneManager scene;
-
-    public CommandVisitor(CommandExecutor executor, SceneManager scene) {
-        this.executor = executor;
-        this.scene = scene;
-    }
 
     @Override
     public String visitCommand(CadetteCommandParser.CommandContext ctx) {

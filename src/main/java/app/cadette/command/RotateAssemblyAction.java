@@ -41,6 +41,9 @@ public class RotateAssemblyAction implements UndoableAction {
     private Map<String, Vector3f> newRotations;
     private Map<String, Vector3f> newPositions;
 
+    // Hand-coded: defensive copies on the old-state maps, plus captures the
+    // current (post-rotation) scene state for redo. @RequiredArgsConstructor
+    // can't express either.
     public RotateAssemblyAction(SceneManager scene, String assemblyName,
                                 Map<String, Vector3f> oldRotations,
                                 Map<String, Vector3f> oldPositions,

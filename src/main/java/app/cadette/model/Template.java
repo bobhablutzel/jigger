@@ -40,12 +40,17 @@ public class Template {
     private final List<String> bodyLines;
     private final boolean builtIn;
 
-    /** Simple constructor — no aliases. */
+    // Hand-coded: convenience ctor that delegates to the 5-arg form with
+    // no aliases and builtIn=false. @RequiredArgsConstructor can't express
+    // the default values.
     public Template(String name, List<String> paramNames, List<String> bodyLines) {
         this(name, paramNames, Map.of(), bodyLines, false);
     }
 
-    /** Constructor with aliases. */
+    // Hand-coded: defensive List.copyOf / Map.copyOf so template bodies and
+    // param metadata are insulated from post-construction mutation.
+    // @RequiredArgsConstructor / @AllArgsConstructor would store the caller's
+    // references directly.
     public Template(String name, List<String> paramNames, Map<String, String> paramAliases,
                     List<String> bodyLines, boolean builtIn) {
         this.name = name;

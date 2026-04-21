@@ -52,6 +52,8 @@ public class CommandPanel extends JPanel {
     @Getter private boolean commandActive = true;
     @Setter private Runnable onFocusToggle;
 
+    // Hand-coded: non-trivial UI construction (text area styling, scroll pane,
+    // key bindings, history load). Not a @RequiredArgsConstructor candidate.
     public CommandPanel(CommandExecutor executor) {
         this.executor = executor;
         setLayout(new BorderLayout());

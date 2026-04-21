@@ -23,12 +23,16 @@ import app.cadette.UnitSystem;
 import app.cadette.ViewLayoutMode;
 import app.cadette.model.*;
 import com.jme3.math.Vector3f;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
 import org.antlr.v4.runtime.*;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -39,23 +43,23 @@ import java.util.function.Supplier;
 public class CommandExecutor {
 
     private final SceneManager scene;
-    private Runnable onExit;
-    private UnitSystem units = UnitSystem.MILLIMETERS;
-    private Material defaultMaterial = MaterialCatalog.instance().getDefaultFor(
+    @Setter private Runnable onExit;
+    @Getter private UnitSystem units = UnitSystem.MILLIMETERS;
+    @Getter private Material defaultMaterial = MaterialCatalog.instance().getDefaultFor(
             UnitSystem.MILLIMETERS.getMeasurementSystem());
     private final List<Consumer<UnitSystem>> unitChangeListeners = new ArrayList<>();
     private final List<Consumer<Material>> materialChangeListeners = new ArrayList<>();
     private final List<Consumer<ViewLayoutMode>> layoutChangeListeners = new ArrayList<>();
-    private ViewLayoutMode layoutMode = ViewLayoutMode.TABBED;
+    @Getter private ViewLayoutMode layoutMode = ViewLayoutMode.TABBED;
 
     private final Deque<UndoableAction> undoStack = new ArrayDeque<>();
     private final Deque<UndoableAction> redoStack = new ArrayDeque<>();
 
     /** Callback to open a file chooser dialog (set by CadetteApp). Returns null if cancelled. */
-    private Supplier<Path> fileChooser;
+    @Setter private Supplier<Path> fileChooser;
 
     /** Callback to open a save-file dialog. Accepts a description and extensions. Returns null if cancelled. */
-    private java.util.function.BiFunction<String, String[], Path> saveFileChooser;
+    @Setter private BiFunction<String, String[], Path> saveFileChooser;
 
     // -- Template recording state --
     private boolean definingTemplate = false;
@@ -71,31 +75,16 @@ public class CommandExecutor {
 
     // Template-expansion context: when non-null, the visitor prefixes object-name
     // references with "<prefix>/" so a body-line "left-side" becomes "K/left-side".
-    private String currentInstancePrefix = null;
+    @Getter(AccessLevel.PACKAGE) private String currentInstancePrefix = null;
     // Set by visitor's visitCreatePartCommand after each part create, consumed by
     // instantiateTemplate to collect the parts belonging to the new assembly.
-    private String lastCreatedPartName = null;
-
-    String getCurrentInstancePrefix() {
-        return currentInstancePrefix;
-    }
-
-    void setLastCreatedPartName(String name) {
-        lastCreatedPartName = name;
-    }
+    @Setter(AccessLevel.PACKAGE) private String lastCreatedPartName = null;
 
     public CommandExecutor(SceneManager scene) {
         this.scene = scene;
     }
 
-    public void setOnExit(Runnable onExit) {
-        this.onExit = onExit;
-    }
-
-    public UnitSystem getUnits() {
-        return units;
-    }
-
+    // Hand-coded: fires change listeners on write. @Setter can't express dispatch.
     public void setUnits(UnitSystem units) {
         this.units = units;
         for (Consumer<UnitSystem> listener : unitChangeListeners) {
@@ -107,10 +96,7 @@ public class CommandExecutor {
         unitChangeListeners.add(listener);
     }
 
-    public Material getDefaultMaterial() {
-        return defaultMaterial;
-    }
-
+    // Hand-coded: fires change listeners on write. @Setter can't express dispatch.
     public void setDefaultMaterial(Material material) {
         this.defaultMaterial = material;
         for (Consumer<Material> listener : materialChangeListeners) {
@@ -122,10 +108,7 @@ public class CommandExecutor {
         materialChangeListeners.add(listener);
     }
 
-    public ViewLayoutMode getLayoutMode() {
-        return layoutMode;
-    }
-
+    // Hand-coded: fires change listeners on write. @Setter can't express dispatch.
     public void setLayoutMode(ViewLayoutMode mode) {
         this.layoutMode = mode;
         for (Consumer<ViewLayoutMode> listener : layoutChangeListeners) {
@@ -135,14 +118,6 @@ public class CommandExecutor {
 
     public void addLayoutChangeListener(Consumer<ViewLayoutMode> listener) {
         layoutChangeListeners.add(listener);
-    }
-
-    public void setFileChooser(Supplier<Path> fileChooser) {
-        this.fileChooser = fileChooser;
-    }
-
-    public void setSaveFileChooser(java.util.function.BiFunction<String, String[], Path> saveFileChooser) {
-        this.saveFileChooser = saveFileChooser;
     }
 
     /**

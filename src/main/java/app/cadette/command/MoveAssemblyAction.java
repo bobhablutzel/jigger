@@ -34,6 +34,8 @@ public class MoveAssemblyAction implements UndoableAction {
     private final Vector3f delta;
     private final List<String> partNames;
 
+    // Hand-coded: defensive List.copyOf on partNames. @RequiredArgsConstructor
+    // would store the caller's reference directly.
     public MoveAssemblyAction(SceneManager scene, String assemblyName,
                               Vector3f delta, List<String> partNames) {
         this.scene = scene;

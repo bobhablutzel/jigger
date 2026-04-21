@@ -29,6 +29,8 @@ public class ScriptRunAction implements UndoableAction {
     private final String scriptName;
     private final List<UndoableAction> actions;
 
+    // Hand-coded: defensive List.copyOf on the actions list. @RequiredArgsConstructor
+    // would store the caller's reference directly.
     public ScriptRunAction(String scriptName, List<UndoableAction> actions) {
         this.scriptName = scriptName;
         this.actions = List.copyOf(actions);

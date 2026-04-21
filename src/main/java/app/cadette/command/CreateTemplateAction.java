@@ -34,6 +34,9 @@ public class CreateTemplateAction implements UndoableAction {
     private final String templateName;
     private final List<Part> createdParts;
 
+    // Hand-coded: defensive List.copyOf so the caller can't mutate the captured
+    // parts after construction. @RequiredArgsConstructor would store the
+    // caller's list reference directly.
     public CreateTemplateAction(SceneManager scene, String assemblyName,
                                 String templateName, List<Part> createdParts) {
         this.scene = scene;

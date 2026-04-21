@@ -22,7 +22,9 @@ import app.cadette.SceneManager;
 import app.cadette.model.Part;
 import com.jme3.math.ColorRGBA;
 import com.jme3.math.Vector3f;
+import lombok.RequiredArgsConstructor;
 
+@RequiredArgsConstructor
 public class DeleteAction implements UndoableAction {
 
     private final SceneManager scene;
@@ -33,22 +35,12 @@ public class DeleteAction implements UndoableAction {
     private final ColorRGBA color;
     private final Part part;  // non-null if this was a part, null for primitives
 
-    /** Constructor for primitive objects. */
+    // Hand-coded: delegating convenience ctor for primitives (no Part to
+    // restore). @RequiredArgsConstructor generates the full 7-arg ctor;
+    // this 6-arg overload supplies part=null so callers don't have to.
     public DeleteAction(SceneManager scene, String name, String shapeType,
                         Vector3f position, Vector3f size, ColorRGBA color) {
         this(scene, name, shapeType, position, size, color, null);
-    }
-
-    /** Constructor that captures part data for undo. */
-    public DeleteAction(SceneManager scene, String name, String shapeType,
-                        Vector3f position, Vector3f size, ColorRGBA color, Part part) {
-        this.scene = scene;
-        this.name = name;
-        this.shapeType = shapeType;
-        this.position = position;
-        this.size = size;
-        this.color = color;
-        this.part = part;
     }
 
     @Override
