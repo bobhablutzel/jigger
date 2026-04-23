@@ -103,7 +103,7 @@ atPlacement
     ;
 
 paramValuePair
-    : paramName NUMBER
+    : paramName expression
     ;
 
 deleteCommand
@@ -116,7 +116,7 @@ moveCommand
     ;
 
 relativePosition
-    : TO? direction OF? objectName (GAP NUMBER)?
+    : TO? direction OF? objectName (GAP expression)?
     ;
 
 direction
@@ -154,7 +154,7 @@ rotateCommand
     ;
 
 rotation
-    : NUMBER COMMA NUMBER COMMA NUMBER
+    : expression COMMA expression COMMA expression
     ;
 
 // Object and material names must also accept keyword tokens that happen to have
@@ -176,7 +176,7 @@ nameLike
     ;
 
 partSize
-    : NUMBER COMMA NUMBER
+    : expression COMMA expression
     ;
 
 grainReq
@@ -190,9 +190,9 @@ joinCommand
     ;
 
 joinArg
-    : DEPTH NUMBER
-    | SCREWS NUMBER
-    | SPACING NUMBER
+    : DEPTH expression
+    | SCREWS expression
+    | SPACING expression
     ;
 
 jointType
@@ -236,7 +236,7 @@ showTarget
 setCommand
     : SET UNITS unitName
     | SET MATERIAL materialName
-    | SET KERF NUMBER
+    | SET KERF expression
     | SET LAYOUT layoutMode
     ;
 
@@ -329,8 +329,27 @@ shape
     | CYLINDER
     ;
 
+// Arithmetic and logical expression. Left-recursive — ANTLR 4 handles the
+// precedence via alternative ordering (earlier binds tighter), same idiom as
+// the Java grammar. Result is numeric; comparisons and logical ops produce
+// 1.0 / 0.0 under numeric truthiness (no separate boolean type today).
+expression
+    : LPAREN expression RPAREN                                              # parenExpr
+    | (MIN | MAX) LPAREN expression (COMMA expression)+ RPAREN              # funcCallExpr
+    | MINUS expression                                                      # negExpr
+    | NOT expression                                                        # notExpr
+    | expression op=(STAR | SLASH) expression                               # mulExpr
+    | expression op=(PLUS | MINUS) expression                               # addExpr
+    | expression op=(LT | LTE | GT | GTE) expression                        # relExpr
+    | expression op=(EQ | NEQ) expression                                   # eqExpr
+    | expression AND expression                                             # andExpr
+    | expression OR expression                                              # orExpr
+    | NUMBER                                                                # numberExpr
+    | VAR_REF                                                               # varRefExpr
+    ;
+
 position
-    : NUMBER COMMA NUMBER COMMA NUMBER
+    : expression COMMA expression COMMA expression
     ;
 
 // Size can be specified as:
@@ -343,19 +362,19 @@ sizeSpec
     ;
 
 dimensions
-    : NUMBER (COMMA NUMBER COMMA NUMBER)?
+    : expression (COMMA expression COMMA expression)?
     ;
 
 widthSpec
-    : WIDTH NUMBER
+    : WIDTH expression
     ;
 
 heightSpec
-    : HEIGHT NUMBER
+    : HEIGHT expression
     ;
 
 depthSpec
-    : DEPTH NUMBER
+    : DEPTH expression
     ;
 
 color

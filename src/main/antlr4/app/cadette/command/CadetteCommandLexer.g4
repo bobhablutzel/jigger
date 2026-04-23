@@ -96,6 +96,23 @@ STATS      : 'stats' ;
 RUN        : 'run' -> pushMode(PATH_MODE) ;
 LPAREN     : '(' ;
 RPAREN     : ')' ;
+// Expression operators. Precedence is expressed in the parser via ordered
+// left-recursive alternatives in the `expression` rule.
+PLUS       : '+' ;
+MINUS      : '-' ;
+STAR       : '*' ;
+SLASH      : '/' ;
+EQ         : '==' ;
+NEQ        : '!=' ;
+LTE        : '<=' ;
+GTE        : '>=' ;
+LT         : '<' ;
+GT         : '>' ;
+AND        : '&&' ;
+OR         : '||' ;
+NOT        : '!' ;
+MIN        : 'min' ;
+MAX        : 'max' ;
 AT         : 'at' | '@' ;
 SIZE       : 'size' | 'sz' ;
 WIDTH      : 'width' | 'w' ;
@@ -115,7 +132,13 @@ YELLOW     : 'yellow' ;
 WHITE      : 'white' ;
 
 COMMA      : ',' ;
-NUMBER     : '-'? ( [0-9]+ ('.' [0-9]*)? | '.' [0-9]+ ) ;
+// Bare numeric literals. Negative numbers are expressed as MINUS followed by
+// NUMBER in the expression grammar — leaving the sign out of NUMBER keeps
+// binary subtraction (`5-3`) unambiguous.
+NUMBER     : [0-9]+ ('.' [0-9]*)? | '.' [0-9]+ ;
+// Template / loop variable reference, e.g. $width, $i. Resolved at evaluation
+// time via the visitor's scope stack.
+VAR_REF    : '$' [a-zA-Z_] [a-zA-Z0-9_]* ;
 HEX_COLOR  : '#' [0-9a-fA-F]+ ;
 STRING     : '"' ~["]* '"' ;
 // Slash-qualified identifier (e.g. "standard/cabinets/base_cabinet"). Each

@@ -63,6 +63,41 @@ public class CommandExecutor {
     private final Deque<UndoableAction> undoStack = new ArrayDeque<>();
     private final Deque<UndoableAction> redoStack = new ArrayDeque<>();
 
+    /**
+     * Stack of variable scopes active during template instantiation (and, in
+     * Phase B, inside for-loops). Innermost scope is at the top. VAR_REF
+     * expressions evaluate by walking the stack inner-to-outer.
+     *
+     * Empty at top-level REPL: any VAR_REF evaluated there throws a runtime
+     * error, which is the right behavior — users only have variables inside
+     * a template body.
+     */
+    private final Deque<Map<String, Double>> varScopes = new ArrayDeque<>();
+
+    /** Push a new variable scope. Caller must pop exactly once. */
+    void pushVarScope(Map<String, Double> scope) {
+        varScopes.push(new LinkedHashMap<>(scope));
+    }
+
+    void popVarScope() {
+        varScopes.pop();
+    }
+
+    /** Mutate the innermost scope — used by for-loop to update loop-var value each iteration. */
+    void setInCurrentScope(String name, double value) {
+        if (varScopes.isEmpty()) throw new IllegalStateException("No active variable scope");
+        varScopes.peek().put(name, value);
+    }
+
+    /** Resolve a variable name, searching innermost scope outward. Null if unknown. */
+    Double resolveVar(String name) {
+        for (Map<String, Double> scope : varScopes) {
+            Double v = scope.get(name);
+            if (v != null) return v;
+        }
+        return null;
+    }
+
     /** Callback to open a file chooser dialog (set by CadetteApp). Returns null if cancelled. */
     @Setter private Supplier<Path> fileChooser;
 
@@ -290,7 +325,7 @@ public class CommandExecutor {
      */
     String instantiateTemplate(String templateName, String instanceName,
                                 Vector3f placement, RelativePlacement relativePlacement,
-                                Map<String, String> rawParamValues) {
+                                Map<String, Double> rawParamValues) {
         TemplateResolution resolution = resolveTemplate(templateName);
         if (resolution.template == null) {
             return resolution.errorMessage;
@@ -335,13 +370,16 @@ public class CommandExecutor {
         suppressUndo = true;
         String previousPrefix = currentInstancePrefix;
         currentInstancePrefix = instanceName;
+        pushVarScope(vars);
         try {
             for (String bodyLine : template.getBodyLines()) {
                 if (bodyLine.trim().isEmpty()) continue;
 
-                String resolved = ExpressionEvaluator.substituteInLine(bodyLine, vars);
                 lastCreatedPartName = null;
-                String result = execute(resolved);
+                // Body line is parsed fresh; VAR_REF nodes resolve against the
+                // active scope (this instantiation's vars). No text-level
+                // substitution anymore — expressions live in the grammar.
+                String result = execute(bodyLine);
                 if (result.isEmpty()) continue;  // comment line
                 output.append("  ").append(result).append("\n");
 
@@ -354,6 +392,7 @@ public class CommandExecutor {
                 }
             }
         } finally {
+            popVarScope();
             suppressUndo = false;
             currentInstancePrefix = previousPrefix;
             lastCreatedPartName = null;
@@ -442,15 +481,15 @@ public class CommandExecutor {
     /**
      * Resolve raw parameter key-value pairs against a template's declared params.
      * Keys are resolved via template-specific aliases first, then global aliases.
-     * Returns null if any declared param is missing or non-numeric.
+     * Returns null if any declared param is missing.
      */
-    private Map<String, Double> resolveParamValues(Template template, Map<String, String> rawValues) {
+    private Map<String, Double> resolveParamValues(Template template, Map<String, Double> rawValues) {
         List<String> paramNames = template.getParamNames();
         if (rawValues.isEmpty() && !paramNames.isEmpty()) {
             return null;
         }
 
-        Map<String, String> canonical = rawValues.entrySet().stream()
+        Map<String, Double> canonical = rawValues.entrySet().stream()
                 .collect(Collectors.toMap(
                         e -> canonicalParamKey(template, e.getKey()),
                         Map.Entry::getValue,
@@ -459,18 +498,11 @@ public class CommandExecutor {
 
         Map<String, Double> vars = new LinkedHashMap<>();
         for (String param : paramNames) {
-            String val = canonical.get(param);
+            Double val = canonical.get(param);
             if (val == null) return null;
-            try {
-                vars.put(param, Double.parseDouble(val));
-            } catch (NumberFormatException e) {
-                return null;
-            }
+            vars.put(param, val);
         }
         return vars;
-        // Kept imperative: early-return on the first missing/non-numeric value
-        // doesn't fit streams cleanly (would require exception-wrapping
-        // gymnastics or a two-pass validate-then-collect).
     }
 
     /** Canonicalize a user-supplied param key via the template's own aliases, then global aliases. */
@@ -603,21 +635,14 @@ public class CommandExecutor {
         validateTemplateReferences();
     }
 
-    // Matches a $variable reference in a body line.
-    private static final Pattern VAR_PATTERN = Pattern.compile("\\$[a-zA-Z_][a-zA-Z0-9_]*");
-
     /**
      * After loading, walk every template body with the command grammar and
      * surface two classes of problem:
      *   1. Syntax errors in body lines.
      *   2. References to templates that exist nowhere in the registry.
      *
-     * Body lines can contain {@code $var} substitutions that aren't valid
-     * grammar tokens as-stored; we replace them with 1.0 via the normal
-     * expression evaluator so arithmetic folds down to concrete numbers
-     * before parsing. On lines that had variables, we suppress syntax errors
-     * because a parse failure might be a substitution artifact rather than a
-     * real bug — those lines get parsed for real at instantiation time.
+     * {@code $var} references are now first-class grammar tokens (VAR_REF),
+     * so body lines parse as-stored — no placeholder substitution needed.
      *
      * Reference resolution checks the whole registry (no {@code using}
      * context); we only flag references that have zero possible matches —
@@ -638,11 +663,8 @@ public class CommandExecutor {
         String line = rawLine.trim();
         if (line.isEmpty()) return;
 
-        boolean hasVars = VAR_PATTERN.matcher(line).find();
-        String prepared = hasVars ? substituteVarsWithPlaceholders(line) : line;
-
         StringBuilder syntaxErrors = new StringBuilder();
-        CadetteCommandLexer lexer = new CadetteCommandLexer(CharStreams.fromString(prepared));
+        CadetteCommandLexer lexer = new CadetteCommandLexer(CharStreams.fromString(line));
         lexer.removeErrorListeners();
         CommonTokenStream tokens = new CommonTokenStream(lexer);
         CadetteCommandParser parser = new CadetteCommandParser(tokens);
@@ -660,16 +682,12 @@ public class CommandExecutor {
         try {
             inputCtx = parser.input();
         } catch (Exception e) {
-            if (!hasVars) {
-                recordLoaderMessage(locate(owner, lineNum) + ": syntax error — " + e.getMessage());
-            }
+            recordLoaderMessage(locate(owner, lineNum) + ": syntax error — " + e.getMessage());
             return;
         }
 
         if (!syntaxErrors.isEmpty()) {
-            if (!hasVars) {
-                recordLoaderMessage(locate(owner, lineNum) + ": syntax error — " + syntaxErrors);
-            }
+            recordLoaderMessage(locate(owner, lineNum) + ": syntax error — " + syntaxErrors);
             return;
         }
 
@@ -683,19 +701,6 @@ public class CommandExecutor {
             recordLoaderMessage(locate(owner, lineNum)
                     + ": references unknown template '" + ref + "'.");
         }
-    }
-
-    private static String substituteVarsWithPlaceholders(String line) {
-        // 1.0 works as a universal placeholder because all template vars are
-        // currently numeric. If booleans / strings / enums enter the language,
-        // this needs to dispatch on the expected type (or substitute a token
-        // that lexes validly in every position $var can appear).
-        Map<String, Double> placeholders = VAR_PATTERN.matcher(line).results()
-                .collect(Collectors.toMap(
-                        r -> r.group().substring(1),
-                        r -> 1.0,
-                        (a, b) -> a));
-        return ExpressionEvaluator.substituteInLine(line, placeholders);
     }
 
     private static String locate(Template owner, int lineNum) {

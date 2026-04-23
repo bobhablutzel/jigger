@@ -134,15 +134,16 @@ class TemplateValidationTest extends HeadlessTestBase {
     }
 
     @Test
-    void variableReferenceIsNotFlagged() throws IOException {
-        // `create $dynamic ...` can't be statically validated — we only know
-        // the template name at instantiation. Validator must skip these.
+    void variableInExpressionPositionIsNotFlagged() throws IOException {
+        // $var is a first-class grammar token inside expressions — body lines
+        // with $var in numeric positions parse cleanly at load time, no
+        // placeholder-substitution hack required.
         Path root = writeTree(
-                "acme/dynamic.cds",
+                "acme/expr.cds",
                 """
                 #! cadette
-                define acme/dynamic params choice
-                  create $choice Sub
+                define acme/expr params width, height
+                  create part "side" size $width, $height at 0, 0, 0
                 end define
                 """);
 
@@ -151,8 +152,8 @@ class TemplateValidationTest extends HeadlessTestBase {
         executor.validateTemplateReferences();
         List<String> warnings = executor.drainLoaderMessages();
 
-        assertFalse(warnings.stream().anyMatch(w -> w.contains("acme/dynamic")),
-                "variable-substituted template refs must not be flagged: " + warnings);
+        assertFalse(warnings.stream().anyMatch(w -> w.contains("acme/expr")),
+                "$var in expression positions must parse cleanly: " + warnings);
     }
 
     @Test
@@ -202,15 +203,16 @@ class TemplateValidationTest extends HeadlessTestBase {
     }
 
     @Test
-    void syntaxErrorSuppressedOnLinesWithVariables() throws IOException {
-        // Lines with $var can produce parse errors after placeholder substitution
-        // even when the real instantiation would succeed — we suppress syntax
-        // errors on those lines to avoid false positives.
+    void variableInTemplateRefPositionIsRejected() throws IOException {
+        // `create $dynamic Sub` isn't allowed — templateRef accepts bare names,
+        // qualified names, or quoted strings, not variable substitutions.
+        // Under the old text-substitution regime this was silently accepted
+        // but never actually used; the grammar now surfaces the constraint.
         Path root = writeTree(
-                "acme/has_vars.cds",
+                "acme/dynamic_ref.cds",
                 """
                 #! cadette
-                define acme/has_vars params choice
+                define acme/dynamic_ref params choice
                   create $choice Sub
                 end define
                 """);
@@ -220,8 +222,8 @@ class TemplateValidationTest extends HeadlessTestBase {
         executor.validateTemplateReferences();
         List<String> warnings = executor.drainLoaderMessages();
 
-        assertFalse(warnings.stream().anyMatch(w ->
-                        w.contains("syntax error") && w.contains("acme/has_vars")),
-                "syntax errors on var-bearing lines must be suppressed: " + warnings);
+        assertTrue(warnings.stream().anyMatch(w ->
+                        w.contains("syntax error") && w.contains("acme/dynamic_ref")),
+                "$var in template-ref position should produce a syntax error: " + warnings);
     }
 }

@@ -90,26 +90,27 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
 
         Vector3f placement = null;
         CommandExecutor.RelativePlacement relPlacement = null;
-        Map<String, String> rawParams = new LinkedHashMap<>();
+        Map<String, Double> rawParams = new LinkedHashMap<>();
 
         for (var arg : ctx.templateArg()) {
             if (arg.atPlacement() != null) {
-                var nums = arg.atPlacement().position().NUMBER();
+                var exprs = arg.atPlacement().position().expression();
                 placement = new Vector3f(
-                        Float.parseFloat(nums.get(0).getText()),
-                        Float.parseFloat(nums.get(1).getText()),
-                        Float.parseFloat(nums.get(2).getText()));
+                        evalFloat(exprs.get(0)),
+                        evalFloat(exprs.get(1)),
+                        evalFloat(exprs.get(2)));
             } else if (arg.relativePosition() != null) {
                 var relCtx = arg.relativePosition();
                 String dir = directionText(relCtx.direction());
                 String refName = extractName(relCtx.objectName());
                 float gap = relCtx.GAP() != null
-                        ? Float.parseFloat(relCtx.NUMBER().getText())
+                        ? evalFloat(relCtx.expression())
                         : 0;
                 relPlacement = new CommandExecutor.RelativePlacement(dir, refName, gap);
             } else if (arg.paramValuePair() != null) {
                 var pvp = arg.paramValuePair();
-                rawParams.put(pvp.paramName().getText().toLowerCase(), pvp.NUMBER().getText());
+                rawParams.put(pvp.paramName().getText().toLowerCase(),
+                        evaluateExpression(pvp.expression()));
             }
         }
 
@@ -146,9 +147,9 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         if (partSizeCtx == null) {
             return "Missing 'size' for part '" + name + "'.";
         }
-        var nums = partSizeCtx.NUMBER();
-        float cutWidth = toMm(Float.parseFloat(nums.get(0).getText()));
-        float cutHeight = toMm(Float.parseFloat(nums.get(1).getText()));
+        var exprs = partSizeCtx.expression();
+        float cutWidth = toMm(evalFloat(exprs.get(0)));
+        float cutHeight = toMm(evalFloat(exprs.get(1)));
 
         Part part = Part.builder()
                 .name(name)
@@ -267,7 +268,7 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         String dir = directionText(relCtx.direction());
         float gapMm = 0;
         if (relCtx.GAP() != null) {
-            gapMm = toMm(Float.parseFloat(relCtx.NUMBER().getText()));
+            gapMm = toMm(evalFloat(relCtx.expression()));
         }
 
         Vector3f[] srcBBox = getBBox(name);
@@ -396,11 +397,11 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     @Override
     public String visitRotateCommand(CadetteCommandParser.RotateCommandContext ctx) {
         String name = extractName(ctx.objectName());
-        var nums = ctx.rotation().NUMBER();
+        var exprs = ctx.rotation().expression();
         Vector3f newDegrees = new Vector3f(
-                Float.parseFloat(nums.get(0).getText()),
-                Float.parseFloat(nums.get(1).getText()),
-                Float.parseFloat(nums.get(2).getText()));
+                evalFloat(exprs.get(0)),
+                evalFloat(exprs.get(1)),
+                evalFloat(exprs.get(2)));
 
         // Check assembly first
         Assembly assembly = scene.getAssembly(name);
@@ -532,7 +533,7 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         int screwCount = 0;
         float screwSpacingMm = 0;
         for (var arg : ctx.joinArg()) {
-            float num = Float.parseFloat(arg.NUMBER().getText());
+            float num = evalFloat(arg.expression());
             if (arg.DEPTH() != null) requestedDepthUnits = num;
             else if (arg.SCREWS() != null) screwCount = (int) num;
             else if (arg.SPACING() != null) screwSpacingMm = toMm(num);
@@ -745,7 +746,7 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             return "Default material set to " + mat.getDisplayName() + " (" + mat.getName() + ").";
         }
         if (ctx.KERF() != null) {
-            float value = toMm(Float.parseFloat(ctx.NUMBER().getText()));
+            float value = toMm(evalFloat(ctx.expression()));
             if (value < 0) {
                 return "Kerf must be non-negative.";
             }
@@ -949,22 +950,22 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     // -- Parsing helpers --
 
     private Vector3f parsePosition(CadetteCommandParser.PositionContext ctx) {
-        var nums = ctx.NUMBER();
+        var exprs = ctx.expression();
         return new Vector3f(
-                toMm(Float.parseFloat(nums.get(0).getText())),
-                toMm(Float.parseFloat(nums.get(1).getText())),
-                toMm(Float.parseFloat(nums.get(2).getText())));
+                toMm(evalFloat(exprs.get(0))),
+                toMm(evalFloat(exprs.get(1))),
+                toMm(evalFloat(exprs.get(2))));
     }
 
     private Vector3f parseSizeSpec(CadetteCommandParser.SizeSpecContext ctx) {
         if (ctx instanceof CadetteCommandParser.SizeByDimensionsContext dimCtx) {
-            var nums = dimCtx.dimensions().NUMBER();
-            float first = toMm(Float.parseFloat(nums.get(0).getText()));
-            if (nums.size() == 3) {
+            var exprs = dimCtx.dimensions().expression();
+            float first = toMm(evalFloat(exprs.get(0)));
+            if (exprs.size() == 3) {
                 return new Vector3f(
                         first,
-                        toMm(Float.parseFloat(nums.get(1).getText())),
-                        toMm(Float.parseFloat(nums.get(2).getText())));
+                        toMm(evalFloat(exprs.get(1))),
+                        toMm(evalFloat(exprs.get(2))));
             }
             return new Vector3f(first, first, first);
         }
@@ -973,13 +974,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             float h = toMm(1);
             float d = toMm(1);
             for (var ws : compCtx.widthSpec()) {
-                w = toMm(Float.parseFloat(ws.NUMBER().getText()));
+                w = toMm(evalFloat(ws.expression()));
             }
             for (var hs : compCtx.heightSpec()) {
-                h = toMm(Float.parseFloat(hs.NUMBER().getText()));
+                h = toMm(evalFloat(hs.expression()));
             }
             for (var ds : compCtx.depthSpec()) {
-                d = toMm(Float.parseFloat(ds.NUMBER().getText()));
+                d = toMm(evalFloat(ds.expression()));
             }
             return new Vector3f(w, h, d);
         }
@@ -1580,6 +1581,88 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         if (ctx.TOP() != null) return "top";
         if (ctx.BOTTOM() != null) return "bottom";
         return "";
+    }
+
+    // -- Expression evaluation --
+
+    /**
+     * Evaluate an expression parse tree to a double, using the executor's
+     * active variable scope for VAR_REF nodes. Comparison and logical ops
+     * return 1.0 / 0.0 under numeric truthiness. Throws a clear error on an
+     * unresolved VAR_REF or divide-by-zero.
+     */
+    double evaluateExpression(CadetteCommandParser.ExpressionContext ctx) {
+        return switch (ctx) {
+            case CadetteCommandParser.ParenExprContext c ->
+                    evaluateExpression(c.expression());
+            case CadetteCommandParser.FuncCallExprContext c -> {
+                var args = c.expression().stream()
+                        .mapToDouble(this::evaluateExpression)
+                        .toArray();
+                yield c.MIN() != null
+                        ? java.util.Arrays.stream(args).min().orElseThrow()
+                        : java.util.Arrays.stream(args).max().orElseThrow();
+            }
+            case CadetteCommandParser.NegExprContext c ->
+                    -evaluateExpression(c.expression());
+            case CadetteCommandParser.NotExprContext c ->
+                    evaluateExpression(c.expression()) == 0 ? 1.0 : 0.0;
+            case CadetteCommandParser.MulExprContext c -> {
+                double a = evaluateExpression(c.expression(0));
+                double b = evaluateExpression(c.expression(1));
+                yield c.op.getType() == CadetteCommandLexer.STAR ? a * b : a / b;
+            }
+            case CadetteCommandParser.AddExprContext c -> {
+                double a = evaluateExpression(c.expression(0));
+                double b = evaluateExpression(c.expression(1));
+                yield c.op.getType() == CadetteCommandLexer.PLUS ? a + b : a - b;
+            }
+            case CadetteCommandParser.RelExprContext c -> {
+                double a = evaluateExpression(c.expression(0));
+                double b = evaluateExpression(c.expression(1));
+                yield switch (c.op.getType()) {
+                    case CadetteCommandLexer.LT -> a < b ? 1.0 : 0.0;
+                    case CadetteCommandLexer.LTE -> a <= b ? 1.0 : 0.0;
+                    case CadetteCommandLexer.GT -> a > b ? 1.0 : 0.0;
+                    case CadetteCommandLexer.GTE -> a >= b ? 1.0 : 0.0;
+                    default -> throw new AssertionError("unreachable");
+                };
+            }
+            case CadetteCommandParser.EqExprContext c -> {
+                double a = evaluateExpression(c.expression(0));
+                double b = evaluateExpression(c.expression(1));
+                boolean eq = Math.abs(a - b) < 1e-9;
+                yield c.op.getType() == CadetteCommandLexer.EQ
+                        ? (eq ? 1.0 : 0.0)
+                        : (eq ? 0.0 : 1.0);
+            }
+            // Short-circuit: don't evaluate RHS if LHS determines the answer.
+            case CadetteCommandParser.AndExprContext c -> {
+                double a = evaluateExpression(c.expression(0));
+                yield a == 0 ? 0.0 : (evaluateExpression(c.expression(1)) == 0 ? 0.0 : 1.0);
+            }
+            case CadetteCommandParser.OrExprContext c -> {
+                double a = evaluateExpression(c.expression(0));
+                yield a != 0 ? 1.0 : (evaluateExpression(c.expression(1)) == 0 ? 0.0 : 1.0);
+            }
+            case CadetteCommandParser.NumberExprContext c ->
+                    Double.parseDouble(c.NUMBER().getText());
+            case CadetteCommandParser.VarRefExprContext c -> {
+                String name = c.VAR_REF().getText().substring(1);
+                Double v = executor.resolveVar(name);
+                if (v == null) {
+                    throw new RuntimeException("Undefined variable $" + name);
+                }
+                yield v;
+            }
+            default -> throw new AssertionError(
+                    "Unhandled expression node: " + ctx.getClass().getSimpleName());
+        };
+    }
+
+    /** Convenience: evaluate and cast to float (most command args are floats, not doubles). */
+    private float evalFloat(CadetteCommandParser.ExpressionContext ctx) {
+        return (float) evaluateExpression(ctx);
     }
 
     // -- Unit conversion shortcuts --
