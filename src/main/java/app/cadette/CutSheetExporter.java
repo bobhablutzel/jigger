@@ -39,6 +39,12 @@ import java.util.List;
  * Exports cut sheet layouts to PDF and image files.
  * Image export uses the shared {@link CutSheetRenderer} via BufferedImage.
  * PDF export uses PDFBox's native vector API for crisp output.
+ *
+ * <p>For-loops here are deliberately not rewritten as streams: every loop
+ * body calls PDFBox APIs that throw the checked {@link IOException}, and
+ * propagating checked exceptions out of a stream pipeline forces either
+ * sneaky-throw tricks or wrapping in a runtime exception — the classic
+ * "streams would require gymnastics" case. See feedback_prefer_streams.md.
  */
 public class CutSheetExporter {
 

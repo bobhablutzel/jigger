@@ -25,6 +25,10 @@ import lombok.RequiredArgsConstructor;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.stream.IntStream;
+import java.util.stream.Stream;
 
 /**
  * Guillotine bin packing for laying out parts on sheet goods.
@@ -77,10 +81,7 @@ public class GuillotinePacker {
         // Sort largest area first for better packing
         List<PackingPart> sorted = new ArrayList<>(parts);
         sorted.sort(Comparator.comparingDouble((PackingPart p) -> p.widthMm * p.heightMm).reversed());
-
-        for (PackingPart part : sorted) {
-            packer.placePart(part);
-        }
+        sorted.forEach(packer::placePart);
 
         return packer.sheets;
     }
@@ -89,48 +90,26 @@ public class GuillotinePacker {
         return pack(material, parts, DEFAULT_KERF_MM);
     }
 
+    /** One candidate placement across (sheet index, free-rect index, rotation). */
+    private record Candidate(int sheet, int rect, boolean rotated, float area) {}
+
     private void placePart(PackingPart part) {
         float pw = part.widthMm;
         float ph = part.heightMm;
         boolean canRot = canRotate(part, material);
 
-        // Try fitting in existing sheets (best-area-fit)
-        int bestSheet = -1;
-        int bestRect = -1;
-        float bestArea = Float.MAX_VALUE;
-        boolean bestRotated = false;
+        // Best-area-fit across all (sheet, free-rect, rotation) triples.
+        Optional<Candidate> best = IntStream.range(0, sheets.size()).boxed()
+                .flatMap(s -> {
+                    List<FreeRect> freeRects = sheetFreeRects.get(s);
+                    return IntStream.range(0, freeRects.size()).boxed()
+                            .flatMap(r -> candidatesFor(s, r, freeRects.get(r), pw, ph, canRot));
+                })
+                .min(Comparator.comparingDouble(Candidate::area));
 
-        for (int s = 0; s < sheets.size(); s++) {
-            List<FreeRect> freeRects = sheetFreeRects.get(s);
-            for (int r = 0; r < freeRects.size(); r++) {
-                FreeRect rect = freeRects.get(r);
-
-                // Try unrotated
-                if (fits(pw, ph, rect)) {
-                    float area = rect.w * rect.h;
-                    if (area < bestArea) {
-                        bestArea = area;
-                        bestSheet = s;
-                        bestRect = r;
-                        bestRotated = false;
-                    }
-                }
-
-                // Try rotated
-                if (canRot && fits(ph, pw, rect)) {
-                    float area = rect.w * rect.h;
-                    if (area < bestArea) {
-                        bestArea = area;
-                        bestSheet = s;
-                        bestRect = r;
-                        bestRotated = true;
-                    }
-                }
-            }
-        }
-
-        if (bestSheet >= 0) {
-            doPlace(bestSheet, bestRect, part, bestRotated);
+        if (best.isPresent()) {
+            Candidate c = best.get();
+            doPlace(c.sheet(), c.rect(), part, c.rotated());
         } else {
             // New sheet
             float sheetW = material.getSheetWidthMm();
@@ -153,6 +132,16 @@ public class GuillotinePacker {
 
     private boolean fits(float partW, float partH, FreeRect rect) {
         return partW <= rect.w + 0.01f && partH <= rect.h + 0.01f;
+    }
+
+    /** Zero-to-two candidates for placing a part in this free rect: unrotated, rotated, or both. */
+    private Stream<Candidate> candidatesFor(int s, int r, FreeRect rect,
+                                            float pw, float ph, boolean canRot) {
+        float area = rect.w * rect.h;
+        return Stream.of(
+                fits(pw, ph, rect) ? new Candidate(s, r, false, area) : null,
+                canRot && fits(ph, pw, rect) ? new Candidate(s, r, true, area) : null
+        ).filter(Objects::nonNull);
     }
 
     private void doPlace(int sheetIndex, int rectIndex, PackingPart part, boolean rotated) {
