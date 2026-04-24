@@ -8,7 +8,7 @@
 # Parts are created as flat rectangles in the X-Y plane and rotated into
 # position — sides stand up (rotate around Y), tops/bottoms/shelves lie
 # flat (rotate around X). Same convention as shelf_unit and base_cabinet.
-define standard/cabinets/fixed_shelf_unit params width, height, depth, shelf_count=3
+define standard/cabinets/fixed_shelf_unit params width(w), height(h), depth(d), shelf_count(s)=3
   create part "left-side" size $depth, $height at 0, 0, 0 grain vertical
   rotate "left-side" 0, 90, 0
   create part "right-side" size $depth, $height at $width - $thickness, 0, 0 grain vertical
