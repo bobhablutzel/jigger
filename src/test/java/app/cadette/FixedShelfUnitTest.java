@@ -24,11 +24,12 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * End-to-end test of the bundled `adjustable_shelf_unit` template —
- * exercises the new for-loop construct AND the default-param value
- * (shelf_count=3) through a real shipped template.
+ * End-to-end test of the bundled `fixed_shelf_unit` template. Shelves sit
+ * in dados, so they're permanently fixed once assembled — a true adjustable
+ * variant (shelf pins) comes later when we have part cutouts. Exercises
+ * for-loops and default-param values through a real shipped template.
  */
-class AdjustableShelfUnitTest extends HeadlessTestBase {
+class FixedShelfUnitTest extends HeadlessTestBase {
 
     @BeforeEach
     void clean() {
@@ -38,7 +39,7 @@ class AdjustableShelfUnitTest extends HeadlessTestBase {
     @Test
     void defaultShelfCountCreatesThreeShelves() {
         // Omit shelf_count; default=3 should kick in.
-        exec("create adjustable_shelf_unit SU w 800 h 1800 d 300");
+        exec("create fixed_shelf_unit SU w 800 h 1800 d 300");
 
         // The five structural parts are always present.
         assertNotNull(sceneManager.getPart("SU/left-side"));
@@ -57,7 +58,7 @@ class AdjustableShelfUnitTest extends HeadlessTestBase {
 
     @Test
     void explicitShelfCountOverridesDefault() {
-        exec("create adjustable_shelf_unit SU w 800 h 1800 d 300 shelf_count 5");
+        exec("create fixed_shelf_unit SU w 800 h 1800 d 300 shelf_count 5");
 
         assertNotNull(sceneManager.getPart("SU/shelf_1"));
         assertNotNull(sceneManager.getPart("SU/shelf_2"));
@@ -70,7 +71,7 @@ class AdjustableShelfUnitTest extends HeadlessTestBase {
     @Test
     void zeroShelfCountOmitsAllShelves() {
         // An empty bookcase — just the five-panel box.
-        exec("create adjustable_shelf_unit SU w 800 h 1800 d 300 shelf_count 0");
+        exec("create fixed_shelf_unit SU w 800 h 1800 d 300 shelf_count 0");
 
         assertNotNull(sceneManager.getPart("SU/left-side"));
         assertNotNull(sceneManager.getPart("SU/top"));
