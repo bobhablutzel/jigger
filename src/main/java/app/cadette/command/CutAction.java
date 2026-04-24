@@ -42,14 +42,14 @@ public class CutAction implements UndoableAction {
     public void undo() {
         Part part = scene.getPart(partName);
         if (part != null) part.removeCutout(cutout);
-        scene.markCutSheetDirty();
+        scene.rebuildPartMesh(partName);
     }
 
     @Override
     public void redo() {
         Part part = scene.getPart(partName);
         if (part != null) part.addCutout(cutout);
-        scene.markCutSheetDirty();
+        scene.rebuildPartMesh(partName);
     }
 
     @Override

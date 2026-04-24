@@ -43,6 +43,7 @@ import app.cadette.model.GuillotinePacker;
 import app.cadette.model.Joint;
 import app.cadette.model.JointRegistry;
 import app.cadette.model.Part;
+import app.cadette.model.PartMeshBuilder;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -645,10 +646,39 @@ public class SceneManager extends SimpleApplication {
      * (width, height, depth). jME3's Box takes half-extents, so we halve them.
      */
     private Geometry buildGeometry(String name, String shapeType, Vector3f size) {
+        // Parts get their mesh from PartMeshBuilder so through-cut cutouts
+        // actually remove geometry; everything else (3D primitives) uses
+        // the jME3 built-ins.
+        Part part = parts.get(name);
+        if (part != null) {
+            return new Geometry(name, PartMeshBuilder.build(part));
+        }
         return switch (shapeType.toLowerCase()) {
             case "sphere" -> new Geometry(name, new Sphere(32, 32, size.x));
             case "cylinder" -> new Geometry(name, new Cylinder(32, 32, size.x, size.y, true));
             default -> new Geometry(name, new Box(size.x / 2f, size.y / 2f, size.z / 2f));
         };
+    }
+
+    /**
+     * Regenerate the geometry for a part whose cutouts changed. Called by
+     * CutAction on add/remove/undo/redo. Swaps the mesh in place, keeping
+     * the material, parent wrapper, and local translation.
+     */
+    public void rebuildPartMesh(String name) {
+        Part part = parts.get(name);
+        if (part == null) return;
+        markCutSheetDirty();
+        enqueue(() -> {
+            Node wrapper = objectNodes.get(name);
+            Geometry old = geometries.get(name);
+            if (wrapper == null || old == null) return;
+            Geometry replacement = new Geometry(name, PartMeshBuilder.build(part));
+            replacement.setMaterial(old.getMaterial());
+            replacement.setLocalTranslation(old.getLocalTranslation());
+            wrapper.detachChild(old);
+            wrapper.attachChild(replacement);
+            geometries.put(name, replacement);
+        });
     }
 }

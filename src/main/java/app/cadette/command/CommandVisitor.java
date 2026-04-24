@@ -616,7 +616,8 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         Cutout cutout = buildCutout(ctx.cutShape());
         part.addCutout(cutout);
         executor.pushAction(new CutAction(scene, partName, cutout));
-        scene.markCutSheetDirty();
+        // rebuildPartMesh handles mesh regeneration + markCutSheetDirty.
+        scene.rebuildPartMesh(partName);
         String abbr = executor.getUnits().getAbbreviation();
         return "Added cutout to '" + partName + "': " + describeCutout(cutout, abbr);
     }
