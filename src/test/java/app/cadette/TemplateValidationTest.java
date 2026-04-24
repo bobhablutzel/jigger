@@ -202,6 +202,55 @@ class TemplateValidationTest extends HeadlessTestBase {
     }
 
     @Test
+    void unknownReferenceInsideIfBlockIsFlagged() throws IOException {
+        // Refs nested inside control-flow blocks must still be validated —
+        // ParseTreeWalker recurses into ifBlock's then/else bodies.
+        Path root = writeTree(
+                "acme/optional_widget.cds",
+                """
+                #! cadette
+                define acme/optional_widget params width, add_extra
+                  create part "side" size $width, 100 at 0, 0, 0
+                  if $add_extra then
+                    create acme/nonexistent_inside_if Sub w $width
+                  end if
+                end define
+                """);
+
+        executor.loadTemplatesFromDirectory(root);
+        executor.drainLoaderMessages();
+        executor.validateTemplateReferences();
+        List<String> warnings = executor.drainLoaderMessages();
+
+        assertTrue(warnings.stream().anyMatch(w ->
+                        w.contains("acme/nonexistent_inside_if")),
+                "validator must recurse into ifBlock bodies: " + warnings);
+    }
+
+    @Test
+    void unknownReferenceInsideForBlockIsFlagged() throws IOException {
+        Path root = writeTree(
+                "acme/replicator.cds",
+                """
+                #! cadette
+                define acme/replicator params count
+                  for $i = 1 to $count
+                    create acme/nonexistent_inside_for Sub
+                  end for
+                end define
+                """);
+
+        executor.loadTemplatesFromDirectory(root);
+        executor.drainLoaderMessages();
+        executor.validateTemplateReferences();
+        List<String> warnings = executor.drainLoaderMessages();
+
+        assertTrue(warnings.stream().anyMatch(w ->
+                        w.contains("acme/nonexistent_inside_for")),
+                "validator must recurse into forBlock bodies: " + warnings);
+    }
+
+    @Test
     void variableInTemplateRefPositionIsRejectedAtDefineTime() throws IOException {
         // templateRef accepts bare names, qualified names, or quoted strings —
         // not variable substitutions. Caught by the grammar at body parse time.

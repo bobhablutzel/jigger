@@ -27,6 +27,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import org.antlr.v4.runtime.*;
+import org.antlr.v4.runtime.tree.ParseTreeWalker;
 
 import java.io.IOException;
 import java.net.URI;
@@ -39,8 +40,6 @@ import java.util.*;
 import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -661,13 +660,16 @@ public class CommandExecutor {
     }
 
     /**
-     * After loading, walk every template body with the command grammar and
-     * surface two classes of problem:
-     *   1. Syntax errors in body lines.
-     *   2. References to templates that exist nowhere in the registry.
+     * After loading, walk every template's stored parse tree and flag
+     * {@code create <template>} references that resolve nowhere in the
+     * registry. Syntax errors are caught earlier, at {@code finishDefine}
+     * time — broken templates never register, so everything we see here is
+     * a well-formed parse tree.
      *
-     * {@code $var} references are now first-class grammar tokens (VAR_REF),
-     * so body lines parse as-stored — no placeholder substitution needed.
+     * ParseTreeWalker recurses into nested ifBlock / forBlock bodies for
+     * free, so refs inside control flow are validated alongside top-level
+     * ones. {@code create part "..."} parses as a different production
+     * (createPartCommand) and doesn't trigger this listener.
      *
      * Reference resolution checks the whole registry (no {@code using}
      * context); we only flag references that have zero possible matches —
@@ -676,55 +678,19 @@ public class CommandExecutor {
     public void validateTemplateReferences() {
         TemplateRegistry registry = TemplateRegistry.instance();
         for (Template t : registry.getAll()) {
-            List<String> body = t.getBodyLines();
-            for (int i = 0; i < body.size(); i++) {
-                validateBodyLine(t, i + 1, body.get(i), registry);
-            }
-        }
-    }
-
-    private void validateBodyLine(Template owner, int lineNum, String rawLine,
-                                  TemplateRegistry registry) {
-        String line = rawLine.trim();
-        if (line.isEmpty()) return;
-
-        StringBuilder syntaxErrors = new StringBuilder();
-        CadetteCommandLexer lexer = new CadetteCommandLexer(CharStreams.fromString(line));
-        lexer.removeErrorListeners();
-        CommonTokenStream tokens = new CommonTokenStream(lexer);
-        CadetteCommandParser parser = new CadetteCommandParser(tokens);
-        parser.removeErrorListeners();
-        parser.addErrorListener(new BaseErrorListener() {
-            @Override
-            public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol,
-                                    int ln, int charPos, String msg, RecognitionException e) {
-                if (!syntaxErrors.isEmpty()) syntaxErrors.append("; ");
-                syntaxErrors.append(msg);
-            }
-        });
-
-        CadetteCommandParser.InputContext inputCtx;
-        try {
-            inputCtx = parser.input();
-        } catch (Exception e) {
-            recordLoaderMessage(locate(owner, lineNum) + ": syntax error — " + e.getMessage());
-            return;
-        }
-
-        if (!syntaxErrors.isEmpty()) {
-            recordLoaderMessage(locate(owner, lineNum) + ": syntax error — " + syntaxErrors);
-            return;
-        }
-
-        if (inputCtx.command() == null) return;
-        CadetteCommandParser.CreateTemplateCommandContext createTpl =
-                inputCtx.command().createTemplateCommand();
-        if (createTpl == null) return;
-
-        String ref = CommandVisitor.templateRefText(createTpl.templateRef());
-        if (!referenceResolvesAnywhere(ref, registry)) {
-            recordLoaderMessage(locate(owner, lineNum)
-                    + ": references unknown template '" + ref + "'.");
+            if (t.getParsedBody() == null) continue;  // legacy test fixtures
+            ParseTreeWalker.DEFAULT.walk(new CadetteCommandParserBaseListener() {
+                @Override
+                public void enterCreateTemplateCommand(
+                        CadetteCommandParser.CreateTemplateCommandContext ctx) {
+                    String ref = CommandVisitor.templateRefText(ctx.templateRef());
+                    if (!referenceResolvesAnywhere(ref, registry)) {
+                        int line = ctx.getStart().getLine();
+                        recordLoaderMessage(locate(t, line)
+                                + ": references unknown template '" + ref + "'.");
+                    }
+                }
+            }, t.getParsedBody());
         }
     }
 
