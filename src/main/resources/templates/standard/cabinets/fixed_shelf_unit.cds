@@ -22,7 +22,7 @@ define standard/cabinets/fixed_shelf_unit params width(w), height(h), depth(d), 
   # bottom and top panels without touching either. 10mm back-offset keeps
   # them clear of the hardboard back.
   for $i = 1 to $shelf_count
-    create part "shelf_$i" size $width - 2 * $thickness, $depth - 10 * $mm at $thickness, $i * $height / ($shelf_count + 1), 0
+    create part "shelf_$i" size $width - 2 * $thickness, $depth - 10mm at $thickness, $i * $height / ($shelf_count + 1), 0
     rotate "shelf_$i" -90, 0, 0
   end for
   # Joinery — sides receive everything via dados; back sits in rabbets.

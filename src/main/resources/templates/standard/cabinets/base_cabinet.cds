@@ -17,7 +17,7 @@ define standard/cabinets/base_cabinet params width(w), height(h), depth(d)
   create part "bottom" size $width - 2 * $thickness, $depth at $thickness, 0, 0
   rotate "bottom" -90, 0, 0
   # Top stretcher (capped at 100mm depth)
-  create part "top-stretcher" size $width - 2 * $thickness, min($depth, 100 * $mm) at $thickness, $height - $thickness, 0
+  create part "top-stretcher" size $width - 2 * $thickness, min($depth, 100mm) at $thickness, $height - $thickness, 0
   rotate "top-stretcher" -90, 0, 0
   # Back panel
   create part "back" material "hardboard-5.5mm" size $width, $height at 0, 0, -$depth

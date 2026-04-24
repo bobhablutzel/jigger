@@ -125,6 +125,15 @@ NOT        : '!' ;
 ASSIGN     : '=' ;
 MIN        : 'min' ;
 MAX        : 'max' ;
+// Unit suffix keywords — e.g. `100mm`, `5cm`, `2.5in`. Match the abbreviations
+// in UnitSystem. `IN_FRONT` (direction) is longer than `IN` and wins on
+// longest-match when "in front" appears; bare "in" lexes as IN.
+MM         : 'mm' ;
+CM         : 'cm' ;
+M          : 'm' ;
+IN         : 'in' ;
+FT         : 'ft' ;
+YD         : 'yd' ;
 AT         : 'at' | '@' ;
 SIZE       : 'size' | 'sz' ;
 WIDTH      : 'width' | 'w' ;

@@ -1804,6 +1804,16 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 double a = evaluateExpression(c.expression(0));
                 yield a != 0 ? 1.0 : (evaluateExpression(c.expression(1)) == 0 ? 0.0 : 1.0);
             }
+            case CadetteCommandParser.UnitSuffixExprContext c -> {
+                // Literal with explicit unit, e.g. `100mm`, `5cm`, `2.5in`.
+                // Semantic: "N <unit>s expressed in the current display unit."
+                // Implementation: convert N via the literal's unit to mm,
+                // then back out to current units.
+                double raw = evaluateExpression(c.expression());
+                UnitSystem literalUnit = unitForSuffix(c.unitSuffix());
+                UnitSystem current = executor.getUnits();
+                yield current.fromMm(literalUnit.toMm((float) raw));
+            }
             case CadetteCommandParser.NumberExprContext c ->
                     Double.parseDouble(c.NUMBER().getText());
             case CadetteCommandParser.VarRefExprContext c -> {
@@ -1834,6 +1844,17 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     /** Convenience: evaluate and cast to float (most command args are floats, not doubles). */
     private float evalFloat(CadetteCommandParser.ExpressionContext ctx) {
         return (float) evaluateExpression(ctx);
+    }
+
+    /** Map a parsed unit-suffix token to its {@link UnitSystem} value. */
+    private static UnitSystem unitForSuffix(CadetteCommandParser.UnitSuffixContext ctx) {
+        if (ctx.MM() != null) return UnitSystem.MILLIMETERS;
+        if (ctx.CM() != null) return UnitSystem.CENTIMETERS;
+        if (ctx.M() != null) return UnitSystem.METERS;
+        if (ctx.IN() != null) return UnitSystem.INCHES;
+        if (ctx.FT() != null) return UnitSystem.FEET;
+        if (ctx.YD() != null) return UnitSystem.YARDS;
+        throw new AssertionError("Unhandled unit suffix: " + ctx.getText());
     }
 
     // -- Unit conversion shortcuts --

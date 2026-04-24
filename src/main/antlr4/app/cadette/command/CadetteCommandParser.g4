@@ -200,9 +200,14 @@ materialName
     | nameLike
     ;
 
+// Identifier-like contexts accept ID plus keyword tokens that users reasonably
+// want as names — dimension keywords (WIDTH/HEIGHT/…) so templates can take
+// params with those names, and unit-suffix keywords (MM/CM/…) so naming an
+// object `cm` or a part `M` still works despite the unit-literal grammar.
 nameLike
     : ID
     | WIDTH | HEIGHT | DEPTH | SIZE | COLOR | MATERIAL | GRAIN | PART | KERF
+    | MM | CM | M | IN | FT | YD
     ;
 
 partSize
@@ -364,9 +369,13 @@ paramDecl
 
 // Parameter names may shadow keyword tokens like 'width' — accept common
 // keyword tokens here so they can be used as identifiers in template params.
+// Unit-suffix keywords included for the same reason as in nameLike: naming
+// a param `mm` or `cm` shouldn't suddenly be illegal just because the
+// grammar gained unit literals.
 paramName
     : ID
     | WIDTH | HEIGHT | DEPTH | SIZE | COLOR | MATERIAL | GRAIN | PART | KERF
+    | MM | CM | M | IN | FT | YD
     ;
 
 shape
@@ -382,6 +391,11 @@ shape
 expression
     : LPAREN expression RPAREN                                              # parenExpr
     | (MIN | MAX) LPAREN expression (COMMA expression)+ RPAREN              # funcCallExpr
+    // Dimensional literal with explicit unit — `100mm`, `5cm`, `2.5in`.
+    // Evaluates to "this many <unit>s expressed in the current units," so
+    // it's self-describing and portable across `set units` calls. Binds
+    // tighter than any binary op so `100mm + 5cm` parses as (100mm)+(5cm).
+    | expression unitSuffix                                                 # unitSuffixExpr
     | MINUS expression                                                      # negExpr
     | NOT expression                                                        # notExpr
     | expression op=(STAR | SLASH) expression                               # mulExpr
@@ -398,6 +412,8 @@ expression
     // a second `$` inside the interpolation braces.
     | ID                                                                    # idRefExpr
     ;
+
+unitSuffix : MM | CM | M | IN | FT | YD ;
 
 position
     : expression COMMA expression COMMA expression
@@ -432,6 +448,11 @@ color
     : RED | GREEN | BLUE | YELLOW | WHITE | HEX_COLOR
     ;
 
+// `set units <name>` accepts either the full enum name (e.g. 'millimeters',
+// 'inches') — which lex as ID — or one of the unit-suffix abbreviations
+// that are also keyword tokens (MM/CM/M/IN/FT/YD) after the unit-suffix
+// grammar landed.
 unitName
     : ID
+    | MM | CM | M | IN | FT | YD
     ;

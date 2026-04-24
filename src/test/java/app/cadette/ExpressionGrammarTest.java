@@ -154,4 +154,84 @@ class ExpressionGrammarTest extends HeadlessTestBase {
         // 0 || 1 && 0  == 0 || (1 && 0) == 0 || 0 == 0
         assertEquals(0.0f, kerfAfter("0 || 1 && 0"), 0.001f);
     }
+
+    // ---- Unit-suffix literals ----
+
+    @Test
+    void unitSuffixMmInMmMode() {
+        // `100mm` in mm mode is simply 100 in current units.
+        assertEquals(100f, kerfAfter("100mm"), 0.001f);
+    }
+
+    @Test
+    void unitSuffixMmInCmMode() {
+        // `100mm` always means 100 millimeters, regardless of current units.
+        // Kerf is stored as mm internally, so the result should be 100mm either way.
+        exec("set units cm");
+        exec("set kerf 100mm");
+        assertEquals(100f, sceneManager.getKerfMm(), 0.001f);
+    }
+
+    @Test
+    void unitSuffixCm() {
+        exec("set units mm");
+        exec("set kerf 2cm");
+        assertEquals(20f, sceneManager.getKerfMm(), 0.001f);
+    }
+
+    @Test
+    void unitSuffixInches() {
+        exec("set units mm");
+        exec("set kerf 1in");
+        assertEquals(25.4f, sceneManager.getKerfMm(), 0.001f);
+    }
+
+    @Test
+    void unitSuffixFeet() {
+        exec("set units mm");
+        exec("set kerf 1ft");
+        assertEquals(304.8f, sceneManager.getKerfMm(), 0.01f);
+    }
+
+    @Test
+    void unitSuffixInExpression() {
+        // `100mm + 5cm` = 100 mm + 50 mm = 150 mm total.
+        exec("set units mm");
+        exec("set kerf 100mm + 5cm");
+        assertEquals(150f, sceneManager.getKerfMm(), 0.001f);
+    }
+
+    @Test
+    void unitSuffixInsideMinFunction() {
+        // `min(100mm, 50mm)` = 50mm.
+        exec("set units mm");
+        exec("set kerf min(100mm, 50mm)");
+        assertEquals(50f, sceneManager.getKerfMm(), 0.001f);
+    }
+
+    @Test
+    void unitSuffixBindsTighterThanMultiplication() {
+        // `2 * 50mm` should be 2 * (50mm) = 100mm, not (2 * 50)mm which
+        // happens to be the same value but a different parse tree.
+        exec("set units mm");
+        exec("set kerf 2 * 50mm");
+        assertEquals(100f, sceneManager.getKerfMm(), 0.001f);
+    }
+
+    @Test
+    void unitSuffixChainAddition() {
+        // Sum of different-unit literals.
+        exec("set units mm");
+        exec("set kerf 1in + 25mm");  // 25.4 + 25 = 50.4 mm
+        assertEquals(50.4f, sceneManager.getKerfMm(), 0.01f);
+    }
+
+    @Test
+    void unitSuffixWorksInCurrentNonMmUnits() {
+        // In cm mode, `set kerf 2.5` means 2.5 cm = 25mm. With `mm` suffix,
+        // 100mm should stay 100mm regardless of current units.
+        exec("set units cm");
+        exec("set kerf 100mm");
+        assertEquals(100f, sceneManager.getKerfMm(), 0.001f);
+    }
 }

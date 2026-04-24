@@ -461,9 +461,11 @@ public class CommandExecutor {
                         .map(p -> p + " <value>").toList());
         }
 
-        // Implicit variables (all in current display units)
-        // $mm = 1 millimeter in current units (e.g., 0.1 if units are cm, 1.0 if mm)
-        vars.put("mm", (double) units.fromMm(1f));
+        // Implicit variables (all in current display units).
+        // Note: $mm was retired when unit-suffix literals (100mm / 5cm / …)
+        // landed — they replace the old `$mm * N` idiom with a cleaner
+        // portable literal. $thickness / $back_thickness still make sense
+        // as domain-aware magic values rather than conversion factors.
 
         // $thickness = default material thickness
         float thicknessMm = defaultMaterial.getThicknessMm();
