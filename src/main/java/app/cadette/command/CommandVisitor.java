@@ -1085,10 +1085,11 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 SceneManager.ObjectRecord rec = recs.get(p.getName());
                 if (rec != null) {
                     Vector3f pos = rec.position();
-                    sb.append(String.format("    %-20s [%s] %.2f x %.2f %s  at (%.2f, %.2f, %.2f)%n",
+                    sb.append(String.format("    %-20s [%s] %.2f x %.2f %s  at (%.2f, %.2f, %.2f)%s%n",
                             p.getName(), p.getMaterial().getName(),
                             fromMm(p.getCutWidthMm()), fromMm(p.getCutHeightMm()), abbr,
-                            fromMm(pos.x), fromMm(pos.y), fromMm(pos.z)));
+                            fromMm(pos.x), fromMm(pos.y), fromMm(pos.z),
+                            cutoutSummary(p)));
                 }
             });
         });
@@ -1102,6 +1103,12 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             standalone.forEach(rec -> sb.append(standaloneLine(rec, abbr)).append("\n"));
         }
         return sb.toString().stripTrailing();
+    }
+
+    /** Compact " [N cutouts]" suffix for list output; empty string if none. */
+    private static String cutoutSummary(Part part) {
+        int n = part.getCutouts().size();
+        return n == 0 ? "" : "  [" + n + " cutout" + (n == 1 ? "" : "s") + "]";
     }
 
     private static String assemblyTemplateLabel(Assembly assembly) {
@@ -1118,12 +1125,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         Vector3f pos = rec.position();
         Part part = scene.getPart(rec.name());
         if (part != null) {
-            return String.format("  %-20s [%s] %.2f x %.2f %s (%.2f thick)  at (%.2f, %.2f, %.2f)  grain: %s",
+            return String.format("  %-20s [%s] %.2f x %.2f %s (%.2f thick)  at (%.2f, %.2f, %.2f)  grain: %s%s",
                     part.getName(), part.getMaterial().getName(),
                     fromMm(part.getCutWidthMm()), fromMm(part.getCutHeightMm()), abbr,
                     fromMm(part.getThicknessMm()),
                     fromMm(pos.x), fromMm(pos.y), fromMm(pos.z),
-                    part.getGrainRequirement().name().toLowerCase());
+                    part.getGrainRequirement().name().toLowerCase(),
+                    cutoutSummary(part));
         }
         Vector3f size = rec.size();
         return String.format("  %-20s %-10s at (%.2f, %.2f, %.2f)  size (%.2f, %.2f, %.2f) %s",
@@ -1225,7 +1233,29 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             sb.append(lines).append("\n");
         }
 
+        // Cutouts (toe-kick notches, shelf-pin holes, sink cutouts, etc.)
+        if (part != null && !part.getCutouts().isEmpty()) {
+            sb.append("  Cutouts:\n");
+            String lines = part.getCutouts().stream()
+                    .map(c -> cutoutInfoLine(c, abbr))
+                    .collect(Collectors.joining("\n"));
+            sb.append(lines).append("\n");
+        }
+
         return sb.toString().stripTrailing();
+    }
+
+    /** Info-panel formatting for a single cutout. */
+    private String cutoutInfoLine(app.cadette.model.Cutout c, String abbr) {
+        if (c instanceof app.cadette.model.Cutout.Rect r) {
+            String depth = r.depthMm() != null
+                    ? String.format(" %.1f %s deep", fromMm(r.depthMm()), abbr)
+                    : " through";
+            return String.format("    rect at (%.1f, %.1f) %s size %.1f × %.1f %s%s",
+                    fromMm(r.xMm()), fromMm(r.yMm()), abbr,
+                    fromMm(r.widthMm()), fromMm(r.heightMm()), abbr, depth);
+        }
+        return "    " + c.getClass().getSimpleName().toLowerCase();
     }
 
     /** Info-panel formatting: names the role (receives/inserted into) from the part's POV. */

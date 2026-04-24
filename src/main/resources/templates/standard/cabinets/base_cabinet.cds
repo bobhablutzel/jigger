@@ -36,9 +36,12 @@ define standard/cabinets/base_cabinet params width(w), height(h), depth(d), toe_
   join "left-side" to "back" with rabbet
   join "right-side" to "back" with rabbet
   # Toe-kick geometry — notches + recessed kick plate.
+  # Kick-plate Z: parts extend +Z from their origin corner, so to place the
+  # plate's *front face* flush with the back of the recess (Z = -toe_kick_depth),
+  # the origin corner goes one thickness further back.
   if $toe_kick then
     cut "left-side" rect at 0, 0 size $toe_kick_depth, $toe_kick_height
     cut "right-side" rect at 0, 0 size $toe_kick_depth, $toe_kick_height
-    create part "toe-kick-front" size $width, $toe_kick_height at 0, 0, -$toe_kick_depth
+    create part "toe-kick-front" size $width, $toe_kick_height at 0, 0, -$toe_kick_depth - $thickness
   end if
 end define
