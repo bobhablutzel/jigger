@@ -22,6 +22,10 @@ import com.jme3.math.Vector3f;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * A single cut piece of material.
  *
@@ -30,6 +34,12 @@ import lombok.Data;
  * think: "cut me a piece of 3/4 ply, 23" wide by 34" tall."
  *
  * The 3D representation maps to: X = cutWidth, Y = cutHeight, Z = thickness.
+ *
+ * Parts carry a list of {@link Cutout}s — regions subtracted from the cut
+ * face (toe-kick notches, sink holes, shelf-pin holes). The list reference
+ * is final but its contents are mutated via {@link #addCutout} /
+ * {@link #removeCutout}, matching how {@code position} is mutable-in-place
+ * elsewhere in the model.
  */
 @Data
 @Builder(toBuilder = true)
@@ -40,6 +50,9 @@ public class Part {
     private final float cutHeightMm;
     private final Vector3f position;    // offset from origin (or assembly origin)
     private final GrainRequirement grainRequirement;
+
+    @Builder.Default
+    private final List<Cutout> cutouts = new ArrayList<>();
 
     /** Material thickness in mm. */
     public float getThicknessMm() {
@@ -52,5 +65,20 @@ public class Part {
      */
     public Vector3f toSizeVector() {
         return new Vector3f(cutWidthMm, cutHeightMm, getThicknessMm());
+    }
+
+    /** Add a cutout. No coordinate validation — callers are trusted to stay in-bounds. */
+    public void addCutout(Cutout cutout) {
+        cutouts.add(cutout);
+    }
+
+    /** Remove a specific cutout instance; no-op if not present. */
+    public boolean removeCutout(Cutout cutout) {
+        return cutouts.remove(cutout);
+    }
+
+    /** Read-only view of the cutouts — prevents external callers from mutating the backing list. */
+    public List<Cutout> getCutouts() {
+        return Collections.unmodifiableList(cutouts);
     }
 }
