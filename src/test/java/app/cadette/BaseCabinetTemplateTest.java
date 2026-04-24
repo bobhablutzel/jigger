@@ -94,4 +94,81 @@ class BaseCabinetTemplateTest extends HeadlessTestBase {
         assertTrue(bottom[1].x <= right[1].x + 1f,
                 "Bottom max X should be <= right side max X");
     }
+
+    // ---- Optional toe-kick ----
+
+    @Test
+    void defaultBaseCabinetHasNoToeKick() {
+        // toe_kick defaults to 0 — no notch, no kick plate, bottom at Y=0.
+        exec("create base_cabinet BCT width 500 height 600 depth 400");
+        assertNull(sceneManager.getPart("BCT/toe-kick-front"),
+                "default instantiation should not create a toe-kick-front panel");
+        assertEquals(0, sceneManager.getPart("BCT/left-side").getCutouts().size(),
+                "default instantiation should leave the side panels uncut");
+        var bottom = bounds("BCT/bottom");
+        assertEquals(0f, bottom[0].y, 1f,
+                "without toe-kick, the bottom panel sits at Y=0");
+    }
+
+    @Test
+    void toeKickAddsNotchesAndFrontPanelAndRaisesBottom() {
+        exec("create base_cabinet BCT width 500 height 600 depth 400 toe_kick 1");
+
+        // Side panels should each have one rect cutout at the front-bottom
+        // corner of their local cut-face space (0, 0) sized 75mm × 100mm —
+        // the default toe-kick depth/height.
+        var leftCutouts = sceneManager.getPart("BCT/left-side").getCutouts();
+        assertEquals(1, leftCutouts.size(), "left side should be notched once");
+        assertInstanceOf(app.cadette.model.Cutout.Rect.class, leftCutouts.get(0));
+        app.cadette.model.Cutout.Rect leftNotch =
+                (app.cadette.model.Cutout.Rect) leftCutouts.get(0);
+        assertEquals(0, leftNotch.xMm(), 0.01);
+        assertEquals(0, leftNotch.yMm(), 0.01);
+        assertEquals(75, leftNotch.widthMm(), 0.01);
+        assertEquals(100, leftNotch.heightMm(), 0.01);
+        assertNull(leftNotch.depthMm(), "toe-kick notch is a through-cut");
+
+        assertEquals(1, sceneManager.getPart("BCT/right-side").getCutouts().size(),
+                "right side should be notched identically");
+
+        // Kick plate exists and sits recessed.
+        assertNotNull(sceneManager.getPart("BCT/toe-kick-front"),
+                "toe_kick=1 should create the toe-kick-front panel");
+
+        // Bottom panel rises to clear the toe-kick space.
+        var bottom = bounds("BCT/bottom");
+        assertEquals(100f, bottom[0].y, 1f,
+                "with toe-kick, bottom panel floats up by toe_kick_height (100mm)");
+    }
+
+    @Test
+    void toeKickDimensionsCanBeOverridden() {
+        // Non-default dimensions — 125mm tall × 85mm deep (a taller-than-
+        // standard kick often seen in custom shop work).
+        exec("create base_cabinet BCT width 500 height 600 depth 400 "
+                + "toe_kick 1 toe_kick_height 125 toe_kick_depth 85");
+
+        app.cadette.model.Cutout.Rect notch =
+                (app.cadette.model.Cutout.Rect)
+                        sceneManager.getPart("BCT/left-side").getCutouts().get(0);
+        assertEquals(85, notch.widthMm(), 0.01);
+        assertEquals(125, notch.heightMm(), 0.01);
+    }
+
+    @Test
+    void toeKickDefaultsArePortableAcrossUnits() {
+        // Defaults are declared as 100mm / 75mm literals — they should come
+        // out as the same mm values even when the caller is in inches mode.
+        exec("set units inches");
+        exec("create base_cabinet BCT width 20 height 24 depth 16 toe_kick 1");
+
+        app.cadette.model.Cutout.Rect notch =
+                (app.cadette.model.Cutout.Rect)
+                        sceneManager.getPart("BCT/left-side").getCutouts().get(0);
+        // Still 100mm × 75mm because the template defaults used unit literals.
+        assertEquals(75, notch.widthMm(), 0.01,
+                "default toe_kick_depth (75mm) should be unit-independent");
+        assertEquals(100, notch.heightMm(), 0.01,
+                "default toe_kick_height (100mm) should be unit-independent");
+    }
 }
