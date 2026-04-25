@@ -46,11 +46,24 @@ import java.util.List;
 public sealed interface Cutout
         permits Cutout.Rect, Cutout.Circle, Cutout.Polygon, Cutout.Spline {
 
+    /**
+     * Which face of the part the cutout opens on. The cut-face local
+     * (xMm, yMm) origin is the same corner regardless of face; only the
+     * Z direction changes — FRONT pockets recess from the +Z mesh face,
+     * BACK pockets recess from the -Z mesh face. Through-cuts (depth=null)
+     * remove material from both faces and the field is irrelevant; we still
+     * carry it so the record is uniform.
+     */
+    enum Face { FRONT, BACK }
+
     /** Axis-aligned 2D extent of this cutout in the part's local cut-face space. */
     BoundingBox bounds();
 
     /** Null = through-cut (full thickness). Positive = partial-depth pocket. */
     Float depthMm();
+
+    /** Which face the partial-depth pocket opens on; ignored for through cuts. */
+    Face face();
 
     // ----- Rect — the v1 variant, fully wired through grammar + rendering -----
 
@@ -58,8 +71,8 @@ public sealed interface Cutout
      * Axis-aligned rectangular cutout. {@code xMm} / {@code yMm} locate the
      * origin corner; {@code widthMm} / {@code heightMm} are positive extents.
      */
-    record Rect(float xMm, float yMm, float widthMm, float heightMm, Float depthMm)
-            implements Cutout {
+    record Rect(float xMm, float yMm, float widthMm, float heightMm,
+                Float depthMm, Face face) implements Cutout {
         @Override
         public BoundingBox bounds() {
             return new BoundingBox(xMm, yMm, widthMm, heightMm);
@@ -74,8 +87,8 @@ public sealed interface Cutout
      * {@code cut "…" circle at …} grammar alternative and a circular-arc
      * mesh contribution in the renderer.
      */
-    record Circle(float cxMm, float cyMm, float radiusMm, Float depthMm)
-            implements Cutout {
+    record Circle(float cxMm, float cyMm, float radiusMm,
+                  Float depthMm, Face face) implements Cutout {
         @Override
         public BoundingBox bounds() {
             float d = radiusMm * 2f;
@@ -90,7 +103,7 @@ public sealed interface Cutout
      * first. Needs a grammar alternative and earcut-style triangulation
      * for the mesh contribution.
      */
-    record Polygon(List<Point2D> vertices, Float depthMm) implements Cutout {
+    record Polygon(List<Point2D> vertices, Float depthMm, Face face) implements Cutout {
         @Override
         public BoundingBox bounds() {
             if (vertices.isEmpty()) return new BoundingBox(0, 0, 0, 0);
@@ -114,7 +127,7 @@ public sealed interface Cutout
      * bound for most common spline types — real tight bounds need per-type
      * extent math, which is a renderer concern.
      */
-    record Spline(List<Point2D> controlPoints, Float depthMm) implements Cutout {
+    record Spline(List<Point2D> controlPoints, Float depthMm, Face face) implements Cutout {
         @Override
         public BoundingBox bounds() {
             if (controlPoints.isEmpty()) return new BoundingBox(0, 0, 0, 0);

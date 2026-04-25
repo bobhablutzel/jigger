@@ -632,7 +632,9 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             float w = toMm(evalFloat(exprs.get(2)));
             float h = toMm(evalFloat(exprs.get(3)));
             Float depth = r.DEPTH() != null ? toMm(evalFloat(exprs.get(4))) : null;
-            return new Cutout.Rect(x, y, w, h, depth);
+            // Hand-typed `cut` commands always cut from the part's front face;
+            // joint inference picks the face dynamically and constructs Rect directly.
+            return new Cutout.Rect(x, y, w, h, depth, Cutout.Face.FRONT);
         }
         throw new IllegalStateException("Unhandled cutShape alternative: "
                 + ctx.getClass().getSimpleName());

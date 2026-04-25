@@ -43,7 +43,7 @@ class CutoutModelTest {
 
     @Test
     void rectBoundsMatchRectCoords() {
-        var cut = new Cutout.Rect(10, 20, 75, 100, null);
+        var cut = new Cutout.Rect(10, 20, 75, 100, null, Cutout.Face.FRONT);
         BoundingBox b = cut.bounds();
         assertEquals(10, b.xMm(), 0.001);
         assertEquals(20, b.yMm(), 0.001);
@@ -55,8 +55,8 @@ class CutoutModelTest {
 
     @Test
     void rectThroughVsPartialDepth() {
-        var through = new Cutout.Rect(0, 0, 10, 10, null);
-        var pocket = new Cutout.Rect(0, 0, 10, 10, 5f);
+        var through = new Cutout.Rect(0, 0, 10, 10, null, Cutout.Face.FRONT);
+        var pocket = new Cutout.Rect(0, 0, 10, 10, 5f, Cutout.Face.FRONT);
         assertNull(through.depthMm(), "null depthMm signals a through-cut");
         assertEquals(5f, pocket.depthMm());
     }
@@ -65,7 +65,7 @@ class CutoutModelTest {
 
     @Test
     void circleBoundsInscribedSquare() {
-        var cut = new Cutout.Circle(50, 50, 10, 7f);  // shelf-pin-ish
+        var cut = new Cutout.Circle(50, 50, 10, 7f, Cutout.Face.FRONT);  // shelf-pin-ish
         BoundingBox b = cut.bounds();
         assertEquals(40, b.xMm(), 0.001);
         assertEquals(40, b.yMm(), 0.001);
@@ -82,7 +82,7 @@ class CutoutModelTest {
                 new Point2D(25, 10),
                 new Point2D(20, 30),
                 new Point2D(3, 12)
-        ), null);
+        ), null, Cutout.Face.FRONT);
         BoundingBox b = cut.bounds();
         assertEquals(3, b.xMm(), 0.001);
         assertEquals(5, b.yMm(), 0.001);
@@ -94,7 +94,7 @@ class CutoutModelTest {
     void polygonWithNoVerticesDegradesGracefully() {
         // Empty vertex list is nonsense in practice but shouldn't throw —
         // model-layer code should be defensively tolerant.
-        var cut = new Cutout.Polygon(List.of(), null);
+        var cut = new Cutout.Polygon(List.of(), null, Cutout.Face.FRONT);
         BoundingBox b = cut.bounds();
         assertEquals(0, b.widthMm(), 0.001);
         assertEquals(0, b.heightMm(), 0.001);
@@ -109,7 +109,7 @@ class CutoutModelTest {
                 new Point2D(50, -10),
                 new Point2D(80, 30),
                 new Point2D(100, 0)
-        ), null);
+        ), null, Cutout.Face.FRONT);
         BoundingBox b = cut.bounds();
         assertEquals(0, b.xMm(), 0.001);
         assertEquals(-10, b.yMm(), 0.001);
@@ -128,7 +128,7 @@ class CutoutModelTest {
     @Test
     void addCutoutAppendsToList() {
         Part p = testPart("pL");
-        Cutout c = new Cutout.Rect(0, 0, 75, 75, null);
+        Cutout c = new Cutout.Rect(0, 0, 75, 75, null, Cutout.Face.FRONT);
         p.addCutout(c);
         assertEquals(1, p.getCutouts().size());
         assertSame(c, p.getCutouts().get(0));
@@ -137,9 +137,9 @@ class CutoutModelTest {
     @Test
     void addMultipleCutoutsPreservesOrderAndIndependence() {
         Part p = testPart("pL");
-        var a = new Cutout.Rect(0, 0, 10, 10, null);
-        var b = new Cutout.Rect(50, 50, 20, 20, 5f);
-        var c = new Cutout.Circle(100, 100, 3, 10f);
+        var a = new Cutout.Rect(0, 0, 10, 10, null, Cutout.Face.FRONT);
+        var b = new Cutout.Rect(50, 50, 20, 20, 5f, Cutout.Face.FRONT);
+        var c = new Cutout.Circle(100, 100, 3, 10f, Cutout.Face.FRONT);
         p.addCutout(a);
         p.addCutout(b);
         p.addCutout(c);
@@ -149,8 +149,8 @@ class CutoutModelTest {
     @Test
     void removeCutoutDropsThatInstanceOnly() {
         Part p = testPart("pL");
-        var a = new Cutout.Rect(0, 0, 10, 10, null);
-        var b = new Cutout.Rect(50, 50, 20, 20, null);
+        var a = new Cutout.Rect(0, 0, 10, 10, null, Cutout.Face.FRONT);
+        var b = new Cutout.Rect(50, 50, 20, 20, null, Cutout.Face.FRONT);
         p.addCutout(a);
         p.addCutout(b);
         assertTrue(p.removeCutout(a));
@@ -160,16 +160,16 @@ class CutoutModelTest {
     @Test
     void removeCutoutReturnsFalseWhenAbsent() {
         Part p = testPart("pL");
-        var c = new Cutout.Rect(0, 0, 10, 10, null);
+        var c = new Cutout.Rect(0, 0, 10, 10, null, Cutout.Face.FRONT);
         assertFalse(p.removeCutout(c), "remove on an absent cutout is a no-op");
     }
 
     @Test
     void getCutoutsReturnsUnmodifiableView() {
         Part p = testPart("pL");
-        p.addCutout(new Cutout.Rect(0, 0, 10, 10, null));
+        p.addCutout(new Cutout.Rect(0, 0, 10, 10, null, Cutout.Face.FRONT));
         assertThrows(UnsupportedOperationException.class,
-                () -> p.getCutouts().add(new Cutout.Rect(5, 5, 3, 3, null)),
+                () -> p.getCutouts().add(new Cutout.Rect(5, 5, 3, 3, null, Cutout.Face.FRONT)),
                 "external callers must go through addCutout / removeCutout");
     }
 
@@ -180,7 +180,7 @@ class CutoutModelTest {
         // single default List across all built instances.
         Part a = testPart("a");
         Part b = testPart("b");
-        a.addCutout(new Cutout.Rect(0, 0, 10, 10, null));
+        a.addCutout(new Cutout.Rect(0, 0, 10, 10, null, Cutout.Face.FRONT));
         assertEquals(1, a.getCutouts().size());
         assertEquals(0, b.getCutouts().size(),
                 "a second Part must not share a's cutouts list");

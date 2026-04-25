@@ -119,7 +119,7 @@ class PartMeshBuilderTest {
         //   cutout walls: 4 × 2 tris = 8
         //   total = 64
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(250, 400, 100, 100, null)));
+                new Cutout.Rect(250, 400, 100, 100, null, Cutout.Face.FRONT)));
         assertEquals(64, triangleCount(m),
                 "3x3 grid minus middle cell produces the expected triangle count");
     }
@@ -129,7 +129,7 @@ class PartMeshBuilderTest {
         // The cutout removes interior material but the outer extent is
         // still W × H × T — sheet-layout and collision logic rely on this.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(250, 400, 100, 100, null)));
+                new Cutout.Rect(250, 400, 100, 100, null, Cutout.Face.FRONT)));
         Vector3f size = bboxSize(m);
         assertEquals(600, size.x, 0.01f);
         assertEquals(900, size.y, 0.01f);
@@ -153,7 +153,7 @@ class PartMeshBuilderTest {
         // Faces: 3 kept cells × 2 (top + bottom) × 2 tris = 12.
         // Total: 28.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(0, 0, 75, 75, null)));
+                new Cutout.Rect(0, 0, 75, 75, null, Cutout.Face.FRONT)));
         assertEquals(28, triangleCount(m),
                 "corner cutout produces an L-shape with 8 grid-edge wall segments");
     }
@@ -165,7 +165,7 @@ class PartMeshBuilderTest {
         // cells. Same geometry as the corner-cutout case: one cell cut out
         // of a 2×2 grid, three kept, L-shape with 8 wall segments = 28 tris.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(550, 850, 200, 200, null)));
+                new Cutout.Rect(550, 850, 200, 200, null, Cutout.Face.FRONT)));
         assertEquals(28, triangleCount(m));
     }
 
@@ -174,7 +174,7 @@ class PartMeshBuilderTest {
         // Cutout entirely outside the part — clipping drops it, mesh is
         // identical to the no-cutout case.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(1000, 1000, 50, 50, null)));
+                new Cutout.Rect(1000, 1000, 50, 50, null, Cutout.Face.FRONT)));
         assertEquals(12, triangleCount(m));
     }
 
@@ -193,7 +193,7 @@ class PartMeshBuilderTest {
         //          full-thickness solid neighbour) × 2 tris = 8
         //   total: 36 + 24 + 8 = 68
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(100, 100, 50, 50, 5f)));
+                new Cutout.Rect(100, 100, 50, 50, 5f, Cutout.Face.FRONT)));
         assertEquals(68, triangleCount(m),
                 "pocket adds a floor face and 4 pocket-wall segments");
     }
@@ -204,7 +204,7 @@ class PartMeshBuilderTest {
         // at halfT − depth = 4. The panel's top face (elsewhere) is at +9,
         // bottom at −9. We should see Z = +4 appear as a distinct plane.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(100, 100, 50, 50, 5f)));
+                new Cutout.Rect(100, 100, 50, 50, 5f, Cutout.Face.FRONT)));
         VertexBuffer posBuf = m.getBuffer(VertexBuffer.Type.Position);
         FloatBuffer fb = (FloatBuffer) posBuf.getData();
         fb.rewind();
@@ -223,7 +223,7 @@ class PartMeshBuilderTest {
         // eats into the +Z side). Count Z = −9 vertices and make sure the
         // bottom face rectangle still extends corner-to-corner.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(100, 100, 50, 50, 5f)));
+                new Cutout.Rect(100, 100, 50, 50, 5f, Cutout.Face.FRONT)));
         VertexBuffer posBuf = m.getBuffer(VertexBuffer.Type.Position);
         FloatBuffer fb = (FloatBuffer) posBuf.getData();
         fb.rewind();
@@ -256,8 +256,8 @@ class PartMeshBuilderTest {
         // Panel 600×900, through (200, 200)→(300, 300), pocket (250, 250)→(350, 350).
         // Only the non-overlapping parts of the pocket contribute floors.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(200, 200, 100, 100, null),
-                new Cutout.Rect(250, 250, 100, 100, 5f)
+                new Cutout.Rect(200, 200, 100, 100, null, Cutout.Face.FRONT),
+                new Cutout.Rect(250, 250, 100, 100, 5f, Cutout.Face.FRONT)
         ));
         assertTrue(triangleCount(m) > 28,
                 "mixed through+pocket produces more geometry than a plain through cut");
@@ -273,8 +273,8 @@ class PartMeshBuilderTest {
         // Two pockets, one deeper than the other, with different depths in
         // the overlap region. The deeper pocket's floor wins in the overlap.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(100, 100, 100, 100, 3f),
-                new Cutout.Rect(150, 150, 100, 100, 8f)
+                new Cutout.Rect(100, 100, 100, 100, 3f, Cutout.Face.FRONT),
+                new Cutout.Rect(150, 150, 100, 100, 8f, Cutout.Face.FRONT)
         ));
         VertexBuffer posBuf = m.getBuffer(VertexBuffer.Type.Position);
         FloatBuffer fb = (FloatBuffer) posBuf.getData();
@@ -291,6 +291,73 @@ class PartMeshBuilderTest {
         assertTrue(sawDeepFloor, "deep pocket floor (Z=1) must exist (wins in overlap)");
     }
 
+    // ---- Back-face pockets (B.5) ----
+
+    @Test
+    void backFacePocketRecessesOnNegativeZSide() {
+        // 18mm panel, back-face pocket of depth 5. Front face stays at +9
+        // everywhere; back face drops to -halfT + depth = -4 inside the
+        // pocket and stays at -9 outside.
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Rect(100, 100, 50, 50, 5f, Cutout.Face.BACK)));
+        VertexBuffer posBuf = m.getBuffer(VertexBuffer.Type.Position);
+        FloatBuffer fb = (FloatBuffer) posBuf.getData();
+        fb.rewind();
+        boolean sawBackPocketFloor = false;  // -halfT + depth = -9 + 5 = -4
+        boolean sawFrontFaceIntact = false;  // halfT = 9 — should still be visible
+        while (fb.hasRemaining()) {
+            fb.get(); fb.get();
+            float z = fb.get();
+            if (Math.abs(z - (-4f)) < 1e-4f) sawBackPocketFloor = true;
+            if (Math.abs(z - 9f) < 1e-4f) sawFrontFaceIntact = true;
+        }
+        assertTrue(sawBackPocketFloor,
+                "back pocket floor should appear at Z = -halfT + depth = -4");
+        assertTrue(sawFrontFaceIntact,
+                "front face should still extend across the panel at Z = +9");
+    }
+
+    @Test
+    void backFacePocketLeavesFrontFaceContinuous() {
+        // The +Z face should reach the panel's full corners — back-face
+        // pockets only eat into the -Z side.
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Rect(100, 100, 50, 50, 5f, Cutout.Face.BACK)));
+        VertexBuffer posBuf = m.getBuffer(VertexBuffer.Type.Position);
+        FloatBuffer fb = (FloatBuffer) posBuf.getData();
+        fb.rewind();
+        float minXatTop = Float.POSITIVE_INFINITY, maxXatTop = Float.NEGATIVE_INFINITY;
+        float minYatTop = Float.POSITIVE_INFINITY, maxYatTop = Float.NEGATIVE_INFINITY;
+        while (fb.hasRemaining()) {
+            float x = fb.get(), y = fb.get(), z = fb.get();
+            if (Math.abs(z - 9f) < 1e-4f) {
+                if (x < minXatTop) minXatTop = x;
+                if (x > maxXatTop) maxXatTop = x;
+                if (y < minYatTop) minYatTop = y;
+                if (y > maxYatTop) maxYatTop = y;
+            }
+        }
+        assertEquals(-300f, minXatTop, 0.01f, "front face must reach -X edge");
+        assertEquals( 300f, maxXatTop, 0.01f, "front face must reach +X edge");
+        assertEquals(-450f, minYatTop, 0.01f, "front face must reach -Y edge");
+        assertEquals( 450f, maxYatTop, 0.01f, "front face must reach +Y edge");
+    }
+
+    @Test
+    void coincidentFrontAndBackPocketsThatMeetActAsThrough() {
+        // Front pocket depth 10 + back pocket depth 10 on an 18mm panel:
+        // pockets overlap in the middle of the thickness, so the cell has
+        // no material left — should be equivalent to a through cut.
+        Mesh meeting = buildRaw(600, 900, 18, List.of(
+                new Cutout.Rect(100, 100, 50, 50, 10f, Cutout.Face.FRONT),
+                new Cutout.Rect(100, 100, 50, 50, 10f, Cutout.Face.BACK)));
+        Mesh through = buildRaw(600, 900, 18, List.of(
+                new Cutout.Rect(100, 100, 50, 50, null, Cutout.Face.FRONT)));
+        assertEquals(triangleCount(through), triangleCount(meeting),
+                "front+back pockets meeting in the middle should produce the same "
+                + "mesh as a single through cut at that location");
+    }
+
     // ---- Multiple cutouts ----
 
     @Test
@@ -304,8 +371,8 @@ class PartMeshBuilderTest {
         // Exact wall count is tedious; we just assert it's larger than the
         // single-cutout case (64) and consistent with expectation.
         Mesh m = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(100, 100, 100, 100, null),
-                new Cutout.Rect(400, 700, 100, 100, null)));
+                new Cutout.Rect(100, 100, 100, 100, null, Cutout.Face.FRONT),
+                new Cutout.Rect(400, 700, 100, 100, null, Cutout.Face.FRONT)));
         int tris = triangleCount(m);
         assertTrue(tris > 64, "two cutouts should yield more triangles than one: " + tris);
     }
@@ -316,8 +383,8 @@ class PartMeshBuilderTest {
         // rectangle minus their union, so the mesh triangle count should
         // match a SINGLE cutout covering exactly their union rectangle.
         Mesh overlap = buildRaw(600, 900, 18, List.of(
-                new Cutout.Rect(100, 100, 100, 100, null),
-                new Cutout.Rect(150, 150, 100, 100, null)));
+                new Cutout.Rect(100, 100, 100, 100, null, Cutout.Face.FRONT),
+                new Cutout.Rect(150, 150, 100, 100, null, Cutout.Face.FRONT)));
         // The union region is non-rectangular, so we don't compare with a
         // single-cutout equivalent. We just sanity-check the triangle count
         // is positive and the bounding box is unchanged.

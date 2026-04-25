@@ -81,24 +81,31 @@ public final class PartMeshBuilder {
                 part.getThicknessMm(), part.getCutouts());
     }
 
-    /** Overload used by tests — no Part required, just raw dimensions + cutouts. */
-    static Mesh build(float widthMm, float heightMm, float thicknessMm,
-                      List<Cutout> cutouts) {
+    /**
+     * Build directly from raw dimensions + a cutout list — used by tests, and
+     * by SceneManager when merging joint-inferred cutouts with the part's
+     * explicit ones before mesh construction.
+     */
+    public static Mesh build(float widthMm, float heightMm, float thicknessMm,
+                             List<Cutout> cutouts) {
         // Split and clip cutouts. Anything outside the part or zero-area
-        // after clipping is dropped silently.
+        // after clipping is dropped silently. Pockets are split by face so
+        // the cell-classification step can apply each independently.
         List<Cutout.Rect> throughRects = new ArrayList<>();
-        List<Cutout.Rect> pocketRects = new ArrayList<>();
+        List<Cutout.Rect> frontPockets = new ArrayList<>();
+        List<Cutout.Rect> backPockets = new ArrayList<>();
         for (Cutout c : cutouts) {
             if (!(c instanceof Cutout.Rect r)) continue;  // circle/polygon/spline: future
             Cutout.Rect clipped = clip(r, widthMm, heightMm);
             if (clipped == null) continue;
             if (clipped.depthMm() == null) throughRects.add(clipped);
-            else pocketRects.add(clipped);
+            else if (clipped.face() == Cutout.Face.BACK) backPockets.add(clipped);
+            else frontPockets.add(clipped);
         }
 
-        // Grid edges: every cutout edge counts, no matter through or partial.
         List<Cutout.Rect> allRects = new ArrayList<>(throughRects);
-        allRects.addAll(pocketRects);
+        allRects.addAll(frontPockets);
+        allRects.addAll(backPockets);
         float[] xs = distinctEdges(widthMm, allRects, true);
         float[] ys = distinctEdges(heightMm, allRects, false);
         int nx = xs.length - 1;
@@ -108,70 +115,83 @@ public final class PartMeshBuilder {
         float halfH = heightMm * 0.5f;
         float halfT = thicknessMm * 0.5f;
 
-        // Per-cell top-solid Z. null = through (no material). halfT = solid.
-        // halfT - depth = pocket with that depth.
-        Float[][] topSolidZ = new Float[nx][ny];
+        // Per-cell solid material band [bottom, top] in mesh Z (centered at 0).
+        // null entry = no material (through cut, or front+back pockets meeting).
+        // Solid cell:           [-halfT, +halfT].
+        // Front pocket depth d: [-halfT, halfT - d].
+        // Back pocket depth d:  [-halfT + d, halfT].
+        // Both:                 [-halfT + d_back, halfT - d_front]; null if it collapses.
+        Band[][] bands = new Band[nx][ny];
         for (int i = 0; i < nx; i++) {
             for (int j = 0; j < ny; j++) {
                 float cx = (xs[i] + xs[i + 1]) * 0.5f;
                 float cy = (ys[j] + ys[j + 1]) * 0.5f;
                 if (pointInside(cx, cy, throughRects)) {
-                    topSolidZ[i][j] = null;  // through — no material
+                    bands[i][j] = null;
                     continue;
                 }
-                // If multiple overlapping pockets, deepest wins (smallest topSolidZ).
-                Float best = halfT;
-                for (Cutout.Rect r : pocketRects) {
-                    if (cx >= r.xMm() && cx <= r.xMm() + r.widthMm()
-                            && cy >= r.yMm() && cy <= r.yMm() + r.heightMm()) {
+                // Deepest pocket on each face wins.
+                float top = halfT;
+                for (Cutout.Rect r : frontPockets) {
+                    if (rectContains(r, cx, cy)) {
                         float z = halfT - r.depthMm();
-                        if (z < best) best = z;
+                        if (z < top) top = z;
                     }
                 }
-                topSolidZ[i][j] = best;
+                float bottom = -halfT;
+                for (Cutout.Rect r : backPockets) {
+                    if (rectContains(r, cx, cy)) {
+                        float z = -halfT + r.depthMm();
+                        if (z > bottom) bottom = z;
+                    }
+                }
+                // Pockets meeting in the middle = no material left.
+                bands[i][j] = (bottom < top) ? new Band(bottom, top) : null;
             }
         }
 
         MeshBuf buf = new MeshBuf();
 
-        // Pass 1: faces. Top face at topSolidZ (for cells with any material),
-        // bottom face at −halfT (same). Skip through cells entirely.
+        // Pass 1: faces. Each surviving cell emits a top face at band.top
+        // (normal +Z) and a bottom face at band.bottom (normal -Z).
         for (int i = 0; i < nx; i++) {
             for (int j = 0; j < ny; j++) {
-                Float top = topSolidZ[i][j];
-                if (top == null) continue;
+                Band band = bands[i][j];
+                if (band == null) continue;
                 float x0 = xs[i] - halfW, x1 = xs[i + 1] - halfW;
                 float y0 = ys[j] - halfH, y1 = ys[j + 1] - halfH;
-                // Top (or pocket floor) — normal always +Z.
                 buf.addQuad(
-                        x0, y0, top,  x1, y0, top,  x1, y1, top,  x0, y1, top,
+                        x0, y0, band.top, x1, y0, band.top,
+                        x1, y1, band.top, x0, y1, band.top,
                         0, 0, 1);
-                // Bottom — normal −Z.
                 buf.addQuad(
-                        x0, y1, -halfT, x1, y1, -halfT, x1, y0, -halfT, x0, y0, -halfT,
+                        x0, y1, band.bottom, x1, y1, band.bottom,
+                        x1, y0, band.bottom, x0, y0, band.bottom,
                         0, 0, -1);
             }
         }
 
-        // Pass 2: walls. Iterate every unique edge once.
-        // Vertical edges at xs[i], between cells (i-1, j) and (i, j).
+        // Pass 2: walls. Each cell boundary may need up to two wall segments
+        // — one at the top discrepancy, one at the bottom discrepancy —
+        // since the two cells can differ in either or both extents.
         for (int i = 0; i <= nx; i++) {
             for (int j = 0; j < ny; j++) {
-                Float a = topSolidZAt(topSolidZ, i - 1, j, nx, ny);
-                Float b = topSolidZAt(topSolidZ, i, j, nx, ny);
-                emitVerticalEdgeWall(buf, xs[i] - halfW,
-                        ys[j] - halfH, ys[j + 1] - halfH,
-                        a, b, halfT);
+                Band a = bandAt(bands, i - 1, j, nx, ny);
+                Band b = bandAt(bands, i, j, nx, ny);
+                for (WallRange w : wallRanges(a, b)) {
+                    emitVerticalEdgeWall(buf, xs[i] - halfW,
+                            ys[j] - halfH, ys[j + 1] - halfH, w);
+                }
             }
         }
-        // Horizontal edges at ys[j], between cells (i, j-1) and (i, j).
         for (int j = 0; j <= ny; j++) {
             for (int i = 0; i < nx; i++) {
-                Float a = topSolidZAt(topSolidZ, i, j - 1, nx, ny);
-                Float b = topSolidZAt(topSolidZ, i, j, nx, ny);
-                emitHorizontalEdgeWall(buf, ys[j] - halfH,
-                        xs[i] - halfW, xs[i + 1] - halfW,
-                        a, b, halfT);
+                Band a = bandAt(bands, i, j - 1, nx, ny);
+                Band b = bandAt(bands, i, j, nx, ny);
+                for (WallRange w : wallRanges(a, b)) {
+                    emitHorizontalEdgeWall(buf, ys[j] - halfH,
+                            xs[i] - halfW, xs[i + 1] - halfW, w);
+                }
             }
         }
 
@@ -181,48 +201,30 @@ public final class PartMeshBuilder {
     // ---- Edge-wall emission ----
 
     /**
-     * Wall at a vertical edge (fixed X, varying Y, full Z range as determined
-     * by the cell types). {@code a} is the top-solid-Z of the cell to the −X
-     * side, {@code b} of the +X side. Either may be {@code null} (through or
-     * off-grid). Emits a wall over the Z range where exactly one side has
-     * material that the other lacks; normal points toward the emptier side.
+     * Wall at a vertical edge (fixed X). The Y range covers the full cell
+     * boundary; Z range and normal direction come from {@link WallRange}.
      */
     private static void emitVerticalEdgeWall(MeshBuf buf, float x,
-                                             float y0, float y1,
-                                             Float a, Float b, float halfT) {
-        WallRange w = wallRange(a, b, halfT);
-        if (w == null) return;
-        // Vertical edge wall — rectangle in Y-Z plane at fixed X.
-        // Winding chosen so the emitted normal matches w.normalSign along X.
+                                             float y0, float y1, WallRange w) {
         if (w.normalSign > 0) {
-            // Normal +X: face points toward +X side (emptier = right).
             buf.addQuad(
                     x, y0, w.zLow,  x, y1, w.zLow,  x, y1, w.zHigh,  x, y0, w.zHigh,
                     1, 0, 0);
         } else {
-            // Normal −X: face points toward −X side (emptier = left).
             buf.addQuad(
                     x, y0, w.zHigh, x, y1, w.zHigh, x, y1, w.zLow,  x, y0, w.zLow,
                     -1, 0, 0);
         }
     }
 
-    /**
-     * Wall at a horizontal edge (fixed Y, varying X). {@code a} is the
-     * top-solid-Z of the cell to the −Y side, {@code b} of the +Y side.
-     */
+    /** Wall at a horizontal edge (fixed Y), spanning X range x0..x1. */
     private static void emitHorizontalEdgeWall(MeshBuf buf, float y,
-                                               float x0, float x1,
-                                               Float a, Float b, float halfT) {
-        WallRange w = wallRange(a, b, halfT);
-        if (w == null) return;
+                                               float x0, float x1, WallRange w) {
         if (w.normalSign > 0) {
-            // Normal +Y: toward the +Y side (emptier).
             buf.addQuad(
                     x0, y, w.zHigh, x1, y, w.zHigh, x1, y, w.zLow,  x0, y, w.zLow,
                     0, 1, 0);
         } else {
-            // Normal −Y.
             buf.addQuad(
                     x0, y, w.zLow,  x1, y, w.zLow,  x1, y, w.zHigh, x0, y, w.zHigh,
                     0, -1, 0);
@@ -230,37 +232,53 @@ public final class PartMeshBuilder {
     }
 
     /**
-     * Compute the Z range of a wall between two cells, plus which side the
-     * normal points toward. Returns {@code null} if no wall is needed (both
-     * solid to the same height, or neither solid).
+     * Compute the wall segments between two adjacent cells, given each cell's
+     * solid material band. With pockets coming from either face, two cells
+     * may differ at the TOP of their bands (one front-pocketed, one not), at
+     * the BOTTOM (one back-pocketed, one not), or both — so up to two
+     * disjoint wall segments per cell boundary.
      *
-     * <p>{@code normalSign} is {@code +1} if the wall's normal points toward
-     * cell {@code b} (the +axis side), {@code -1} if toward cell {@code a}.
+     * <p>{@code normalSign} on each {@code WallRange} is {@code +1} if the
+     * wall's normal points toward cell {@code b} (the +axis-side cell),
+     * {@code -1} if toward {@code a}.
      */
-    private static WallRange wallRange(Float a, Float b, float halfT) {
-        if (a == null && b == null) return null;
+    private static List<WallRange> wallRanges(Band a, Band b) {
+        if (a == null && b == null) return List.of();
         if (a == null) {
-            // b has material up to b; expose from the bottom to b's top.
-            return new WallRange(-halfT, b, -1);  // normal toward a (emptier)
+            return List.of(new WallRange(b.bottom, b.top, -1));  // normal → a
         }
         if (b == null) {
-            return new WallRange(-halfT, a, +1);  // normal toward b (emptier)
+            return List.of(new WallRange(a.bottom, a.top, +1));  // normal → b
         }
-        if (a.equals(b)) return null;
-        if (a < b) {
-            // b has more material above a. Wall in the range [a, b], normal → a.
-            return new WallRange(a, b, -1);
+        List<WallRange> out = new ArrayList<>(2);
+        // Top discrepancy: whichever cell has solid above the other.
+        if (a.top != b.top) {
+            if (a.top > b.top) out.add(new WallRange(b.top, a.top, +1));  // normal → b (emptier above)
+            else out.add(new WallRange(a.top, b.top, -1));                 // normal → a
         }
-        return new WallRange(b, a, +1);
+        // Bottom discrepancy: whichever has solid below the other.
+        if (a.bottom != b.bottom) {
+            if (a.bottom < b.bottom) out.add(new WallRange(a.bottom, b.bottom, +1));  // normal → b
+            else out.add(new WallRange(b.bottom, a.bottom, -1));
+        }
+        return out;
     }
 
     private record WallRange(float zLow, float zHigh, int normalSign) {}
 
+    /** Per-cell solid material band in mesh Z. {@code null} = no material. */
+    private record Band(float bottom, float top) {}
+
     // ---- Grid + classification helpers ----
 
-    private static Float topSolidZAt(Float[][] topSolidZ, int i, int j, int nx, int ny) {
-        if (i < 0 || j < 0 || i >= nx || j >= ny) return null;  // off-grid = no material
-        return topSolidZ[i][j];
+    private static Band bandAt(Band[][] bands, int i, int j, int nx, int ny) {
+        if (i < 0 || j < 0 || i >= nx || j >= ny) return null;
+        return bands[i][j];
+    }
+
+    private static boolean rectContains(Cutout.Rect r, float x, float y) {
+        return x >= r.xMm() && x <= r.xMm() + r.widthMm()
+                && y >= r.yMm() && y <= r.yMm() + r.heightMm();
     }
 
     private static boolean pointInside(float x, float y, List<Cutout.Rect> rects) {
@@ -280,7 +298,7 @@ public final class PartMeshBuilder {
         float x1 = Math.min(widthMm, r.xMm() + r.widthMm());
         float y1 = Math.min(heightMm, r.yMm() + r.heightMm());
         if (x1 <= x0 || y1 <= y0) return null;
-        return new Cutout.Rect(x0, y0, x1 - x0, y1 - y0, r.depthMm());
+        return new Cutout.Rect(x0, y0, x1 - x0, y1 - y0, r.depthMm(), r.face());
     }
 
     /** Sorted unique x- (or y-) coordinates from part edges and cutout edges. */

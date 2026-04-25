@@ -51,12 +51,12 @@ public sealed interface Joint
      * Implicit cutout this joint contributes to the receiving part's mesh.
      * Empty for joints with no machined geometry (butt, pocket screw).
      *
-     * <p>Position and cross-section are derived from the parts' positions and
-     * orientations, which is why the parts are passed in rather than stored
-     * on the joint itself. Implementations stay {@code Optional.empty()} until
-     * Pass B of the joint/cutout unification work fills in the math.
+     * <p>Position and cross-section are derived from the parts' world-frame
+     * geometry — passed in via {@link JointGeometryContext} — rather than
+     * stored on the joint, so the cutout follows the parts when they move.
      */
-    default Optional<Cutout> inferReceivingCutout(Part receiving, Part inserted) {
+    default Optional<Cutout> inferReceivingCutout(Part receiving, Part inserted,
+                                                  JointGeometryContext ctx) {
         return Optional.empty();
     }
 
@@ -69,9 +69,12 @@ public sealed interface Joint
         @Override public JointType type() { return JointType.DADO; }
 
         @Override
-        public Optional<Cutout> inferReceivingCutout(Part receiving, Part inserted) {
-            // TODO Pass B: derive groove rect from receiving/inserted geometry.
-            return Optional.empty();
+        public Optional<Cutout> inferReceivingCutout(Part receiving, Part inserted,
+                                                    JointGeometryContext ctx) {
+            JointCutoutInferrer.Footprint fp =
+                    JointCutoutInferrer.projectInsertedFootprint(receiving, inserted, ctx);
+            return Optional.of(new Cutout.Rect(fp.xMm(), fp.yMm(), fp.widthMm(), fp.heightMm(),
+                    depthMm, fp.face()));
         }
     }
 
@@ -80,9 +83,15 @@ public sealed interface Joint
         @Override public JointType type() { return JointType.RABBET; }
 
         @Override
-        public Optional<Cutout> inferReceivingCutout(Part receiving, Part inserted) {
-            // TODO Pass B: derive edge-rebate rect from receiving/inserted geometry.
-            return Optional.empty();
+        public Optional<Cutout> inferReceivingCutout(Part receiving, Part inserted,
+                                                    JointGeometryContext ctx) {
+            // Same projection as Dado — "edge rebate" vs. "mid-face groove" is a
+            // semantic distinction, not a geometric one. The cutout lands at
+            // the edge naturally when the inserted is at the receiving's edge.
+            JointCutoutInferrer.Footprint fp =
+                    JointCutoutInferrer.projectInsertedFootprint(receiving, inserted, ctx);
+            return Optional.of(new Cutout.Rect(fp.xMm(), fp.yMm(), fp.widthMm(), fp.heightMm(),
+                    depthMm, fp.face()));
         }
     }
 

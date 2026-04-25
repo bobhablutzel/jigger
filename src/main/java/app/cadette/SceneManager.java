@@ -39,8 +39,11 @@ import com.jme3.scene.shape.Cylinder;
 import com.jme3.scene.shape.Sphere;
 
 import app.cadette.model.Assembly;
+import app.cadette.model.Cutout;
 import app.cadette.model.GuillotinePacker;
 import app.cadette.model.Joint;
+import app.cadette.model.JointCutoutInferrer;
+import app.cadette.model.JointGeometryContext;
 import app.cadette.model.JointRegistry;
 import app.cadette.model.Part;
 import app.cadette.model.PartMeshBuilder;
@@ -59,7 +62,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * The box extends in the positive x/y/z direction from that corner.
  * For spheres and cylinders, position is the center.
  */
-public class SceneManager extends SimpleApplication {
+public class SceneManager extends SimpleApplication implements JointGeometryContext {
 
     private final Node objectsNode = new Node("objects");
     private final Map<String, Node> objectNodes = new ConcurrentHashMap<>();  // wrapper nodes at corner position
@@ -651,13 +654,47 @@ public class SceneManager extends SimpleApplication {
         // the jME3 built-ins.
         Part part = parts.get(name);
         if (part != null) {
-            return new Geometry(name, PartMeshBuilder.build(part));
+            return new Geometry(name, buildPartMesh(part));
         }
         return switch (shapeType.toLowerCase()) {
             case "sphere" -> new Geometry(name, new Sphere(32, 32, size.x));
             case "cylinder" -> new Geometry(name, new Cylinder(32, 32, size.x, size.y, true));
             default -> new Geometry(name, new Box(size.x / 2f, size.y / 2f, size.z / 2f));
         };
+    }
+
+    /**
+     * Merge a part's explicit cutouts with the implicit ones inferred from
+     * joints where this part is the receiving side, then build the mesh.
+     * The inferred set follows the parts when they move because it's
+     * recomputed every time the mesh is rebuilt.
+     */
+    private com.jme3.scene.Mesh buildPartMesh(Part part) {
+        List<Cutout> inferred = JointCutoutInferrer.inferFor(part, jointRegistry, parts, this);
+        if (inferred.isEmpty()) {
+            return PartMeshBuilder.build(part);
+        }
+        List<Cutout> all = new ArrayList<>(part.getCutouts());
+        all.addAll(inferred);
+        return PartMeshBuilder.build(part.getCutWidthMm(), part.getCutHeightMm(),
+                part.getThicknessMm(), all);
+    }
+
+    // ---- JointGeometryContext ----
+
+    @Override
+    public Vector3f cornerPosition(String partName) {
+        ObjectRecord rec = records.get(partName);
+        return rec != null ? rec.position() : Vector3f.ZERO;
+    }
+
+    @Override
+    public Quaternion rotation(String partName) {
+        Vector3f deg = rotations.getOrDefault(partName, Vector3f.ZERO);
+        return new Quaternion().fromAngles(
+                deg.x * FastMath.DEG_TO_RAD,
+                deg.y * FastMath.DEG_TO_RAD,
+                deg.z * FastMath.DEG_TO_RAD);
     }
 
     /**
@@ -673,7 +710,7 @@ public class SceneManager extends SimpleApplication {
             Node wrapper = objectNodes.get(name);
             Geometry old = geometries.get(name);
             if (wrapper == null || old == null) return;
-            Geometry replacement = new Geometry(name, PartMeshBuilder.build(part));
+            Geometry replacement = new Geometry(name, buildPartMesh(part));
             replacement.setMaterial(old.getMaterial());
             replacement.setLocalTranslation(old.getLocalTranslation());
             wrapper.detachChild(old);

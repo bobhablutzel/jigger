@@ -20,14 +20,17 @@ define standard/cabinets/base_cabinet params width(w), height(h), depth(d), toe_
   rotate "left-side" 0, 90, 0
   create part "right-side" size $depth, $height at $width - $thickness, 0, 0 grain vertical
   rotate "right-side" 0, 90, 0
-  # Bottom — riseds by toe_kick_height when toe_kick is enabled (otherwise 0).
-  create part "bottom" size $width - 2 * $thickness, $depth at $thickness, $toe_kick * $toe_kick_height, 0
+  # Bottom extends $thickness/2 (= default dado depth) into each side's dado,
+  # so the bottom's edges seat in the grooves rather than butting against
+  # the inside faces. Floats up by toe_kick_height when toe_kick is enabled.
+  create part "bottom" size $width - $thickness, $depth at $thickness / 2, $toe_kick * $toe_kick_height, 0
   rotate "bottom" -90, 0, 0
-  # Top stretcher (capped at 100mm depth)
+  # Top stretcher butts against the side faces — pocket-screw, no dado, so it
+  # sits at the cabinet's interior width like a butt-jointed part.
   create part "top-stretcher" size $width - 2 * $thickness, min($depth, 100mm) at $thickness, $height - $thickness, 0
   rotate "top-stretcher" -90, 0, 0
-  # Back panel
-  create part "back" material "hardboard-5.5mm" size $width, $height at 0, 0, -$depth
+  # Back extends $thickness/2 into each side's rabbet — same logic as the bottom.
+  create part "back" material "hardboard-5.5mm" size $width - $thickness, $height at $thickness / 2, 0, -$depth
   # Joinery
   join "left-side" to "bottom" with dado
   join "right-side" to "bottom" with dado
