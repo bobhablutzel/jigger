@@ -30,7 +30,7 @@ public class JoinAction implements UndoableAction {
 
     @Override
     public void undo() {
-        scene.getJointRegistry().removeJoint(joint.getId());
+        scene.getJointRegistry().removeJoint(joint.id());
         scene.markCutSheetDirty();
     }
 
@@ -42,7 +42,7 @@ public class JoinAction implements UndoableAction {
 
     @Override
     public String description() {
-        return "join \"" + joint.getReceivingPartName() + "\" to \""
-                + joint.getInsertedPartName() + "\" with " + joint.getType().getDisplayName();
+        return "join \"" + joint.receivingPartName() + "\" to \""
+                + joint.insertedPartName() + "\" with " + joint.type().getDisplayName();
     }
 }

@@ -47,16 +47,17 @@ class JoineryTest extends HeadlessTestBase {
         assertFalse(joints.isEmpty(), "Should have joints for left-side");
 
         Joint dado = joints.get(0);
-        assertEquals(JointType.DADO, dado.getType());
-        assertEquals(9f, dado.getDepthMm(), 0.1f);
-        assertEquals("K/left-side", dado.getReceivingPartName());
-        assertEquals("K/bottom", dado.getInsertedPartName());
+        assertEquals(JointType.DADO, dado.type());
+        assertInstanceOf(Joint.Dado.class, dado);
+        assertEquals(9f, ((Joint.Dado) dado).depthMm(), 0.1f);
+        assertEquals("K/left-side", dado.receivingPartName());
+        assertEquals("K/bottom", dado.insertedPartName());
     }
 
     @Test
     void testPocketScrewJoint() {
         exec("create base_cabinet K w 500 h 600 d 400");
-        String result = exec("join \"K/left-side\" to \"K/top-stretcher\" with pocket screws 3 spacing 150");
+        String result = exec("join \"K/left-side\" to \"K/top-stretcher\" with pocket_screw screws 3 spacing 150");
         System.out.println(result);
 
         assertTrue(result.contains("Pocket screw"), "Should report pocket screw");
@@ -65,9 +66,11 @@ class JoineryTest extends HeadlessTestBase {
         assertFalse(joints.isEmpty());
 
         Joint ps = joints.get(0);
-        assertEquals(JointType.POCKET_SCREW, ps.getType());
-        assertEquals(3, ps.getScrewCount());
-        assertEquals(150f, ps.getScrewSpacingMm(), 0.1f);
+        assertEquals(JointType.POCKET_SCREW, ps.type());
+        assertInstanceOf(Joint.PocketScrew.class, ps);
+        Joint.PocketScrew screw = (Joint.PocketScrew) ps;
+        assertEquals(3, screw.screwCount());
+        assertEquals(150f, screw.screwSpacingMm(), 0.1f);
     }
 
     @Test
@@ -83,7 +86,7 @@ class JoineryTest extends HeadlessTestBase {
         exec("create base_cabinet K w 500 h 600 d 400");
         exec("join \"K/left-side\" to \"K/bottom\" with dado depth 9");
         exec("join \"K/right-side\" to \"K/bottom\" with dado depth 9");
-        exec("join \"K/left-side\" to \"K/top-stretcher\" with pocket screws 2");
+        exec("join \"K/left-side\" to \"K/top-stretcher\" with pocket_screw screws 2");
 
         String result = exec("show joints");
         System.out.println(result);
@@ -132,9 +135,9 @@ class JoineryTest extends HeadlessTestBase {
         System.out.println(result);
 
         var joints = sceneManager.getJointRegistry().getJointsForPart("K/left-side");
-        Joint dado = joints.get(0);
+        Joint.Dado dado = (Joint.Dado) joints.get(0);
         // Default plywood is 18mm, half = 9mm
-        assertEquals(9f, dado.getDepthMm(), 0.1f, "Default dado depth should be half material thickness");
+        assertEquals(9f, dado.depthMm(), 0.1f, "Default dado depth should be half material thickness");
     }
 
     @Test
@@ -147,8 +150,8 @@ class JoineryTest extends HeadlessTestBase {
         assertTrue(result.contains("Warning"), "Should warn about capping");
 
         var joints = sceneManager.getJointRegistry().getJointsForPart("K/left-side");
-        Joint dado = joints.get(0);
-        assertEquals(18f, dado.getDepthMm(), 0.1f, "Depth should be capped at material thickness");
+        Joint.Dado dado = (Joint.Dado) joints.get(0);
+        assertEquals(18f, dado.depthMm(), 0.1f, "Depth should be capped at material thickness");
     }
 
     @Test
@@ -183,7 +186,7 @@ class JoineryTest extends HeadlessTestBase {
         // Joints should exist with prefixed names
         var joints = sceneManager.getJointRegistry().getJointsForPart("JB/left");
         assertFalse(joints.isEmpty(), "Template joints should be created with prefixed names");
-        assertEquals("JB/left", joints.get(0).getReceivingPartName());
-        assertEquals("JB/bottom", joints.get(0).getInsertedPartName());
+        assertEquals("JB/left", joints.get(0).receivingPartName());
+        assertEquals("JB/bottom", joints.get(0).insertedPartName());
     }
 }

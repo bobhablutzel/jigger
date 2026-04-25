@@ -102,7 +102,7 @@ public class CutListGenerator {
     private static List<String> operationsFor(Part part, JointRegistry joints, UnitSystem units) {
         return Stream.concat(
                 joints.getJointsForPart(part.getName()).stream()
-                        .filter(j -> j.getReceivingPartName().equals(part.getName()))
+                        .filter(j -> j.receivingPartName().equals(part.getName()))
                         .map(j -> describeOperation(j, units))
                         .flatMap(Optional::stream),
                 part.getCutouts().stream()
@@ -112,18 +112,17 @@ public class CutListGenerator {
 
     private static Optional<String> describeOperation(Joint j, UnitSystem units) {
         String abbr = units.getAbbreviation();
-        return switch (j.getType()) {
-            case DADO -> Optional.of(String.format(
+        return switch (j) {
+            case Joint.Dado d -> Optional.of(String.format(
                     "dado %.1f %s deep for \"%s\"",
-                    units.fromMm(j.getDepthMm()), abbr, j.getInsertedPartName()));
-            case RABBET -> Optional.of(String.format(
+                    units.fromMm(d.depthMm()), abbr, d.insertedPartName()));
+            case Joint.Rabbet r -> Optional.of(String.format(
                     "rabbet %.1f %s deep for \"%s\"",
-                    units.fromMm(j.getDepthMm()), abbr, j.getInsertedPartName()));
-            case POCKET_SCREW -> j.getScrewCount() > 0
-                    ? Optional.of(String.format("%d pocket screw hole(s) for \"%s\"",
-                            j.getScrewCount(), j.getInsertedPartName()))
-                    : Optional.empty();
-            default -> Optional.empty();  // butt — no machining
+                    units.fromMm(r.depthMm()), abbr, r.insertedPartName()));
+            case Joint.PocketScrew ps when ps.screwCount() > 0 -> Optional.of(String.format(
+                    "%d pocket screw hole(s) for \"%s\"",
+                    ps.screwCount(), ps.insertedPartName()));
+            default -> Optional.empty();  // butt or zero-screw pocket-screw — no machining
         };
     }
 
@@ -185,8 +184,7 @@ public class CutListGenerator {
      */
     public static List<FastenerEntry> generateFasteners(JointRegistry joints) {
         int totalPocketScrews = joints.getAllJoints().stream()
-                .filter(j -> j.getType() == JointType.POCKET_SCREW)
-                .mapToInt(Joint::getScrewCount)
+                .mapToInt(j -> j instanceof Joint.PocketScrew ps ? ps.screwCount() : 0)
                 .sum();
         return totalPocketScrews > 0
                 ? List.of(new FastenerEntry("Pocket screws", totalPocketScrews))

@@ -31,8 +31,8 @@ define standard/cabinets/base_cabinet params width(w), height(h), depth(d), toe_
   # Joinery
   join "left-side" to "bottom" with dado
   join "right-side" to "bottom" with dado
-  join "left-side" to "top-stretcher" with pocket screws 3
-  join "right-side" to "top-stretcher" with pocket screws 3
+  join "left-side" to "top-stretcher" with pocket_screw screws 3
+  join "right-side" to "top-stretcher" with pocket_screw screws 3
   join "left-side" to "back" with rabbet
   join "right-side" to "back" with rabbet
   # Toe-kick geometry — notches + recessed kick plate.

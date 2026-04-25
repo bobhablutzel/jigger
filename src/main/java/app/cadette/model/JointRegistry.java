@@ -29,7 +29,7 @@ public class JointRegistry {
     private final Map<String, Joint> joints = new LinkedHashMap<>();
 
     public void addJoint(Joint joint) {
-        joints.put(joint.getId(), joint);
+        joints.put(joint.id(), joint);
     }
 
     public void removeJoint(String jointId) {
@@ -43,8 +43,8 @@ public class JointRegistry {
     /** Get all joints where the given part is either receiver or inserted. */
     public List<Joint> getJointsForPart(String partName) {
         return joints.values().stream()
-                .filter(j -> j.getReceivingPartName().equals(partName)
-                        || j.getInsertedPartName().equals(partName))
+                .filter(j -> j.receivingPartName().equals(partName)
+                        || j.insertedPartName().equals(partName))
                 .toList();
     }
 
@@ -54,8 +54,8 @@ public class JointRegistry {
                 .map(Part::getName)
                 .collect(Collectors.toSet());
         return joints.values().stream()
-                .filter(j -> partNames.contains(j.getReceivingPartName())
-                        && partNames.contains(j.getInsertedPartName()))
+                .filter(j -> partNames.contains(j.receivingPartName())
+                        && partNames.contains(j.insertedPartName()))
                 .toList();
     }
 
@@ -67,7 +67,7 @@ public class JointRegistry {
     public List<Joint> removeJointsForPart(String partName) {
         List<Joint> removed = getJointsForPart(partName);
         for (Joint j : removed) {
-            joints.remove(j.getId());
+            joints.remove(j.id());
         }
         return removed;
     }
@@ -75,7 +75,7 @@ public class JointRegistry {
     /** Summary counts by joint type. */
     public Map<JointType, Long> getSummary() {
         return joints.values().stream()
-                .collect(Collectors.groupingBy(Joint::getType, Collectors.counting()));
+                .collect(Collectors.groupingBy(Joint::type, Collectors.counting()));
     }
 
     public void clear() {

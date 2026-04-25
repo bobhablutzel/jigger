@@ -243,11 +243,11 @@ joinArg
     | SPACING expression
     ;
 
+// Joint kinds are looked up by name in the visitor, not enumerated in the
+// grammar — adding a new joint is a Java-only change (new Joint subclass +
+// JointType enum entry). See CommandVisitor.visitJoinCommand.
 jointType
-    : BUTT_JT
-    | DADO_JT
-    | RABBET_JT
-    | POCKET_SCREW_JT
+    : ID
     ;
 
 displayCommand

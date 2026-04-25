@@ -79,8 +79,8 @@ class CutListBomTest extends HeadlessTestBase {
     @Test
     void testBomWithFasteners() {
         exec("create base_cabinet K w 500 h 600 d 400");
-        exec("join \"K/left-side\" to \"K/top-stretcher\" with pocket screws 3 spacing 150");
-        exec("join \"K/right-side\" to \"K/top-stretcher\" with pocket screws 3 spacing 150");
+        exec("join \"K/left-side\" to \"K/top-stretcher\" with pocket_screw screws 3 spacing 150");
+        exec("join \"K/right-side\" to \"K/top-stretcher\" with pocket_screw screws 3 spacing 150");
 
         String bom = exec("show bom");
         System.out.println(bom);
@@ -108,7 +108,7 @@ class CutListBomTest extends HeadlessTestBase {
     void testCutListWithJoineryOperations() {
         exec("create base_cabinet K w 500 h 600 d 400");
         exec("join \"K/left-side\" to \"K/bottom\" with dado depth 9");
-        exec("join \"K/left-side\" to \"K/top-stretcher\" with pocket screws 2");
+        exec("join \"K/left-side\" to \"K/top-stretcher\" with pocket_screw screws 2");
 
         String cutlist = exec("show cutlist");
         System.out.println(cutlist);

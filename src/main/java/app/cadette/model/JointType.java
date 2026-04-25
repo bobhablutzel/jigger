@@ -65,10 +65,20 @@ public enum JointType {
     }
 
     public static JointType fromString(String text) {
-        String lower = text.toLowerCase().replace('-', '_').replace(' ', '_');
+        String lower = text.toLowerCase();
         for (JointType jt : values()) {
             if (jt.name().toLowerCase().equals(lower)) return jt;
         }
         return null;
+    }
+
+    /** Comma-separated list of valid joint type names, for error messages. */
+    public static String validNames() {
+        StringBuilder sb = new StringBuilder();
+        for (JointType jt : values()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(jt.name().toLowerCase());
+        }
+        return sb.toString();
     }
 }

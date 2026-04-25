@@ -511,14 +511,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             return "Object '" + insertedName + "' not found.";
         }
 
-        // Parse joint type
-        var jtCtx = ctx.jointType();
-        JointType type;
-        if (jtCtx.BUTT_JT() != null) type = JointType.BUTT;
-        else if (jtCtx.DADO_JT() != null) type = JointType.DADO;
-        else if (jtCtx.RABBET_JT() != null) type = JointType.RABBET;
-        else if (jtCtx.POCKET_SCREW_JT() != null) type = JointType.POCKET_SCREW;
-        else return "Unknown joint type.";
+        // Parse joint type — looked up by name so adding a joint kind is a
+        // Java-only change (new record + JointType entry).
+        String jointTypeName = ctx.jointType().getText();
+        JointType type = JointType.fromString(jointTypeName);
+        if (type == null) {
+            return "Unknown joint type '" + jointTypeName + "'. Valid: " + JointType.validNames();
+        }
 
         // Validate that the joint can work in both materials. Today this is
         // a MaterialType-only check; thickness and receiver/inserted asymmetry
@@ -574,14 +573,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             }
         }
 
-        Joint joint = Joint.builder()
-                .receivingPartName(receivingName)
-                .insertedPartName(insertedName)
-                .type(type)
-                .depthMm(depthMm)
-                .screwCount(screwCount)
-                .screwSpacingMm(screwSpacingMm)
-                .build();
+        Joint joint = switch (type) {
+            case BUTT -> new Joint.Butt(receivingName, insertedName);
+            case DADO -> new Joint.Dado(receivingName, insertedName, depthMm);
+            case RABBET -> new Joint.Rabbet(receivingName, insertedName, depthMm);
+            case POCKET_SCREW -> new Joint.PocketScrew(receivingName, insertedName,
+                    screwCount, screwSpacingMm);
+        };
 
         scene.getJointRegistry().addJoint(joint);
         scene.markCutSheetDirty();
@@ -1260,13 +1258,15 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
 
     /** Info-panel formatting: names the role (receives/inserted into) from the part's POV. */
     private String jointInfoLine(Joint j, String partName, String abbr) {
-        boolean isReceiving = j.getReceivingPartName().equals(partName);
+        boolean isReceiving = j.receivingPartName().equals(partName);
         String role = isReceiving ? "receives" : "inserted into";
-        String other = isReceiving ? j.getInsertedPartName() : j.getReceivingPartName();
-        String depth = j.getDepthMm() > 0
-                ? String.format(", depth %.2f %s", fromMm(j.getDepthMm()), abbr)
-                : "";
-        return String.format("    %s \"%s\" (%s%s)", role, other, j.getType().getDisplayName(), depth);
+        String other = isReceiving ? j.insertedPartName() : j.receivingPartName();
+        String depth = switch (j) {
+            case Joint.Dado d -> String.format(", depth %.2f %s", fromMm(d.depthMm()), abbr);
+            case Joint.Rabbet r -> String.format(", depth %.2f %s", fromMm(r.depthMm()), abbr);
+            default -> "";
+        };
+        return String.format("    %s \"%s\" (%s%s)", role, other, j.type().getDisplayName(), depth);
     }
 
     private String showAssemblyInfo(Assembly assembly) {
@@ -1323,16 +1323,18 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     private String jointSummaryLine(Joint j, String abbr, String indent, boolean includeScrews) {
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("%s%-15s  \"%s\" ← \"%s\"",
-                indent, j.getType().getDisplayName(),
-                j.getReceivingPartName(), j.getInsertedPartName()));
-        if (j.getDepthMm() > 0) {
-            sb.append(String.format("  depth: %.2f %s", fromMm(j.getDepthMm()), abbr));
-        }
-        if (includeScrews && j.getScrewCount() > 0) {
-            sb.append(String.format("  screws: %d", j.getScrewCount()));
-            if (j.getScrewSpacingMm() > 0) {
-                sb.append(String.format(" @ %.2f %s", fromMm(j.getScrewSpacingMm()), abbr));
+                indent, j.type().getDisplayName(),
+                j.receivingPartName(), j.insertedPartName()));
+        switch (j) {
+            case Joint.Dado d -> sb.append(String.format("  depth: %.2f %s", fromMm(d.depthMm()), abbr));
+            case Joint.Rabbet r -> sb.append(String.format("  depth: %.2f %s", fromMm(r.depthMm()), abbr));
+            case Joint.PocketScrew ps when includeScrews && ps.screwCount() > 0 -> {
+                sb.append(String.format("  screws: %d", ps.screwCount()));
+                if (ps.screwSpacingMm() > 0) {
+                    sb.append(String.format(" @ %.2f %s", fromMm(ps.screwSpacingMm()), abbr));
+                }
             }
+            default -> { }
         }
         return sb.toString();
     }
