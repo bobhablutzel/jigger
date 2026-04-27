@@ -16,18 +16,18 @@
 
 define standard/cabinets/base_cabinet params width(w), height(h), depth(d), toe_kick=1, toe_kick_height=100mm, toe_kick_depth=75mm
   # Sides
-  create part "left-side" size $depth, $height at 0, 0, 0 grain vertical
+  create part "left-side" size $depth, $height at 0, 0, 0 grain vertical material "plywood-18mm"
   rotate "left-side" 0, 90, 0
-  create part "right-side" size $depth, $height at $width - $thickness, 0, 0 grain vertical
+  create part "right-side" size $depth, $height at $width - $thickness, 0, 0 grain vertical material "plywood-18mm"
   rotate "right-side" 0, 90, 0
   # Bottom extends $thickness/2 (= default dado depth) into each side's dado,
   # so the bottom's edges seat in the grooves rather than butting against
   # the inside faces. Floats up by toe_kick_height when toe_kick is enabled.
-  create part "bottom" size $width - $thickness, $depth at $thickness / 2, $toe_kick * $toe_kick_height, 0
+  create part "bottom" size $width - $thickness, $depth at $thickness / 2, $toe_kick * $toe_kick_height, 0 material "plywood-18mm"
   rotate "bottom" -90, 0, 0
   # Top stretcher butts against the side faces — pocket-screw, no dado, so it
   # sits at the cabinet's interior width like a butt-jointed part.
-  create part "top-stretcher" size $width - 2 * $thickness, min($depth, 100mm) at $thickness, $height - $thickness, 0
+  create part "top-stretcher" size $width - 2 * $thickness, min($depth, 100mm) at $thickness, $height - $thickness, 0 material "plywood-18mm"
   rotate "top-stretcher" -90, 0, 0
   # Back extends $thickness/2 into each side's rabbet — same logic as the bottom.
   create part "back" material "hardboard-5.5mm" size $width - $thickness, $height at $thickness / 2, 0, -$depth
@@ -45,6 +45,6 @@ define standard/cabinets/base_cabinet params width(w), height(h), depth(d), toe_
   if $toe_kick then
     cut "left-side" rect at 0, 0 size $toe_kick_depth, $toe_kick_height
     cut "right-side" rect at 0, 0 size $toe_kick_depth, $toe_kick_height
-    create part "toe-kick-front" size $width, $toe_kick_height at 0, 0, -$toe_kick_depth - $thickness
+    create part "toe-kick-front" size $width, $toe_kick_height at 0, 0, -$toe_kick_depth - $thickness material "plywood-18mm"
   end if
 end define
