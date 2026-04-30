@@ -40,7 +40,9 @@
       "Bash(awk -F: '{print $1}')",
       "Bash(grep -rn '\\\\$mm\\\\|\"mm\"\\\\|mmVariable' /home/bob/dev/cadette/src/main '--include=*.java')",
       "Bash(mvn -q test -Dtest=PartMeshBuilderTest)",
-      "Bash(tee /tmp/cadette-test.log)"
+      "Bash(tee /tmp/cadette-test.log)",
+      "Bash(mvn -q -DfailIfNoTests=false -Dtest=JointCutoutInferenceTest test)",
+      "Bash(mvn -DfailIfNoTests=false -Dtest=JointCutoutInferenceTest test)"
     ]
   }
 }

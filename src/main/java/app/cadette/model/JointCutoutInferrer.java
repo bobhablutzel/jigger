@@ -21,9 +21,11 @@ package app.cadette.model;
 import com.jme3.math.Quaternion;
 import com.jme3.math.Vector3f;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /**
  * Iterates the joints where a given part is the receiving side and asks each
@@ -38,20 +40,56 @@ public final class JointCutoutInferrer {
      * Cutouts implied by joints where {@code part} is the receiving side.
      * Joints whose inserted part is missing from {@code parts} are skipped
      * silently (templates-in-progress, partial scene state during undo).
+     *
+     * <p>If a joint's projected cutout falls entirely outside the receiver's
+     * cut-face rectangle, it would otherwise be silently dropped by
+     * {@link PartMeshBuilder}'s clipping pass — a common symptom of a
+     * misconfigured joint where the parts aren't actually engaged. We surface
+     * those cases through {@code warnSink} and omit the cutout from the
+     * returned list. This is a coarse, joint-by-joint check; the broader
+     * "is this joint geometrically sensical" question is the validate
+     * command's job.
      */
     public static List<Cutout> inferFor(Part part,
                                         JointRegistry joints,
                                         Map<String, Part> parts,
-                                        JointGeometryContext ctx) {
-        return joints.getJointsForPart(part.getName()).stream()
-                .filter(j -> j.receivingPartName().equals(part.getName()))
-                .map(j -> {
-                    Part inserted = parts.get(j.insertedPartName());
-                    if (inserted == null) return Optional.<Cutout>empty();
-                    return j.inferReceivingCutout(part, inserted, ctx);
-                })
-                .flatMap(Optional::stream)
-                .toList();
+                                        JointGeometryContext ctx,
+                                        Consumer<String> warnSink) {
+        List<Cutout> out = new ArrayList<>();
+        for (Joint j : joints.getJointsForPart(part.getName())) {
+            if (!j.receivingPartName().equals(part.getName())) continue;
+            Part inserted = parts.get(j.insertedPartName());
+            if (inserted == null) continue;
+            Optional<Cutout> opt = j.inferReceivingCutout(part, inserted, ctx);
+            if (opt.isEmpty()) continue;
+            Cutout c = opt.get();
+            if (!intersectsPartFace(c.bounds(), part)) {
+                warnSink.accept(formatOutOfBoundsWarning(j, part, c));
+                continue;
+            }
+            out.add(c);
+        }
+        return out;
+    }
+
+    private static boolean intersectsPartFace(BoundingBox b, Part receiver) {
+        return b.maxXMm() > 0
+                && b.xMm() < receiver.getCutWidthMm()
+                && b.maxYMm() > 0
+                && b.yMm() < receiver.getCutHeightMm();
+    }
+
+    private static String formatOutOfBoundsWarning(Joint j, Part receiver, Cutout c) {
+        BoundingBox b = c.bounds();
+        return String.format(
+                "joint cutout warning: %s on '%s' ← '%s' — projected cutout "
+                        + "(x=%.1f, y=%.1f, %.1f×%.1f) falls entirely outside "
+                        + "receiver (%.1f×%.1f); silently dropping. Check that "
+                        + "the parts are positioned to engage the joint.",
+                j.type().name().toLowerCase(),
+                receiver.getName(), j.insertedPartName(),
+                b.xMm(), b.yMm(), b.widthMm(), b.heightMm(),
+                receiver.getCutWidthMm(), receiver.getCutHeightMm());
     }
 
     /**
@@ -60,24 +98,35 @@ public final class JointCutoutInferrer {
      * plus the face the cutout should open on — determined by which side of
      * receiving's mid-thickness the inserted's projected Z midpoint lies.
      *
-     * <p>The two parts each have a wrapper origin at their (0,0,0) cut-face
-     * corner with rotation around that point. We transform each of the
-     * inserted's eight local-space corners through:
-     * <pre>
-     *   worldP   = qI · cornerI + posI
-     *   localR_P = qR^(-1) · (worldP - posR)
-     * </pre>
-     * X/Y min/max give the rect; Z midpoint vs receiving's halfT picks the
-     * face. Inserted projecting to Z &lt; halfT enters from the back face.
-     *
      * <p>The result rect may extend outside receiving's bounds; PartMeshBuilder
      * clips cutouts to the part rectangle, which is the right behavior here.
      */
     public record Footprint(float xMm, float yMm, float widthMm, float heightMm,
                             Cutout.Face face) {}
 
-    static Footprint projectInsertedFootprint(Part receiving, Part inserted,
-                                              JointGeometryContext ctx) {
+    /**
+     * Full axis-aligned bounding box of the inserted part in the receiving
+     * part's local frame — same projection as {@link Footprint} but with the
+     * Z extents preserved. Used by validators that need to check "are the
+     * parts actually engaged?" (Z-overlap with receiver's body).
+     */
+    public record Projection(float minX, float maxX, float minY, float maxY,
+                             float minZ, float maxZ) {
+        public float widthMm() { return maxX - minX; }
+        public float heightMm() { return maxY - minY; }
+    }
+
+    /**
+     * Compute the inserted's eight-corner AABB in the receiving's local frame.
+     * Each part has a wrapper origin at its (0,0,0) cut-face corner with
+     * rotation around that point; a corner transforms via
+     * <pre>
+     *   worldP   = qI · cornerI + posI
+     *   localR_P = qR^(-1) · (worldP - posR)
+     * </pre>
+     */
+    public static Projection projectInsertedAABB(Part receiving, Part inserted,
+                                                 JointGeometryContext ctx) {
         Vector3f posR = ctx.cornerPosition(receiving.getName());
         Vector3f posI = ctx.cornerPosition(inserted.getName());
         Quaternion qR = ctx.rotation(receiving.getName());
@@ -106,13 +155,18 @@ public final class JointCutoutInferrer {
             if (localR.z > maxZ) maxZ = localR.z;
         }
 
+        return new Projection(minX, maxX, minY, maxY, minZ, maxZ);
+    }
+
+    static Footprint projectInsertedFootprint(Part receiving, Part inserted,
+                                              JointGeometryContext ctx) {
+        Projection p = projectInsertedAABB(receiving, inserted, ctx);
         // Receiving's local Z range is [0, thickness]. If the inserted's Z
         // midpoint is below halfT, it's seated against (or coming through)
         // the back face; otherwise the front face.
         float halfT = receiving.getThicknessMm() * 0.5f;
-        float zMid = (minZ + maxZ) * 0.5f;
+        float zMid = (p.minZ() + p.maxZ()) * 0.5f;
         Cutout.Face face = zMid < halfT ? Cutout.Face.BACK : Cutout.Face.FRONT;
-
-        return new Footprint(minX, minY, maxX - minX, maxY - minY, face);
+        return new Footprint(p.minX(), p.minY(), p.widthMm(), p.heightMm(), face);
     }
 }

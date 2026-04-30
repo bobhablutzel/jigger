@@ -99,6 +99,7 @@ END        : 'end' ;
 FOR        : 'for' ;
 WHICH      : 'which' ;
 STATS      : 'stats' ;
+VALIDATE   : 'validate' ;
 RUN        : 'run' -> pushMode(PATH_MODE) ;
 LPAREN     : '(' ;
 RPAREN     : ')' ;

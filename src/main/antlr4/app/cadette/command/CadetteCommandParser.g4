@@ -83,6 +83,7 @@ command
     | whichCommand
     | statsCommand
     | runCommand
+    | validateCommand
     ;
 
 createCommand
@@ -342,6 +343,14 @@ whichCommand
 
 statsCommand
     : STATS
+    ;
+
+// `validate` — geometric sanity check across joints. With no argument,
+// validates every joint in the scene; with an assembly name, scopes to
+// joints whose parts both belong to that assembly. Reports per-joint
+// issues without changing scene state. See JointValidator for the predicates.
+validateCommand
+    : VALIDATE objectName?
     ;
 
 // The RUN token switches the lexer to PATH_MODE so that path characters

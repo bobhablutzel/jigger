@@ -20,7 +20,9 @@ package app.cadette;
 
 import app.cadette.model.Cutout;
 import app.cadette.model.Joint;
+import app.cadette.model.JointCutoutInferrer;
 import app.cadette.model.JointGeometryContext;
+import app.cadette.model.JointRegistry;
 import app.cadette.model.Material;
 import app.cadette.model.MaterialKind;
 import app.cadette.model.MaterialType;
@@ -30,7 +32,9 @@ import com.jme3.math.Quaternion;
 import com.jme3.math.Vector3f;
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -212,5 +216,60 @@ class JointCutoutInferenceTest {
         assertEquals(400f, rect.widthMm(), 0.01f, "dado runs full depth");
         assertEquals(18f, rect.heightMm(), 0.01f, "dado is one bottom-thickness tall");
         assertEquals(9f, rect.depthMm(), 0.001f);
+    }
+
+    @Test
+    void inferFor_cutoutFallingEntirelyOutsideReceiver_emitsWarningAndDropsCutout() {
+        // Receiver is a 100×200 panel at origin. Inserted is parked far down
+        // the +X axis (x=500), so its projected footprint lands at x=500..550
+        // — entirely past the receiver's right edge at x=100. PartMeshBuilder
+        // would silently clip this to nothing; inferFor should warn instead.
+        Part receiver = part("R", 100, 200);
+        Part inserted = part("I", 50, 30);
+        FakeContext ctx = new FakeContext()
+                .put("R", new Vector3f(0, 0, 0), new Quaternion())
+                .put("I", new Vector3f(500, 0, 18), new Quaternion());
+
+        JointRegistry joints = new JointRegistry();
+        joints.addJoint(new Joint.Dado("R", "I", 9f));
+
+        Map<String, Part> parts = new HashMap<>();
+        parts.put("R", receiver);
+        parts.put("I", inserted);
+
+        List<String> warnings = new ArrayList<>();
+        List<Cutout> result = JointCutoutInferrer.inferFor(receiver, joints, parts, ctx, warnings::add);
+
+        assertTrue(result.isEmpty(), "out-of-bounds cutout should be dropped");
+        assertEquals(1, warnings.size(), "exactly one warning expected");
+        String w = warnings.get(0);
+        assertTrue(w.contains("dado"), "warning names the joint type: " + w);
+        assertTrue(w.contains("'R'"), "warning names the receiver: " + w);
+        assertTrue(w.contains("'I'"), "warning names the inserted part: " + w);
+    }
+
+    @Test
+    void inferFor_cutoutWithinReceiver_emitsNoWarning() {
+        // Sanity: the axis-aligned case from the first test, run through
+        // inferFor. No warning should fire and the cutout should appear in
+        // the returned list.
+        Part receiver = part("R", 100, 200);
+        Part inserted = part("I", 50, 30);
+        FakeContext ctx = new FakeContext()
+                .put("R", new Vector3f(0, 0, 0), new Quaternion())
+                .put("I", new Vector3f(25, 100, 18), new Quaternion());
+
+        JointRegistry joints = new JointRegistry();
+        joints.addJoint(new Joint.Dado("R", "I", 9f));
+
+        Map<String, Part> parts = new HashMap<>();
+        parts.put("R", receiver);
+        parts.put("I", inserted);
+
+        List<String> warnings = new ArrayList<>();
+        List<Cutout> result = JointCutoutInferrer.inferFor(receiver, joints, parts, ctx, warnings::add);
+
+        assertEquals(1, result.size(), "in-bounds cutout should be kept");
+        assertTrue(warnings.isEmpty(), "no warning expected for in-bounds cutout: " + warnings);
     }
 }

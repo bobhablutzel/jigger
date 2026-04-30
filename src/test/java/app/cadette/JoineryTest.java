@@ -170,6 +170,92 @@ class JoineryTest extends HeadlessTestBase {
     }
 
     @Test
+    void validate_emptyScene_reportsNoJoints() {
+        String result = exec("validate");
+        assertEquals("No joints to validate.", result);
+    }
+
+    @Test
+    void validate_wellFormedCabinet_reportsAllOk() {
+        // base_cabinet positions all parts to engage their joints correctly.
+        // Validate should report no issues.
+        exec("create base_cabinet K w 500 h 600 d 400");
+        String result = exec("validate");
+        System.out.println(result);
+        assertTrue(result.startsWith("Validation: all "), "Expected 'all OK' result: " + result);
+        assertTrue(result.contains("OK"), "Expected OK marker: " + result);
+    }
+
+    @Test
+    void validate_scopedToAssembly_excludesUnrelatedJoints() {
+        // Two cabinets in the scene. Validating one shouldn't pull in
+        // the other's joint count.
+        exec("create base_cabinet K w 500 h 600 d 400");
+        exec("create base_cabinet M at 1000, 0, 0 w 500 h 600 d 400");
+
+        String all = exec("validate");
+        String scoped = exec("validate K");
+        System.out.println("ALL: " + all);
+        System.out.println("SCOPED: " + scoped);
+
+        assertTrue(all.contains("12 joints"), "Expected 12 joints across both cabinets: " + all);
+        assertTrue(scoped.contains("in 'K'"), "Expected scope label: " + scoped);
+        assertTrue(scoped.contains("6 joints"), "Expected 6 joints in K: " + scoped);
+    }
+
+    @Test
+    void validate_unknownAssembly_reportsMissing() {
+        String result = exec("validate nope");
+        assertEquals("No assembly named 'nope'.", result);
+    }
+
+    @Test
+    void autoValidate_wellFormedTemplate_silentOnHappyPath() {
+        // base_cabinet validates clean. The instantiation message should not
+        // include the "Validation:" report for the happy path — it'd be noise.
+        String result = exec("create base_cabinet K w 500 h 600 d 400");
+        System.out.println(result);
+        assertFalse(result.contains("[ERROR]"), "no errors expected: " + result);
+        assertFalse(result.contains("Validation:"), "no validation noise on clean instantiation: " + result);
+    }
+
+    @Test
+    void autoValidate_brokenTemplate_appendsReport() {
+        // Define a deliberately broken template: parts placed so the dado
+        // can't engage in Z. Auto-validate on instantiation should append
+        // the issue list to the success message.
+        exec("define \"broken_dado\"");
+        exec("create part \"receiver\" material \"plywood-18mm\" size 100, 200 at 0, 0, 0");
+        exec("create part \"inserted\" material \"plywood-18mm\" size 50, 30 at 25, 100, 100");
+        exec("join \"receiver\" to \"inserted\" with dado depth 9");
+        exec("end define");
+
+        String result = exec("create broken_dado X");
+        System.out.println(result);
+        assertTrue(result.contains("Created"), "instantiation should succeed: " + result);
+        assertTrue(result.contains("Validation in 'X'"), "expected scoped validation report: " + result);
+        assertTrue(result.contains("[ERROR]"), "expected error severity: " + result);
+        assertTrue(result.contains("not engaged"), "expected engagement issue: " + result);
+    }
+
+    @Test
+    void validate_partsNotEngaged_reportsError() {
+        // Manually create two parts with a dado joint between them, but place
+        // the inserted part far away in Z so it doesn't actually penetrate
+        // the receiver. The validator should flag "parts not engaged".
+        exec("create part \"R\" material \"plywood-18mm\" size 100, 200 at 0, 0, 0");
+        exec("create part \"I\" material \"plywood-18mm\" size 50, 30 at 25, 100, 200");
+        exec("join \"R\" to \"I\" with dado depth 9");
+
+        String result = exec("validate");
+        System.out.println(result);
+        assertTrue(result.startsWith("Validation:"), result);
+        assertTrue(result.contains("[ERROR]"), "Expected an error severity tag: " + result);
+        assertTrue(result.contains("not engaged") || result.contains("extends past"),
+                "Expected geometric issue in message: " + result);
+    }
+
+    @Test
     void testJoinInTemplate() {
         // Joints should work inside template definitions
         exec("define \"joined_box\" params width, height, depth");

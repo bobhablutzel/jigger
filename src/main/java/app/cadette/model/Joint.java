@@ -18,6 +18,7 @@
 
 package app.cadette.model;
 
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -60,6 +61,17 @@ public sealed interface Joint
         return Optional.empty();
     }
 
+    /**
+     * Geometric sanity check for this joint given the parts' current
+     * world-frame positions. Empty list = looks correct. See
+     * {@link JointValidator} for the per-type predicates and the open
+     * question of butt / pocket-screw face-touching tests.
+     */
+    default List<ValidationIssue> validate(Part receiving, Part inserted,
+                                           JointGeometryContext ctx) {
+        return List.of();
+    }
+
     record Butt(String receivingPartName, String insertedPartName) implements Joint {
         @Override public JointType type() { return JointType.BUTT; }
     }
@@ -75,6 +87,12 @@ public sealed interface Joint
                     JointCutoutInferrer.projectInsertedFootprint(receiving, inserted, ctx);
             return Optional.of(new Cutout.Rect(fp.xMm(), fp.yMm(), fp.widthMm(), fp.heightMm(),
                     depthMm, fp.face()));
+        }
+
+        @Override
+        public List<ValidationIssue> validate(Part receiving, Part inserted,
+                                              JointGeometryContext ctx) {
+            return JointValidator.validateDado(this, receiving, inserted, ctx);
         }
     }
 
@@ -92,6 +110,12 @@ public sealed interface Joint
                     JointCutoutInferrer.projectInsertedFootprint(receiving, inserted, ctx);
             return Optional.of(new Cutout.Rect(fp.xMm(), fp.yMm(), fp.widthMm(), fp.heightMm(),
                     depthMm, fp.face()));
+        }
+
+        @Override
+        public List<ValidationIssue> validate(Part receiving, Part inserted,
+                                              JointGeometryContext ctx) {
+            return JointValidator.validateRabbet(this, receiving, inserted, ctx);
         }
     }
 

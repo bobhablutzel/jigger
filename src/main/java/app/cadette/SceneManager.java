@@ -670,7 +670,8 @@ public class SceneManager extends SimpleApplication implements JointGeometryCont
      * recomputed every time the mesh is rebuilt.
      */
     private com.jme3.scene.Mesh buildPartMesh(Part part) {
-        List<Cutout> inferred = JointCutoutInferrer.inferFor(part, jointRegistry, parts, this);
+        List<Cutout> inferred = JointCutoutInferrer.inferFor(
+                part, jointRegistry, parts, this, System.err::println);
         if (inferred.isEmpty()) {
             return PartMeshBuilder.build(part);
         }

@@ -114,7 +114,24 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             }
         }
 
-        return executor.instantiateTemplate(templateName, instanceName, placement, relPlacement, rawParams);
+        String result = executor.instantiateTemplate(templateName, instanceName, placement, relPlacement, rawParams);
+
+        // Auto-validate the new assembly's joints. Silent on the happy path —
+        // we only append output when there are actual issues, so well-formed
+        // templates don't grow noise. Skips entirely if instantiation didn't
+        // produce an assembly (e.g. error path, name collision).
+        Assembly assembly = scene.getAssembly(instanceName);
+        if (assembly != null) {
+            List<Joint> joints = scene.getJointRegistry().getJointsForAssembly(assembly);
+            if (!joints.isEmpty()) {
+                List<ValidationIssue> issues = collectJointIssues(joints);
+                if (!issues.isEmpty()) {
+                    result += "\n\n" + formatValidationReport(issues, joints.size(),
+                            " in '" + instanceName + "'");
+                }
+            }
+        }
+        return result;
     }
 
     @Override
@@ -894,6 +911,65 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     public String visitStatsCommand(CadetteCommandParser.StatsCommandContext ctx) {
         boolean visible = scene.toggleStats();
         return "Stats display " + (visible ? "on" : "off") + ".";
+    }
+
+    @Override
+    public String visitValidateCommand(CadetteCommandParser.ValidateCommandContext ctx) {
+        List<Joint> joints;
+        String scopeLabel;
+        if (ctx.objectName() != null) {
+            String name = extractName(ctx.objectName());
+            Assembly assembly = scene.getAssembly(name);
+            if (assembly == null) {
+                return "No assembly named '" + name + "'.";
+            }
+            joints = scene.getJointRegistry().getJointsForAssembly(assembly);
+            scopeLabel = " in '" + name + "'";
+        } else {
+            joints = scene.getJointRegistry().getAllJoints();
+            scopeLabel = "";
+        }
+        if (joints.isEmpty()) return "No joints to validate" + scopeLabel + ".";
+
+        List<ValidationIssue> issues = collectJointIssues(joints);
+        return formatValidationReport(issues, joints.size(), scopeLabel);
+    }
+
+    /**
+     * Run every joint's geometric predicate and gather the issues. Joints
+     * referencing missing parts (mid-undo, partially-built scene) are
+     * skipped silently.
+     */
+    private List<ValidationIssue> collectJointIssues(List<Joint> joints) {
+        Map<String, Part> parts = scene.getAllParts();
+        List<ValidationIssue> issues = new ArrayList<>();
+        for (Joint j : joints) {
+            Part receiving = parts.get(j.receivingPartName());
+            Part inserted = parts.get(j.insertedPartName());
+            if (receiving == null || inserted == null) continue;
+            issues.addAll(j.validate(receiving, inserted, scene));
+        }
+        return issues;
+    }
+
+    private String formatValidationReport(List<ValidationIssue> issues, int totalJoints, String scopeLabel) {
+        if (issues.isEmpty()) {
+            return String.format("Validation%s: all %d joint%s OK.",
+                    scopeLabel, totalJoints, totalJoints == 1 ? "" : "s");
+        }
+        long errors = issues.stream()
+                .filter(i -> i.severity() == ValidationIssue.Severity.ERROR).count();
+        long warnings = issues.size() - errors;
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("Validation%s: %d issue%s found (%d error%s, %d warning%s).",
+                scopeLabel,
+                issues.size(), issues.size() == 1 ? "" : "s",
+                errors, errors == 1 ? "" : "s",
+                warnings, warnings == 1 ? "" : "s"));
+        for (ValidationIssue i : issues) {
+            sb.append("\n  [").append(i.severity().name()).append("] ").append(i.message());
+        }
+        return sb.toString();
     }
 
     @Override
@@ -2084,6 +2160,8 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
 
                   run [file]                       — run a .cds script (opens file dialog if omitted)
                                                      Scripts may start with '#! cadette' as a file identifier.
+                  validate [<assembly>]            — geometric sanity check across joints
+                                                     (omit name for whole scene; supply an assembly to scope)
                   undo                             — undo last action (also Ctrl+Z)
                   redo                             — redo last undone action (also Ctrl+Shift+Z)
                   help                             — show this help text
