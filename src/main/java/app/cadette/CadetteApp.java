@@ -533,7 +533,13 @@ public class CadetteApp {
         if (splash == null) return;
         long elapsed = System.currentTimeMillis() - splashStart;
         int remaining = (int) Math.max(0, SPLASH_MIN_DISPLAY_MS - elapsed);
-        Timer timer = new Timer(remaining, e -> splash.dispose());
+        Timer timer = new Timer(remaining, e -> {
+            // Defensive: clear always-on-top before dispose. The main frame
+            // appears to inherit always-on-top behavior on some Linux WMs;
+            // see project_always_on_top_papercut.md for the leading theory.
+            splash.setAlwaysOnTop(false);
+            splash.dispose();
+        });
         timer.setRepeats(false);
         timer.start();
     }

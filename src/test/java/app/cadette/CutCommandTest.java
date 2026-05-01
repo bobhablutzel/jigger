@@ -34,13 +34,14 @@ import static org.junit.jupiter.api.Assertions.*;
  * Cutouts land in the target part's cutouts list; undo/redo preserve order;
  * the BOM surfaces them as operations alongside dados and rabbets.
  *
- * <p>Cuts are <em>not</em> validated against the part's existing boundaries —
- * a cut entirely outside the part, or overlapping a previous cut, is
- * accepted and stored. Phase E3's mesh pipeline handles the actual shape
- * geometry (union of cutouts clipped to the part rectangle). Under
- * set-theoretic semantics, order of specification doesn't change the final
- * shape, but the cutouts list preserves insertion order for traceability
- * in the cut list / undo stack.
+ * <p>Cuts that fall <em>entirely</em> outside the part's cut face are
+ * rejected at command time — silently dropping them at mesh-build time
+ * was a footgun (no visual feedback, no error). Cuts that partially
+ * overhang or overlap previous cuts are still accepted and stored;
+ * Phase E3's mesh pipeline clips them to the part rectangle. Under
+ * set-theoretic semantics, order of specification doesn't change the
+ * final shape, but the cutouts list preserves insertion order for
+ * traceability in the cut list / undo stack.
  */
 class CutCommandTest extends HeadlessTestBase {
 
@@ -102,15 +103,16 @@ class CutCommandTest extends HeadlessTestBase {
     // ---- Boundary edge cases: cuts outside / partially-outside / overlapping ----
 
     @Test
-    void cutEntirelyOutsidePartBoundsIsAccepted() {
+    void cutEntirelyOutsidePartBoundsIsRejected() {
         // The `panel` is 600×900. A cut at (1000, 1000) size 50×50 is
-        // nonsense spatially but accepted — v1 doesn't validate. Phase E3's
-        // mesh pipeline will simply produce no material removal for this
-        // cutout since it doesn't intersect the part.
+        // entirely off the part's cut face. PartMeshBuilder would silently
+        // clip it to nothing — instead we reject at command time so the
+        // user sees a clear message and the cutout is never stored.
         String result = exec("cut \"panel\" rect at 1000, 1000 size 50, 50");
-        assertFalse(result.toLowerCase().contains("error"));
-        assertEquals(1, cutoutsOf("panel").size(),
-                "accepted and stored even though it's outside the part");
+        assertTrue(result.contains("falls entirely outside"),
+                "expected rejection message: " + result);
+        assertEquals(0, cutoutsOf("panel").size(),
+                "rejected cuts must not be stored");
     }
 
     @Test

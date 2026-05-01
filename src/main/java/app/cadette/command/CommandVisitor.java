@@ -629,12 +629,28 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             return "Part '" + partName + "' not found.";
         }
         Cutout cutout = buildCutout(ctx.cutShape());
+        String abbr = executor.getUnits().getAbbreviation();
+        // PartMeshBuilder silently drops cutouts that clip to nothing —
+        // catch the easy case (entirely outside the cut face) here so the
+        // user gets feedback at command time instead of a missing render.
+        if (!cutoutIntersectsPartFace(cutout, part)) {
+            return String.format("Cutout %s falls entirely outside '%s' (%.1f × %.1f %s); ignored.",
+                    describeCutout(cutout, abbr), partName,
+                    fromMm(part.getCutWidthMm()), fromMm(part.getCutHeightMm()), abbr);
+        }
         part.addCutout(cutout);
         executor.pushAction(new CutAction(scene, partName, cutout));
         // rebuildPartMesh handles mesh regeneration + markCutSheetDirty.
         scene.rebuildPartMesh(partName);
-        String abbr = executor.getUnits().getAbbreviation();
         return "Added cutout to '" + partName + "': " + describeCutout(cutout, abbr);
+    }
+
+    private static boolean cutoutIntersectsPartFace(Cutout c, Part p) {
+        BoundingBox b = c.bounds();
+        return b.maxXMm() > 0
+                && b.xMm() < p.getCutWidthMm()
+                && b.maxYMm() > 0
+                && b.yMm() < p.getCutHeightMm();
     }
 
     /** Dispatch on the cutShape alternative to build the appropriate Cutout variant. */
