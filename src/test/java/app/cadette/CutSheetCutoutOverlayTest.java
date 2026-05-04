@@ -75,6 +75,42 @@ class CutSheetCutoutOverlayTest {
     }
 
     @Test
+    void circle_unrotated_centersAtPartLocalCxCy() {
+        // 35mm-diameter cup hole at part-local (50, 50). Sheet rect should
+        // be (px + 50*scale - r, py + 50*scale - r, 2r, 2r).
+        SheetLayout.PlacedPart part = placed(0, 0, 600, 900, false);
+        Cutout.Circle circle = new Cutout.Circle(50, 50, 17.5f, 11f, Cutout.Face.FRONT);
+        float scale = 0.5f;
+
+        java.awt.geom.Ellipse2D.Float e =
+                CutSheetRenderer.circleCutoutToSheetEllipse(circle, part, 100, 200, scale);
+
+        float r = 17.5f * scale;
+        assertEquals(100 + 50 * scale - r, e.x, 0.001);
+        assertEquals(200 + 50 * scale - r, e.y, 0.001);
+        assertEquals(2 * r, e.width, 0.001);
+        assertEquals(2 * r, e.height, 0.001);
+    }
+
+    @Test
+    void circle_rotated_swapsCenterCoordsKeepsRadius() {
+        // Same cup hole but on a rotated part. Center cx/cy swap, radius stays.
+        SheetLayout.PlacedPart part = placed(0, 0, 900, 600, true);
+        Cutout.Circle circle = new Cutout.Circle(50, 100, 17.5f, 11f, Cutout.Face.FRONT);
+        float scale = 1.0f;
+
+        java.awt.geom.Ellipse2D.Float e =
+                CutSheetRenderer.circleCutoutToSheetEllipse(circle, part, 100, 200, scale);
+
+        float r = 17.5f;
+        // Center should be at sheet (100 + 100*1, 200 + 50*1) — cy → x, cx → y.
+        assertEquals(100 + 100 - r, e.x, 0.001);
+        assertEquals(200 + 50 - r, e.y, 0.001);
+        assertEquals(2 * r, e.width, 0.001);
+        assertEquals(2 * r, e.height, 0.001);
+    }
+
+    @Test
     void rotated_cornerCutoutLandsAtPlacedOrigin() {
         // A cutout at local (0, 0) — the part's origin corner — should land
         // at the placed part's (px, py) regardless of rotation, since both

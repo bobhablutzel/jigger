@@ -236,6 +236,9 @@ cutShape
     : RECT AT expression COMMA expression
       SIZE expression COMMA expression
       (DEPTH expression)?                       # rectCutShape
+    | CIRCLE AT expression COMMA expression
+      RADIUS expression
+      (DEPTH expression)?                       # circleCutShape
     ;
 
 joinArg

@@ -103,6 +103,51 @@ class CutCommandTest extends HeadlessTestBase {
     // ---- Boundary edge cases: cuts outside / partially-outside / overlapping ----
 
     @Test
+    void simpleCircleCutAddsToThePart() {
+        // 35mm-diameter cup hole at (50, 50), 11mm deep — typical European
+        // hinge cup. Confirms the circle grammar wires through to a stored
+        // Cutout.Circle on the part.
+        String result = exec("cut \"panel\" circle at 50, 50 radius 17.5 depth 11");
+        assertFalse(result.toLowerCase().contains("error"), result);
+
+        List<Cutout> cuts = cutoutsOf("panel");
+        assertEquals(1, cuts.size());
+        assertInstanceOf(Cutout.Circle.class, cuts.get(0));
+        Cutout.Circle c = (Cutout.Circle) cuts.get(0);
+        assertEquals(50, c.cxMm(), 0.001);
+        assertEquals(50, c.cyMm(), 0.001);
+        assertEquals(17.5, c.radiusMm(), 0.001);
+        assertEquals(11f, c.depthMm(), 0.001);
+    }
+
+    @Test
+    void throughCutCircleHasNullDepth() {
+        exec("cut \"panel\" circle at 100, 100 radius 25");
+        Cutout.Circle c = (Cutout.Circle) cutoutsOf("panel").get(0);
+        assertNull(c.depthMm(), "no depth clause → through-cut (null)");
+    }
+
+    @Test
+    void circleCommandResponseFlagsThe3DRenderGap() {
+        // Until layer 4 (mesh generation for non-rect cutouts) ships, the
+        // command should explicitly tell the user that the 3D mesh won't
+        // show the pocket — so they don't think their cut "didn't work".
+        String result = exec("cut \"panel\" circle at 50, 50 radius 17.5 depth 11");
+        assertTrue(result.contains("3D mesh does not yet render"),
+                "expected 3D-render heads-up: " + result);
+    }
+
+    @Test
+    void circleEntirelyOutsidePartBoundsIsRejected() {
+        // A 600×900 panel; a circle centered at (1000, 1000) radius 25 lies
+        // entirely off the cut face. Same rejection path as for rect.
+        String result = exec("cut \"panel\" circle at 1000, 1000 radius 25");
+        assertTrue(result.contains("falls entirely outside"),
+                "expected rejection: " + result);
+        assertEquals(0, cutoutsOf("panel").size());
+    }
+
+    @Test
     void cutEntirelyOutsidePartBoundsIsRejected() {
         // The `panel` is 600×900. A cut at (1000, 1000) size 50×50 is
         // entirely off the part's cut face. PartMeshBuilder would silently

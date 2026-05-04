@@ -278,25 +278,59 @@ public class CutSheetExporter {
         cs.setLineWidth(0.5f);
         cs.setLineDashPattern(new float[]{2.5f, 2f}, 0);
         for (app.cadette.model.Cutout c : cutouts) {
-            if (!(c instanceof app.cadette.model.Cutout.Rect r)) continue;
-            float cx, cy, cw, ch;
-            if (part.isRotated()) {
-                cx = px + r.yMm() * scale;
-                cy = py + ph - (r.xMm() + r.widthMm()) * scale;
-                cw = r.heightMm() * scale;
-                ch = r.widthMm() * scale;
-            } else {
-                cx = px + r.xMm() * scale;
-                cy = py + ph - (r.yMm() + r.heightMm()) * scale;
-                cw = r.widthMm() * scale;
-                ch = r.heightMm() * scale;
+            if (c instanceof app.cadette.model.Cutout.Rect r) {
+                float cx, cy, cw, ch;
+                if (part.isRotated()) {
+                    cx = px + r.yMm() * scale;
+                    cy = py + ph - (r.xMm() + r.widthMm()) * scale;
+                    cw = r.heightMm() * scale;
+                    ch = r.widthMm() * scale;
+                } else {
+                    cx = px + r.xMm() * scale;
+                    cy = py + ph - (r.yMm() + r.heightMm()) * scale;
+                    cw = r.widthMm() * scale;
+                    ch = r.heightMm() * scale;
+                }
+                if (cw < 0.5f || ch < 0.5f) continue;
+                cs.addRect(cx, cy, cw, ch);
+                cs.stroke();
+            } else if (c instanceof app.cadette.model.Cutout.Circle ci) {
+                // PDF Y is bottom-up; for circles we just need the center
+                // and radius. Rotation only swaps cx/cy of the center.
+                float r = ci.radiusMm() * scale;
+                if (r < 0.5f) continue;
+                float centerX, centerY;
+                if (part.isRotated()) {
+                    centerX = px + ci.cyMm() * scale;
+                    centerY = py + ph - ci.cxMm() * scale;
+                } else {
+                    centerX = px + ci.cxMm() * scale;
+                    centerY = py + ph - ci.cyMm() * scale;
+                }
+                drawPdfCircle(cs, centerX, centerY, r);
             }
-            if (cw < 0.5f || ch < 0.5f) continue;
-            cs.addRect(cx, cy, cw, ch);
-            cs.stroke();
+            // Cutout.Polygon / Spline: skip until those variants land.
         }
         // Reset dash pattern so subsequent strokes (label baselines, etc.) are solid.
         cs.setLineDashPattern(new float[]{}, 0);
+    }
+
+    /**
+     * Draw a circle on the PDF using four cubic Bézier arcs. PDFBox has no
+     * circle primitive; the four-arc approximation with kappa = 4*(√2−1)/3
+     * (≈ 0.5522847) is visually indistinguishable from a real circle at any
+     * sane print resolution.
+     */
+    private static void drawPdfCircle(PDPageContentStream cs,
+                                      float centerX, float centerY, float radius) throws IOException {
+        float k = 0.5522847498f * radius;
+        // Start at the rightmost point, sweep counterclockwise.
+        cs.moveTo(centerX + radius, centerY);
+        cs.curveTo(centerX + radius, centerY + k,  centerX + k, centerY + radius,  centerX, centerY + radius);
+        cs.curveTo(centerX - k, centerY + radius,  centerX - radius, centerY + k,  centerX - radius, centerY);
+        cs.curveTo(centerX - radius, centerY - k,  centerX - k, centerY - radius,  centerX, centerY - radius);
+        cs.curveTo(centerX + k, centerY - radius,  centerX + radius, centerY - k,  centerX + radius, centerY);
+        cs.stroke();
     }
 
     private static void drawPdfGrainLines(PDPageContentStream cs,

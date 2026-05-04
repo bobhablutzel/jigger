@@ -27,6 +27,8 @@ options {
 CREATE     : 'create' | 'cr' ;
 CUT        : 'cut' ;
 RECT       : 'rect' | 'rectangle' ;
+CIRCLE     : 'circle' ;
+RADIUS     : 'radius' ;
 DELETE     : 'delete' | 'del' ;
 MOVE       : 'move' | 'mv' ;
 RESIZE     : 'resize' ;

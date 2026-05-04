@@ -644,7 +644,16 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         executor.pushAction(new CutAction(scene, partName, cutout));
         // rebuildPartMesh handles mesh regeneration + markCutSheetDirty.
         scene.rebuildPartMesh(partName);
-        return "Added cutout to '" + partName + "': " + describeCutout(cutout, abbr);
+        String result = "Added cutout to '" + partName + "': " + describeCutout(cutout, abbr);
+        // Non-rect cutouts are recorded and appear in cut sheet + BOM, but
+        // the 3D mesh generator only handles rectangles today. Surface that
+        // gap once at command time so users aren't surprised by an unchanged
+        // 3D view. (PartMeshBuilder skips non-rects silently.)
+        if (!(cutout instanceof Cutout.Rect)) {
+            result += "\n  (Note: 3D mesh does not yet render non-rectangular cutouts; "
+                    + "the cutout still appears on the cut sheet and in the BOM.)";
+        }
+        return result;
     }
 
     private static boolean cutoutIntersectsPartFace(Cutout c, Part p) {
@@ -671,6 +680,16 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             // joint inference picks the face dynamically and constructs Rect directly.
             return new Cutout.Rect(x, y, w, h, depth, Cutout.Face.FRONT);
         }
+        if (ctx instanceof CadetteCommandParser.CircleCutShapeContext c) {
+            // AT <cx>, <cy> RADIUS <r> [DEPTH <d>] — expressions are
+            // evaluated against the active scope as for rect.
+            var exprs = c.expression();
+            float cx = toMm(evalFloat(exprs.get(0)));
+            float cy = toMm(evalFloat(exprs.get(1)));
+            float radius = toMm(evalFloat(exprs.get(2)));
+            Float depth = c.DEPTH() != null ? toMm(evalFloat(exprs.get(3))) : null;
+            return new Cutout.Circle(cx, cy, radius, depth, Cutout.Face.FRONT);
+        }
         throw new IllegalStateException("Unhandled cutShape alternative: "
                 + ctx.getClass().getSimpleName());
     }
@@ -685,6 +704,14 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                     fromMm(r.xMm()), fromMm(r.yMm()), abbr,
                     fromMm(r.widthMm()), fromMm(r.heightMm()), abbr,
                     depth);
+        }
+        if (cutout instanceof Cutout.Circle c) {
+            String depth = c.depthMm() != null
+                    ? String.format(" %.1f %s deep", fromMm(c.depthMm()), abbr)
+                    : " through";
+            return String.format("circle at (%.1f, %.1f) %s radius %.1f %s%s",
+                    fromMm(c.cxMm()), fromMm(c.cyMm()), abbr,
+                    fromMm(c.radiusMm()), abbr, depth);
         }
         return cutout.toString();  // variants not yet user-facing
     }
@@ -2237,6 +2264,11 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                   join <part1> to <part2> with <type> [depth N] [screws N] [spacing N]
                       types: butt, dado, rabbet, pocket_screw (or pocket)
                       depth required for dado/rabbet
+                  cut <part> rect at x,y size w,h [depth N]
+                                                     — remove a rectangular region from the cut face
+                  cut <part> circle at cx,cy radius r [depth N]
+                                                     — remove a circular region (e.g. 35mm hinge cup)
+                                                     — non-rect cutouts not yet rendered in 3D view
 
                   display names                    — show name labels on all objects
                   display name <name>              — show name labels on one object

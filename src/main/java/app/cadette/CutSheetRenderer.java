@@ -23,6 +23,7 @@ import app.cadette.model.GrainRequirement;
 import app.cadette.model.SheetLayout;
 
 import java.awt.*;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
 import java.awt.geom.Rectangle2D;
 import java.util.List;
@@ -281,9 +282,12 @@ public class CutSheetRenderer {
                 // Skip vanishingly small overlays so we don't draw noise pixels.
                 if (rect.width < 0.5f || rect.height < 0.5f) continue;
                 g2.draw(rect);
+            } else if (c instanceof Cutout.Circle ci) {
+                Ellipse2D.Float ellipse = circleCutoutToSheetEllipse(ci, part, px, py, scale);
+                if (ellipse.width < 0.5f || ellipse.height < 0.5f) continue;
+                g2.draw(ellipse);
             }
-            // Cutout.Circle / Polygon / Spline: skip until those variants are
-            // produced by the parser and need a sheet-overlay rendering pass.
+            // Cutout.Polygon / Spline: skip until those variants land.
         }
 
         g2.setStroke(originalStroke);
@@ -313,6 +317,29 @@ public class CutSheetRenderer {
                 py + c.yMm() * scale,
                 c.widthMm() * scale,
                 c.heightMm() * scale);
+    }
+
+    /**
+     * Map a {@link Cutout.Circle} from part-local cut-face space into the
+     * sheet's pixel space. A circle is rotation-symmetric, so layout
+     * rotation only swaps the center coordinates — the radius is unchanged.
+     * The returned {@link Ellipse2D.Float} is positioned at the bounding
+     * top-left, matching Java2D's convention.
+     *
+     * <p>Package-private for unit testing.
+     */
+    static Ellipse2D.Float circleCutoutToSheetEllipse(Cutout.Circle c, SheetLayout.PlacedPart part,
+                                                       float px, float py, float scale) {
+        float r = c.radiusMm() * scale;
+        float cx, cy;
+        if (part.isRotated()) {
+            cx = px + c.cyMm() * scale;
+            cy = py + c.cxMm() * scale;
+        } else {
+            cx = px + c.cxMm() * scale;
+            cy = py + c.cyMm() * scale;
+        }
+        return new Ellipse2D.Float(cx - r, cy - r, 2 * r, 2 * r);
     }
 
     private static void drawGrainLines(Graphics2D g2, float px, float py, float pw, float ph,

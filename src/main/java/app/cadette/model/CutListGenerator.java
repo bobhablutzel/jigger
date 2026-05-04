@@ -136,8 +136,15 @@ public class CutListGenerator {
                     units.fromMm(r.widthMm()), units.fromMm(r.heightMm()), abbr,
                     units.fromMm(r.xMm()), units.fromMm(r.yMm()), depthStr);
         }
-        // Stub variants not yet reachable through the grammar, but will need
-        // their own describeCutout branches when they land.
+        if (cutout instanceof Cutout.Circle c) {
+            String depthStr = c.depthMm() != null
+                    ? String.format(" %.1f %s deep", units.fromMm(c.depthMm()), abbr)
+                    : " through";
+            return String.format("cutout circle ⌀%.1f %s at (%.1f, %.1f)%s",
+                    units.fromMm(c.radiusMm() * 2f), abbr,
+                    units.fromMm(c.cxMm()), units.fromMm(c.cyMm()), depthStr);
+        }
+        // Polygon / Spline variants not yet reachable through the grammar.
         return "cutout " + cutout.getClass().getSimpleName().toLowerCase();
     }
 
