@@ -961,10 +961,11 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             if (layouts.isEmpty()) {
                 return "No sheet goods in scene (only hardwood/metal parts) — nothing to export.";
             }
+            var cutouts = scene.getEffectiveCutouts();
             if (isPdf) {
-                CutSheetExporter.exportPdf(layouts, units, outputPath);
+                CutSheetExporter.exportPdf(layouts, units, outputPath, cutouts);
             } else {
-                CutSheetExporter.exportImage(layouts, units, outputPath);
+                CutSheetExporter.exportImage(layouts, units, outputPath, cutouts);
             }
             return "Exported cut sheets to " + outputPath.toAbsolutePath();
         } catch (Exception e) {

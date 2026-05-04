@@ -18,6 +18,7 @@
 
 package app.cadette;
 
+import app.cadette.model.Cutout;
 import app.cadette.model.GrainRequirement;
 import app.cadette.model.SheetLayout;
 
@@ -25,6 +26,7 @@ import java.awt.*;
 import java.awt.geom.Line2D;
 import java.awt.geom.Rectangle2D;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -45,6 +47,11 @@ public class CutSheetRenderer {
     static final Color DIM_COLOR = new Color(80, 80, 80);
     static final Color EMPTY_TEXT_COLOR = new Color(140, 140, 140);
     static final Color SELECTION_BORDER = new Color(40, 120, 255);
+    // Cutout overlays — dashed lines distinct from grain and part borders.
+    static final Color CUTOUT_COLOR = new Color(180, 50, 40);
+    static final Stroke CUTOUT_STROKE = new BasicStroke(
+            1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+            10f, new float[]{4f, 3f}, 0f);
 
     /** Screen rectangle for a rendered part, used for click hit-testing. */
     public record PartRect(String partName, Rectangle2D.Float rect) {}
@@ -56,11 +63,19 @@ public class CutSheetRenderer {
     static final int SHEET_GAP = 40;
     static final int HEADER_HEIGHT = 24;
 
-    /** Render without selection or hit-testing (for export). */
+    /** Render without selection, hit-testing, or cutout overlays (for export defaults). */
     public static void render(Graphics2D g2, int width, int height,
                               List<SheetLayout> layouts, UnitSystem units,
                               boolean forExport) {
-        render(g2, width, height, layouts, units, forExport, Set.of(), null);
+        render(g2, width, height, layouts, units, forExport, Set.of(), null, Map.of());
+    }
+
+    /** Render with selection + hit-testing but no cutout overlays. */
+    public static void render(Graphics2D g2, int width, int height,
+                              List<SheetLayout> layouts, UnitSystem units,
+                              boolean forExport, Set<String> selectedParts,
+                              List<PartRect> hitRects) {
+        render(g2, width, height, layouts, units, forExport, selectedParts, hitRects, Map.of());
     }
 
     /**
@@ -74,11 +89,15 @@ public class CutSheetRenderer {
      * @param forExport     if true, use export-friendly colors (white background)
      * @param selectedParts part names to highlight with a selection border
      * @param hitRects      if non-null, populated with screen rectangles for hit-testing
+     * @param partCutouts   cutouts (explicit + joint-inferred) keyed by part name;
+     *                      drawn as dashed-line overlays on each placed part. Pass
+     *                      an empty map to skip cutout rendering.
      */
     public static void render(Graphics2D g2, int width, int height,
                               List<SheetLayout> layouts, UnitSystem units,
                               boolean forExport, Set<String> selectedParts,
-                              List<PartRect> hitRects) {
+                              List<PartRect> hitRects,
+                              Map<String, List<Cutout>> partCutouts) {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
@@ -113,7 +132,7 @@ public class CutSheetRenderer {
                 rowHeight = 0;
             }
 
-            drawSheet(g2, layout, x, y, scale, units, i + 1, forExport, selectedParts, hitRects);
+            drawSheet(g2, layout, x, y, scale, units, i + 1, forExport, selectedParts, hitRects, partCutouts);
 
             x += sheetW + SHEET_GAP;
             rowHeight = Math.max(rowHeight, sheetH);
@@ -163,7 +182,8 @@ public class CutSheetRenderer {
     private static void drawSheet(Graphics2D g2, SheetLayout layout, int ox, int oy,
                                    float scale, UnitSystem units, int sheetNumber,
                                    boolean forExport, Set<String> selectedParts,
-                                   List<PartRect> hitRects) {
+                                   List<PartRect> hitRects,
+                                   Map<String, List<Cutout>> partCutouts) {
         float sw = layout.getSheetWidthMm() * scale;
         float sh = layout.getSheetHeightMm() * scale;
 
@@ -220,6 +240,10 @@ public class CutSheetRenderer {
             }
             g2.draw(new Rectangle2D.Float(px, py, pw, ph));
 
+            // Cutout overlays (dashed) — drawn on top of the part fill but
+            // under the label so labels stay legible when overlapping cuts.
+            drawCutoutOverlays(g2, part, px, py, scale, partCutouts);
+
             // Label: part name + dimensions
             drawPartLabel(g2, part, px, py, pw, ph, units);
 
@@ -232,6 +256,63 @@ public class CutSheetRenderer {
 
         // Sheet dimensions along edges
         drawSheetDimensions(g2, layout, ox, sheetY, sw, sh, units);
+    }
+
+    /**
+     * Draw dashed-line overlays for each rectangular cutout on the placed part.
+     * Non-rect cutout variants (Circle, Polygon, Spline) are skipped — they'll
+     * land here when their respective Phase E renderers are wired up.
+     */
+    private static void drawCutoutOverlays(Graphics2D g2, SheetLayout.PlacedPart part,
+                                            float px, float py, float scale,
+                                            Map<String, List<Cutout>> partCutouts) {
+        List<Cutout> cutouts = partCutouts.getOrDefault(part.getPartName(), List.of());
+        if (cutouts.isEmpty()) return;
+
+        Stroke originalStroke = g2.getStroke();
+        Color originalColor = g2.getColor();
+
+        g2.setColor(CUTOUT_COLOR);
+        g2.setStroke(CUTOUT_STROKE);
+
+        for (Cutout c : cutouts) {
+            if (c instanceof Cutout.Rect r) {
+                Rectangle2D.Float rect = cutoutToSheetRect(r, part, px, py, scale);
+                // Skip vanishingly small overlays so we don't draw noise pixels.
+                if (rect.width < 0.5f || rect.height < 0.5f) continue;
+                g2.draw(rect);
+            }
+            // Cutout.Circle / Polygon / Spline: skip until those variants are
+            // produced by the parser and need a sheet-overlay rendering pass.
+        }
+
+        g2.setStroke(originalStroke);
+        g2.setColor(originalColor);
+    }
+
+    /**
+     * Map a {@link Cutout.Rect} from part-local cut-face space into the
+     * sheet's pixel space. When the part is rotated 90° on the sheet
+     * (layout rotation, not 3D scene rotation), local X and Y axes swap —
+     * a cutout at part-local (cx, cy) lands at sheet ({@code px + cy*scale},
+     * {@code py + cx*scale}) with width and height also swapped.
+     *
+     * <p>Package-private for unit testing.
+     */
+    static Rectangle2D.Float cutoutToSheetRect(Cutout.Rect c, SheetLayout.PlacedPart part,
+                                                float px, float py, float scale) {
+        if (part.isRotated()) {
+            return new Rectangle2D.Float(
+                    px + c.yMm() * scale,
+                    py + c.xMm() * scale,
+                    c.heightMm() * scale,
+                    c.widthMm() * scale);
+        }
+        return new Rectangle2D.Float(
+                px + c.xMm() * scale,
+                py + c.yMm() * scale,
+                c.widthMm() * scale,
+                c.heightMm() * scale);
     }
 
     private static void drawGrainLines(Graphics2D g2, float px, float py, float pw, float ph,

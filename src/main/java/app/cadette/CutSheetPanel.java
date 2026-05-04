@@ -138,7 +138,8 @@ public class CutSheetPanel extends JPanel implements javax.swing.Scrollable {
         hitRects.clear();
         Graphics2D g2 = (Graphics2D) g.create();
         CutSheetRenderer.render(g2, getWidth(), getHeight(), cachedLayouts,
-                unitsSupplier.get(), false, selectedParts, hitRects);
+                unitsSupplier.get(), false, selectedParts, hitRects,
+                sceneManager.getEffectiveCutouts());
         g2.dispose();
     }
 

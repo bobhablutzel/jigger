@@ -58,11 +58,21 @@ public class CutSheetExporter {
     private static final float PDF_SHEET_GAP = 30;
     private static final float PDF_HEADER_GAP = 16;
 
-    /**
-     * Export layouts as a PNG or JPEG image.
-     */
+    /** Export layouts as a PNG or JPEG image without cutout overlays (legacy callers). */
     public static void exportImage(List<SheetLayout> layouts, UnitSystem units,
                                    Path outputPath) throws IOException {
+        exportImage(layouts, units, outputPath, java.util.Map.of());
+    }
+
+    /**
+     * Export layouts as a PNG or JPEG image, with optional per-part cutout
+     * overlays on each sheet (use {@link SceneManager#getEffectiveCutouts()}
+     * at the call site to populate the map).
+     */
+    public static void exportImage(List<SheetLayout> layouts, UnitSystem units,
+                                   Path outputPath,
+                                   java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts)
+            throws IOException {
         String ext = getExtension(outputPath).toLowerCase();
         if (!ext.equals("png") && !ext.equals("jpg") && !ext.equals("jpeg")) {
             throw new IOException("Unsupported image format: " + ext + ". Use png, jpg, or jpeg.");
@@ -71,19 +81,29 @@ public class CutSheetExporter {
         int height = CutSheetRenderer.computeTotalHeight(IMAGE_WIDTH, layouts);
         BufferedImage image = new BufferedImage(IMAGE_WIDTH, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = image.createGraphics();
-        CutSheetRenderer.render(g2, IMAGE_WIDTH, height, layouts, units, true);
+        CutSheetRenderer.render(g2, IMAGE_WIDTH, height, layouts, units, true,
+                java.util.Set.of(), null, partCutouts);
         g2.dispose();
 
         String formatName = ext.equals("jpg") ? "jpeg" : ext;
         ImageIO.write(image, formatName, outputPath.toFile());
     }
 
+    /** Export PDF without cutout overlays (legacy callers). */
+    public static void exportPdf(List<SheetLayout> layouts, UnitSystem units,
+                                 Path outputPath) throws IOException {
+        exportPdf(layouts, units, outputPath, java.util.Map.of());
+    }
+
     /**
      * Export layouts as a multi-page PDF with vector graphics.
      * Each sheet of material gets its own PDF page for clear printing.
+     * Per-part rect cutouts are overlaid as dashed red outlines when supplied.
      */
     public static void exportPdf(List<SheetLayout> layouts, UnitSystem units,
-                                 Path outputPath) throws IOException {
+                                 Path outputPath,
+                                 java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts)
+            throws IOException {
         try (PDDocument doc = new PDDocument()) {
             PDType1Font fontBold = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
             PDType1Font fontNormal = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
@@ -99,7 +119,7 @@ public class CutSheetExporter {
 
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                     drawPdfSheet(cs, layout, i + 1, units, pageW, pageH,
-                            fontBold, fontNormal, fontItalic);
+                            fontBold, fontNormal, fontItalic, partCutouts);
                 }
             }
 
@@ -124,7 +144,9 @@ public class CutSheetExporter {
                                      int sheetNumber, UnitSystem units,
                                      float pageW, float pageH,
                                      PDType1Font fontBold, PDType1Font fontNormal,
-                                     PDType1Font fontItalic) throws IOException {
+                                     PDType1Font fontItalic,
+                                     java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts)
+            throws IOException {
         // Compute scale to fit sheet within page margins
         float drawableW = pageW - 2 * PDF_MARGIN;
         float drawableH = pageH - 2 * PDF_MARGIN - PDF_HEADER_GAP - PDF_HEADER_SIZE - 20;
@@ -197,6 +219,13 @@ public class CutSheetExporter {
             cs.addRect(px, py, pw, ph);
             cs.stroke();
 
+            // Cutout overlays (dashed) — same dashed-red treatment as
+            // CutSheetRenderer's Java2D path, but using PDFBox's line API
+            // and PDF's bottom-left origin (so the part-local Y → PDF Y
+            // mapping is inverted relative to the Java2D version).
+            drawPdfCutoutOverlays(cs, part, px, py, ph, scale,
+                    partCutouts.getOrDefault(part.getPartName(), List.of()));
+
             // Part label
             drawPdfPartLabel(cs, part, px, py, pw, ph, units,
                     fontNormal, fontItalic);
@@ -229,6 +258,45 @@ public class CutSheetExporter {
         cs.showText(hText);
         cs.endText();
         cs.restoreGraphicsState();
+    }
+
+    /**
+     * Dashed-line cutout overlays in PDF space. The math mirrors
+     * {@link CutSheetRenderer#cutoutToSheetRect} but inverts Y because
+     * PDF's origin is bottom-left and the placed-rect's {@code (px, py)}
+     * here is its bottom-left corner — so part-local cy=0 (top of the
+     * placed rect in display) maps to PDF y = py + ph, with cy growing
+     * downward in display = decreasing PDF y.
+     */
+    private static void drawPdfCutoutOverlays(PDPageContentStream cs,
+                                              SheetLayout.PlacedPart part,
+                                              float px, float py, float ph, float scale,
+                                              List<app.cadette.model.Cutout> cutouts)
+            throws IOException {
+        if (cutouts.isEmpty()) return;
+        setStrokeColor(cs, CutSheetRenderer.CUTOUT_COLOR);
+        cs.setLineWidth(0.5f);
+        cs.setLineDashPattern(new float[]{2.5f, 2f}, 0);
+        for (app.cadette.model.Cutout c : cutouts) {
+            if (!(c instanceof app.cadette.model.Cutout.Rect r)) continue;
+            float cx, cy, cw, ch;
+            if (part.isRotated()) {
+                cx = px + r.yMm() * scale;
+                cy = py + ph - (r.xMm() + r.widthMm()) * scale;
+                cw = r.heightMm() * scale;
+                ch = r.widthMm() * scale;
+            } else {
+                cx = px + r.xMm() * scale;
+                cy = py + ph - (r.yMm() + r.heightMm()) * scale;
+                cw = r.widthMm() * scale;
+                ch = r.heightMm() * scale;
+            }
+            if (cw < 0.5f || ch < 0.5f) continue;
+            cs.addRect(cx, cy, cw, ch);
+            cs.stroke();
+        }
+        // Reset dash pattern so subsequent strokes (label baselines, etc.) are solid.
+        cs.setLineDashPattern(new float[]{}, 0);
     }
 
     private static void drawPdfGrainLines(PDPageContentStream cs,

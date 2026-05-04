@@ -681,6 +681,25 @@ public class SceneManager extends SimpleApplication implements JointGeometryCont
         this.warningSink = sink;
     }
 
+    /**
+     * Per-part cutout map combining each part's explicit cutouts with any
+     * joint-inferred cutouts where it's the receiver. Used by the cut-sheet
+     * renderer to overlay all cuts (user-typed and joint-derived) on the
+     * layout. Suppresses the inferrer's warning sink — sheet rendering
+     * shouldn't emit mesh-build warnings.
+     */
+    public java.util.Map<String, java.util.List<Cutout>> getEffectiveCutouts() {
+        java.util.Map<String, Part> partsCopy = getAllParts();
+        return partsCopy.values().stream().collect(java.util.stream.Collectors.toMap(
+                Part::getName,
+                p -> {
+                    java.util.List<Cutout> all = new ArrayList<>(p.getCutouts());
+                    all.addAll(JointCutoutInferrer.inferFor(
+                            p, jointRegistry, partsCopy, this, msg -> {}));
+                    return all;
+                }));
+    }
+
     private com.jme3.scene.Mesh buildPartMesh(Part part) {
         List<Cutout> inferred = JointCutoutInferrer.inferFor(
                 part, jointRegistry, parts, this, warningSink);
