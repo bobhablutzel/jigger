@@ -77,7 +77,7 @@ public final class JointValidator {
                 || p.maxY() >= h - EPSILON_MM;
         if (!touchesEdge) {
             issues.add(new ValidationIssue(j, ValidationIssue.Severity.WARNING,
-                    String.format("rabbet on '%s' ← '%s' sits interior to the receiver "
+                    sourcePrefix(j) + String.format("rabbet on '%s' ← '%s' sits interior to the receiver "
                                     + "(footprint x=%.1f..%.1f, y=%.1f..%.1f, receiver=%.1f×%.1f) "
                                     + "— a rabbet should land at an edge",
                             j.receivingPartName(), j.insertedPartName(),
@@ -93,7 +93,7 @@ public final class JointValidator {
         if (p.minX() < -EPSILON_MM || p.maxX() > w + EPSILON_MM
                 || p.minY() < -EPSILON_MM || p.maxY() > h + EPSILON_MM) {
             issues.add(new ValidationIssue(j, ValidationIssue.Severity.ERROR,
-                    String.format("%s on '%s' ← '%s' extends past receiver bounds: "
+                    sourcePrefix(j) + String.format("%s on '%s' ← '%s' extends past receiver bounds: "
                                     + "footprint x=%.1f..%.1f, y=%.1f..%.1f, receiver=%.1f×%.1f",
                             label, j.receivingPartName(), j.insertedPartName(),
                             p.minX(), p.maxX(), p.minY(), p.maxY(), w, h)));
@@ -105,10 +105,22 @@ public final class JointValidator {
         float t = receiver.getThicknessMm();
         if (p.maxZ() < -EPSILON_MM || p.minZ() > t + EPSILON_MM) {
             issues.add(new ValidationIssue(j, ValidationIssue.Severity.ERROR,
-                    String.format("%s on '%s' ← '%s' parts not engaged: inserted's Z range "
+                    sourcePrefix(j) + String.format("%s on '%s' ← '%s' parts not engaged: inserted's Z range "
                                     + "%.1f..%.1f does not overlap receiver's 0..%.1f",
                             label, j.receivingPartName(), j.insertedPartName(),
                             p.minZ(), p.maxZ(), t)));
         }
+    }
+
+    /**
+     * Source attribution prefix for a validation message — empty string
+     * if the joint has no source recorded (programmatic construction in
+     * tests), otherwise {@code "(<source>:<line>) "}. Joints created
+     * through the visitor always carry source as of step #3 of the
+     * validation work.
+     */
+    private static String sourcePrefix(Joint j) {
+        SourceLocation src = j.source();
+        return src == null ? "" : "(" + src + ") ";
     }
 }

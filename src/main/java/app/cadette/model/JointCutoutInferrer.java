@@ -81,11 +81,13 @@ public final class JointCutoutInferrer {
 
     private static String formatOutOfBoundsWarning(Joint j, Part receiver, Cutout c) {
         BoundingBox b = c.bounds();
+        String src = j.source() == null ? "" : "(" + j.source() + ") ";
         return String.format(
-                "joint cutout warning: %s on '%s' ← '%s' — projected cutout "
+                "%sjoint cutout warning: %s on '%s' ← '%s' — projected cutout "
                         + "(x=%.1f, y=%.1f, %.1f×%.1f) falls entirely outside "
                         + "receiver (%.1f×%.1f); silently dropping. Check that "
                         + "the parts are positioned to engage the joint.",
+                src,
                 j.type().name().toLowerCase(),
                 receiver.getName(), j.insertedPartName(),
                 b.xMm(), b.yMm(), b.widthMm(), b.heightMm(),

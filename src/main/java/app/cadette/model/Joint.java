@@ -72,12 +72,27 @@ public sealed interface Joint
         return List.of();
     }
 
-    record Butt(String receivingPartName, String insertedPartName) implements Joint {
+    /**
+     * Where this joint was defined in script. Null when the joint was
+     * constructed programmatically (most tests). The visitor populates
+     * this from the parser context's start token + the executor's
+     * effective source string. Validation messages attribute issues back
+     * to this location when present.
+     */
+    SourceLocation source();
+
+    record Butt(String receivingPartName, String insertedPartName, SourceLocation source) implements Joint {
+        public Butt(String receivingPartName, String insertedPartName) {
+            this(receivingPartName, insertedPartName, null);
+        }
         @Override public JointType type() { return JointType.BUTT; }
     }
 
-    record Dado(String receivingPartName, String insertedPartName, float depthMm)
+    record Dado(String receivingPartName, String insertedPartName, float depthMm, SourceLocation source)
             implements Joint {
+        public Dado(String receivingPartName, String insertedPartName, float depthMm) {
+            this(receivingPartName, insertedPartName, depthMm, null);
+        }
         @Override public JointType type() { return JointType.DADO; }
 
         @Override
@@ -96,8 +111,11 @@ public sealed interface Joint
         }
     }
 
-    record Rabbet(String receivingPartName, String insertedPartName, float depthMm)
+    record Rabbet(String receivingPartName, String insertedPartName, float depthMm, SourceLocation source)
             implements Joint {
+        public Rabbet(String receivingPartName, String insertedPartName, float depthMm) {
+            this(receivingPartName, insertedPartName, depthMm, null);
+        }
         @Override public JointType type() { return JointType.RABBET; }
 
         @Override
@@ -120,7 +138,11 @@ public sealed interface Joint
     }
 
     record PocketScrew(String receivingPartName, String insertedPartName,
-                       int screwCount, float screwSpacingMm) implements Joint {
+                       int screwCount, float screwSpacingMm, SourceLocation source) implements Joint {
+        public PocketScrew(String receivingPartName, String insertedPartName,
+                           int screwCount, float screwSpacingMm) {
+            this(receivingPartName, insertedPartName, screwCount, screwSpacingMm, null);
+        }
         @Override public JointType type() { return JointType.POCKET_SCREW; }
         // No cutout. Future: hardware contribution to BOM.
     }

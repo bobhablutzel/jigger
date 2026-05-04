@@ -590,12 +590,14 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             }
         }
 
+        SourceLocation src = new SourceLocation(executor.effectiveSource(),
+                ctx.getStart().getLine());
         Joint joint = switch (type) {
-            case BUTT -> new Joint.Butt(receivingName, insertedName);
-            case DADO -> new Joint.Dado(receivingName, insertedName, depthMm);
-            case RABBET -> new Joint.Rabbet(receivingName, insertedName, depthMm);
+            case BUTT -> new Joint.Butt(receivingName, insertedName, src);
+            case DADO -> new Joint.Dado(receivingName, insertedName, depthMm, src);
+            case RABBET -> new Joint.Rabbet(receivingName, insertedName, depthMm, src);
             case POCKET_SCREW -> new Joint.PocketScrew(receivingName, insertedName,
-                    screwCount, screwSpacingMm);
+                    screwCount, screwSpacingMm, src);
         };
 
         scene.getJointRegistry().addJoint(joint);

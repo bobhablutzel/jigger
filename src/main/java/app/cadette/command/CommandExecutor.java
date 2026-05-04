@@ -132,6 +132,14 @@ public class CommandExecutor {
     // references with "<prefix>/" so a body-line "left-side" becomes "K/left-side".
     @Getter(AccessLevel.PACKAGE) private String currentInstancePrefix = null;
 
+    // Source string of the template currently being instantiated (mirrors
+    // currentInstancePrefix). When non-null, visitors that record source
+    // attribution (e.g. visitJoinCommand) prefer this over currentLoadingSource
+    // so source lines stay stable across multiple instantiations of the same
+    // template — important for source-location-keyed dedup of validation
+    // messages. See project_joint_validation_dedup_backlog.md.
+    private String currentInstanceTemplateSource = null;
+
     // Ordered list of namespace prefixes searched when a bare template name
     // (no slashes) is referenced. Mutated by the `using` command. Script-scoped:
     // see runScriptIsolated.
@@ -148,6 +156,18 @@ public class CommandExecutor {
 
     public CommandExecutor(SceneManager scene) {
         this.scene = scene;
+    }
+
+    /**
+     * Effective source attribution for an element being created right now.
+     * Prefers the active template's source (so joints inside a template
+     * body keep a stable source across instantiations), falling back to the
+     * loading-script source, then to "interactive".
+     */
+    public String effectiveSource() {
+        if (currentInstanceTemplateSource != null) return currentInstanceTemplateSource;
+        if (currentLoadingSource != null) return currentLoadingSource;
+        return "interactive";
     }
 
     // Hand-coded: fires change listeners on write. @Setter can't express dispatch.
@@ -510,7 +530,9 @@ public class CommandExecutor {
 
         suppressUndo = true;
         String previousPrefix = currentInstancePrefix;
+        String previousTemplateSource = currentInstanceTemplateSource;
         currentInstancePrefix = instanceName;
+        currentInstanceTemplateSource = template.getSource();
         pushVarScope(vars);
         try {
             // Tree-walking instantiation: the body parsed once at define time;
@@ -525,6 +547,7 @@ public class CommandExecutor {
             popVarScope();
             suppressUndo = false;
             currentInstancePrefix = previousPrefix;
+            currentInstanceTemplateSource = previousTemplateSource;
             lastCreatedPartName = null;
         }
 

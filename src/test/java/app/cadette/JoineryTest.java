@@ -279,6 +279,66 @@ class JoineryTest extends HeadlessTestBase {
     }
 
     @Test
+    void joint_capturesSourceFromInteractiveCommand() {
+        // Joint created via exec() (REPL-style) gets the "interactive"
+        // source marker. Line number comes from the parser context — for a
+        // single-line exec() input that's line 1.
+        exec("create base_cabinet K w 500 h 600 d 400");
+        var joints = sceneManager.getJointRegistry().getAllJoints();
+        // base_cabinet's joints come from the bundled template, not REPL.
+        // For this test, do a manual interactive join instead:
+        exec("create part \"R\" material \"plywood-18mm\" size 100, 200 at 0, 0, 0");
+        exec("create part \"I\" material \"plywood-18mm\" size 50, 30 at 25, 100, 9");
+        exec("join \"R\" to \"I\" with dado depth 9");
+
+        Joint j = sceneManager.getJointRegistry().getJoint("R->I:DADO");
+        assertNotNull(j, "expected joint R->I:DADO to be registered");
+        assertNotNull(j.source(), "joint should carry source location");
+        assertEquals("interactive", j.source().source());
+        assertEquals(1, j.source().line(), "single-line exec should report line 1");
+    }
+
+    @Test
+    void joint_capturesSourceFromTemplate_stableAcrossInstantiations() {
+        // Define a template interactively, then instantiate it twice. Both
+        // instances' joints should carry the SAME source (the template's
+        // source string), proving the source is template-stable — the
+        // property the dedup backlog needs.
+        exec("define \"box_with_dado\" params width, height, depth");
+        exec("create part \"left\" material \"plywood-18mm\" size $depth, $height at 0,0,0");
+        exec("rotate \"left\" 0,90,0");
+        exec("create part \"bottom\" material \"plywood-18mm\" size $width, $depth at 0,0,0");
+        exec("rotate \"bottom\" -90,0,0");
+        exec("join \"left\" to \"bottom\" with dado depth 9");
+        exec("end define");
+
+        exec("create box_with_dado A w 500 h 300 d 400");
+        exec("create box_with_dado B at 1000, 0, 0 w 500 h 300 d 400");
+
+        Joint jA = sceneManager.getJointRegistry().getJoint("A/left->A/bottom:DADO");
+        Joint jB = sceneManager.getJointRegistry().getJoint("B/left->B/bottom:DADO");
+        assertNotNull(jA);
+        assertNotNull(jB);
+        assertNotNull(jA.source(), "instance A's joint should have source");
+        assertNotNull(jB.source(), "instance B's joint should have source");
+        assertEquals(jA.source(), jB.source(),
+                "both instances must share the template-stable source for dedup to work");
+    }
+
+    @Test
+    void validate_messageIncludesSourceAttribution() {
+        // A broken joint validated through the validate command should
+        // surface source info in the message text.
+        exec("create part \"R\" material \"plywood-18mm\" size 100, 200 at 0, 0, 0");
+        exec("create part \"I\" material \"plywood-18mm\" size 50, 30 at 25, 100, 200");
+        exec("join \"R\" to \"I\" with dado depth 9");
+
+        String result = exec("validate");
+        assertTrue(result.contains("(interactive:1)"),
+                "expected source attribution prefix in message: " + result);
+    }
+
+    @Test
     void testJoinInTemplate() {
         // Joints should work inside template definitions
         exec("define \"joined_box\" params width, height, depth");
