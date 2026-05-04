@@ -100,6 +100,7 @@ FOR        : 'for' ;
 WHICH      : 'which' ;
 STATS      : 'stats' ;
 VALIDATE   : 'validate' ;
+SCRIPT_PATH : 'script_path' | 'script-path' ;
 RUN        : 'run' -> pushMode(PATH_MODE) ;
 LPAREN     : '(' ;
 RPAREN     : ')' ;

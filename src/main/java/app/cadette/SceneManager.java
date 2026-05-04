@@ -79,6 +79,13 @@ public class SceneManager extends SimpleApplication implements JointGeometryCont
     private CameraController cameraController;
     private BitmapFont labelFont;
 
+    // Geometry-warning sink for diagnostics that fire during mesh rebuild —
+    // currently the joint-cutout out-of-bounds warning. Defaults to stderr
+    // so headless / CLI runs still see it; the GUI overrides this in
+    // CadetteApp to route warnings into CommandPanel. Messages are
+    // newline-free; consumers add their own line break if needed.
+    private java.util.function.Consumer<String> warningSink = System.err::println;
+
     /** Immutable record of the parameters used to create an object. */
     public record ObjectRecord(String name, String shapeType, Vector3f position,
                                Vector3f size, ColorRGBA color) {}
@@ -669,9 +676,14 @@ public class SceneManager extends SimpleApplication implements JointGeometryCont
      * The inferred set follows the parts when they move because it's
      * recomputed every time the mesh is rebuilt.
      */
+    /** Override the warning sink — called from CadetteApp to route into CommandPanel. */
+    public void setWarningSink(java.util.function.Consumer<String> sink) {
+        this.warningSink = sink;
+    }
+
     private com.jme3.scene.Mesh buildPartMesh(Part part) {
         List<Cutout> inferred = JointCutoutInferrer.inferFor(
-                part, jointRegistry, parts, this, System.err::println);
+                part, jointRegistry, parts, this, warningSink);
         if (inferred.isEmpty()) {
             return PartMeshBuilder.build(part);
         }

@@ -78,6 +78,9 @@ public class CadetteApp {
         executor.loadTemplates();
 
         CommandPanel commandPanel = new CommandPanel(executor);
+        // Route mesh-build warnings (e.g. joint cutouts that fall outside
+        // their receiver) to the user-visible output panel instead of stderr.
+        sceneManager.setWarningSink(msg -> commandPanel.appendOutput(msg + "\n"));
         SelectionManager selectionManager = new SelectionManager(sceneManager);
         wireSelectionHighlights(selectionManager, commandPanel);
 

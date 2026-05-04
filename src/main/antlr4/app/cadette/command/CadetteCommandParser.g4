@@ -280,6 +280,7 @@ showTarget
     | CUTLIST
     | BOM
     | LAYOUT
+    | SCRIPT_PATH
     ;
 
 setCommand
@@ -287,6 +288,16 @@ setCommand
     | SET MATERIAL materialName
     | SET KERF expression
     | SET LAYOUT layoutMode
+    | SET SCRIPT_PATH scriptPathSpec
+    ;
+
+// `set script_path "..." [, "..."]` replaces the user-configured prefix
+// of the search path; `set script_path none` clears it. The default tail
+// (`~/.cadette/scripts/`, `./scripts/`) is always tried after the user
+// entries — clearing the user portion just means falling back to defaults.
+scriptPathSpec
+    : NONE
+    | STRING (COMMA STRING)*
     ;
 
 layoutMode

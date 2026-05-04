@@ -801,7 +801,27 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         if (target.LAYOUT() != null) {
             return showLayout();
         }
-        return "Unknown show target. Try: show units, show objects, show materials, show templates, show joints, show cutlist, show bom, show layout";
+        if (target.SCRIPT_PATH() != null) {
+            return showScriptPath();
+        }
+        return "Unknown show target. Try: show units, show objects, show materials, show templates, show joints, show cutlist, show bom, show layout, show script_path";
+    }
+
+    private String showScriptPath() {
+        List<Path> userEntries = executor.getUserScriptPath();
+        StringBuilder sb = new StringBuilder();
+        if (userEntries.isEmpty()) {
+            sb.append("Script search path: defaults only (no user entries set).");
+        } else {
+            sb.append("Script search path (user entries): ");
+            sb.append(userEntries.stream().map(Path::toString).collect(Collectors.joining(", ")));
+            sb.append(".");
+        }
+        sb.append("\nEffective search order:");
+        for (Path p : executor.effectiveScriptSearchPath()) {
+            sb.append("\n  ").append(p);
+        }
+        return sb.toString();
     }
 
     @Override
@@ -841,7 +861,55 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             executor.setLayoutMode(mode);
             return "Layout set to " + (mode == ViewLayoutMode.TABBED ? "tabbed" : "split pane") + ".";
         }
+        if (ctx.scriptPathSpec() != null) {
+            var spec = ctx.scriptPathSpec();
+            List<Path> entries;
+            if (spec.NONE() != null) {
+                entries = List.of();
+            } else {
+                entries = spec.STRING().stream()
+                        .map(t -> stripQuotes(t.getText()))
+                        .map(CommandVisitor::expandUserHome)
+                        .toList();
+            }
+            List<Path> oldPath = executor.getUserScriptPath();
+            executor.pushAction(new SetScriptPathAction(executor::setUserScriptPath, oldPath, entries));
+            executor.setUserScriptPath(entries);
+            return formatScriptPathStatus(entries);
+        }
         return "Unknown set target.";
+    }
+
+    /**
+     * Tilde-expand a user-supplied path string. {@code Path.of("~/foo")}
+     * does not expand the tilde — it would create a literal directory
+     * named "~" — so we handle the {@code ~} and {@code ~/} prefixes here.
+     */
+    private static Path expandUserHome(String s) {
+        if (s.equals("~")) return Path.of(System.getProperty("user.home"));
+        if (s.startsWith("~/")) return Path.of(System.getProperty("user.home"), s.substring(2));
+        return Path.of(s);
+    }
+
+    private String formatScriptPathStatus(List<Path> userEntries) {
+        StringBuilder sb = new StringBuilder();
+        if (userEntries.isEmpty()) {
+            sb.append("Script search path cleared (defaults only).");
+        } else {
+            sb.append("Script search path set to: ");
+            sb.append(userEntries.stream().map(Path::toString).collect(Collectors.joining(", ")));
+            sb.append(".");
+        }
+        sb.append("\nEffective search order:");
+        for (Path p : executor.effectiveScriptSearchPath()) {
+            sb.append("\n  ").append(p);
+        }
+        return sb.toString();
+    }
+
+    private static String stripQuotes(String s) {
+        return (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\""))
+                ? s.substring(1, s.length() - 1) : s;
     }
 
     @Override
@@ -1494,7 +1562,25 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 .collect(Collectors.joining(", "));
         if (summary.isEmpty()) summary = "none";
 
-        return "Joints:\n" + body + "\n\nSummary: " + summary;
+        // Quick health check — same predicates as `validate`, but just the
+        // count, since a list view shouldn't dump full issue text.
+        List<ValidationIssue> issues = collectJointIssues(joints);
+        String validation;
+        if (issues.isEmpty()) {
+            validation = "all OK.";
+        } else {
+            long errors = issues.stream()
+                    .filter(i -> i.severity() == ValidationIssue.Severity.ERROR).count();
+            long warnings = issues.size() - errors;
+            validation = String.format("%d issue%s (%d error%s, %d warning%s) — run `validate` for details.",
+                    issues.size(), issues.size() == 1 ? "" : "s",
+                    errors, errors == 1 ? "" : "s",
+                    warnings, warnings == 1 ? "" : "s");
+        }
+
+        return "Joints:\n" + body
+                + "\n\nSummary: " + summary
+                + "\nValidation: " + validation;
     }
 
     private String showCutList() {
@@ -2164,10 +2250,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                   show cutlist                     — cut list grouped by material
                   show bom                         — bill of materials + fasteners
                   show layout                      — sheet layout optimization (bin packing)
+                  show script_path                 — current script search path + effective order
                   set units <unit>                 — change display/input units
                   set material <mat>               — change default material
                   set kerf <value>                 — saw blade kerf width (default 3.2mm)
                   set layout tabs|split           — switch between tabbed and split-pane view
+                  set script_path "<dir>"[,...]   — script search prefix; 'none' clears
+                                                     (defaults ~/.cadette/scripts/ and ./scripts/ always tried after)
                   export cutsheet pdf [file]      — export cut sheets to PDF (opens save dialog if no file)
                   export cutsheet png [file]      — export cut sheets to PNG image
                   export cutsheet jpg [file]      — export cut sheets to JPEG image

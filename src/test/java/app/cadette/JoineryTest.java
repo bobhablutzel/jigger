@@ -239,6 +239,29 @@ class JoineryTest extends HeadlessTestBase {
     }
 
     @Test
+    void showJoints_includesValidationSummary_allOk() {
+        exec("create base_cabinet K w 500 h 600 d 400");
+        String result = exec("show joints");
+        System.out.println(result);
+        assertTrue(result.contains("Validation: all OK"),
+                "expected clean validation summary: " + result);
+    }
+
+    @Test
+    void showJoints_includesValidationSummary_withIssues() {
+        exec("create part \"R\" material \"plywood-18mm\" size 100, 200 at 0, 0, 0");
+        exec("create part \"I\" material \"plywood-18mm\" size 50, 30 at 25, 100, 200");
+        exec("join \"R\" to \"I\" with dado depth 9");
+
+        String result = exec("show joints");
+        System.out.println(result);
+        assertTrue(result.contains("Validation: 1 issue"),
+                "expected issue count in summary: " + result);
+        assertTrue(result.contains("`validate`"),
+                "expected hint to run validate for details: " + result);
+    }
+
+    @Test
     void validate_partsNotEngaged_reportsError() {
         // Manually create two parts with a dado joint between them, but place
         // the inserted part far away in Z so it doesn't actually penetrate

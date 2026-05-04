@@ -136,6 +136,12 @@ public class CommandExecutor {
     // (no slashes) is referenced. Mutated by the `using` command. Script-scoped:
     // see runScriptIsolated.
     private List<String> usingNamespaces = new ArrayList<>();
+
+    // User-configured prefix to the script search path, mutated by
+    // `set script_path`. The defaults (~/.cadette/scripts/, ./scripts/) are
+    // always appended after the user entries — see resolveScriptPath. Held
+    // as an immutable list so getters can hand it back without copying.
+    private List<Path> userScriptPath = List.of();
     // Set by visitor's visitCreatePartCommand after each part create, consumed by
     // instantiateTemplate to collect the parts belonging to the new assembly.
     @Getter(AccessLevel.PACKAGE) @Setter(AccessLevel.PACKAGE) private String lastCreatedPartName = null;
@@ -1008,21 +1014,47 @@ public class CommandExecutor {
     /**
      * Resolve a `run`-command path against the script search path. For each
      * suffix variant (the input as-given, then with ".cds" appended if the
-     * input doesn't already end in .cds), try each search-path entry in order:
+     * input doesn't already end in .cds), try each entry in order:
      *   1. Literal path (absolute, or relative to cwd).
-     *   2. ./scripts/<path>, the project-root bundled-scripts directory.
-     * Returns null if no combination matches. Multi-entry search-path support
-     * is a deferred backlog item.
+     *   2. Each user-configured entry (set via {@code set script_path}).
+     *   3. {@code ~/.cadette/scripts/} — user/installed scripts.
+     *   4. {@code ./scripts/} — dev-tree project-root fallback.
+     * Returns null if no combination matches.
      */
-    private static Path resolveScriptPath(String path) {
+    private Path resolveScriptPath(String path) {
         boolean hasExt = path.toLowerCase().endsWith(".cds");
-        for (String candidate : hasExt ? List.of(path) : List.of(path, path + ".cds")) {
+        List<String> candidates = hasExt ? List.of(path) : List.of(path, path + ".cds");
+        for (String candidate : candidates) {
             Path literal = Path.of(candidate);
             if (Files.exists(literal)) return literal;
-            Path bundled = Path.of("scripts").resolve(candidate);
-            if (Files.exists(bundled)) return bundled;
+            for (Path dir : effectiveScriptSearchPath()) {
+                Path resolved = dir.resolve(candidate);
+                if (Files.exists(resolved)) return resolved;
+            }
         }
         return null;
+    }
+
+    /**
+     * Full ordered search path (excluding the literal-path attempt): user
+     * entries first, then defaults. Used by {@link #resolveScriptPath} and
+     * by status echoes that need to show what `run` would search.
+     */
+    public List<Path> effectiveScriptSearchPath() {
+        List<Path> path = new ArrayList<>(userScriptPath);
+        path.add(Path.of(System.getProperty("user.home"), ".cadette", "scripts"));
+        path.add(Path.of("scripts"));
+        return path;
+    }
+
+    /** User-configured prefix entries only (excludes defaults). */
+    public List<Path> getUserScriptPath() {
+        return userScriptPath;
+    }
+
+    /** Replace the user-configured prefix entries. Pass an empty list to clear. */
+    public void setUserScriptPath(List<Path> entries) {
+        this.userScriptPath = List.copyOf(entries);
     }
 
     /**
