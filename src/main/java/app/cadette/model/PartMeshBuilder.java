@@ -87,15 +87,21 @@ import java.util.function.Consumer;
  * simplicity it's an acceptable cost — the volume is correct (internal walls
  * cancel by sign) and rendering is correct (occlusion + culling).
  *
- * <h2>Non-rect cutouts — deferred</h2>
+ * <h2>Cutout shapes</h2>
  *
- * <p>{@link Cutout.Circle}, {@link Cutout.Polygon}, and {@link Cutout.Spline}
- * are silently skipped here; they will drop in alongside {@link Cutout.Rect}
- * once a {@code polygonize} helper for each shape is added.
+ * <p>{@link Cutout.Rect} and {@link Cutout.Circle} are supported.
+ * {@link Cutout.Polygon} and {@link Cutout.Spline} drop in by extending the
+ * {@code polygonize} switch with their respective vertex producers. Circles
+ * are sampled to {@value #CIRCLE_SEGMENTS}-segment polygons; chord error for
+ * a 35 mm cup hole at this resolution is ≈0.08 mm, well under any visible
+ * threshold for cabinet-scale rendering.
  */
 public final class PartMeshBuilder {
 
     private static final GeometryFactory GF = new GeometryFactory();
+
+    /** Number of segments used to approximate a circular cutout boundary. */
+    private static final int CIRCLE_SEGMENTS = 32;
 
     private PartMeshBuilder() {}
 
@@ -118,8 +124,9 @@ public final class PartMeshBuilder {
         // Step 1: subtract through-cuts. JTS clips out-of-bounds pieces.
         Geometry hasMaterial = rectPolygon(0, 0, widthMm, heightMm);
         for (Cutout c : cutouts) {
-            Polygon hole = throughCutPolygon(c);
-            if (hole == null) continue;
+            if (c.depthMm() != null) continue;       // partial-depth handled in step 2
+            Polygon hole = polygonize(c);
+            if (hole == null) continue;              // unsupported shape (polygon/spline)
             hasMaterial = hasMaterial.difference(hole);
             if (hasMaterial.isEmpty()) break;
         }
@@ -133,8 +140,10 @@ public final class PartMeshBuilder {
         List<Region> regions = new ArrayList<>();
         forEachPolygon(hasMaterial, p -> regions.add(new Region(p, halfT, -halfT)));
         for (Cutout c : cutouts) {
-            if (!(c instanceof Cutout.Rect r) || r.depthMm() == null) continue;
-            applyPocket(regions, r, halfT);
+            if (c.depthMm() == null) continue;       // through-cut already applied
+            Polygon pocket = polygonize(c);
+            if (pocket == null) continue;            // unsupported shape
+            applyPocket(regions, pocket, c.depthMm(), c.face(), halfT);
         }
 
         // Step 3: drop regions where front+back pockets met (no material left).
@@ -171,11 +180,9 @@ public final class PartMeshBuilder {
      * there when a shallow pocket (depth 3) is later applied, since
      * {@code min(halfT - 8, halfT - 3) = halfT - 8}.
      */
-    private static void applyPocket(List<Region> regions, Cutout.Rect r, float halfT) {
-        Polygon pocket = rectPolygon(r.xMm(), r.yMm(), r.widthMm(), r.heightMm());
-        boolean isFront = r.face() == Cutout.Face.FRONT;
-        float depth = r.depthMm();
-
+    private static void applyPocket(List<Region> regions, Polygon pocket,
+                                    float depth, Cutout.Face face, float halfT) {
+        boolean isFront = face == Cutout.Face.FRONT;
         List<Region> next = new ArrayList<>(regions.size() + 4);
         for (Region rg : regions) {
             Geometry overlap = rg.polygon.intersection(pocket);
@@ -203,14 +210,28 @@ public final class PartMeshBuilder {
         });
     }
 
+    private static Polygon circlePolygon(float cx, float cy, float r) {
+        Coordinate[] cs = new Coordinate[CIRCLE_SEGMENTS + 1];
+        for (int i = 0; i < CIRCLE_SEGMENTS; i++) {
+            double angle = 2 * Math.PI * i / CIRCLE_SEGMENTS;
+            cs[i] = new Coordinate(cx + r * Math.cos(angle), cy + r * Math.sin(angle));
+        }
+        cs[CIRCLE_SEGMENTS] = cs[0];
+        return GF.createPolygon(cs);
+    }
+
     /**
-     * JTS polygon for a through-cut, or null for partial-depth and non-rect
-     * cutouts. JTS handles out-of-bounds clipping in the difference op.
+     * JTS polygon for a cutout's footprint, or null for shape variants not yet
+     * supported (Polygon, Spline). JTS handles out-of-bounds clipping during
+     * the difference op, so we don't need to clip here.
      */
-    private static Polygon throughCutPolygon(Cutout c) {
-        if (!(c instanceof Cutout.Rect r)) return null;  // circle/polygon/spline: TODO
-        if (r.depthMm() != null) return null;            // partial-depth handled in step 2
-        return rectPolygon(r.xMm(), r.yMm(), r.widthMm(), r.heightMm());
+    private static Polygon polygonize(Cutout c) {
+        return switch (c) {
+            case Cutout.Rect r   -> rectPolygon(r.xMm(), r.yMm(), r.widthMm(), r.heightMm());
+            case Cutout.Circle ci -> circlePolygon(ci.cxMm(), ci.cyMm(), ci.radiusMm());
+            case Cutout.Polygon ignored -> null;
+            case Cutout.Spline ignored -> null;
+        };
     }
 
     private static void forEachPolygon(Geometry g, Consumer<Polygon> fn) {

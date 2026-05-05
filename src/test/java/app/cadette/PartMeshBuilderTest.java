@@ -40,8 +40,15 @@ import static app.cadette.MeshInvariants.*;
  */
 class PartMeshBuilderTest {
 
-    /** Volume tolerance for sub-mm³ float drift on large panels. */
+    /** Volume tolerance for axis-aligned (rect) cutouts — coordinates are
+     *  integer-mm so float drift stays under a mm³. */
     private static final float V_TOL = 1f;
+
+    /** Volume tolerance for circle-derived geometry: JTS uses doubles
+     *  internally and we cast to float, plus 32 sin/cos values accumulate
+     *  small rounding. ~20 mm³ on multi-million mm³ panels = sub-2 ppm,
+     *  well below woodworking tolerances. */
+    private static final float V_TOL_CIRCLE = 50f;
 
     /** Linear tolerance for face-extent comparisons. */
     private static final float L_TOL = 0.01f;
@@ -265,5 +272,92 @@ class PartMeshBuilderTest {
                 new Cutout.Rect(150, 150, 100, 100, null, Cutout.Face.FRONT)));
         assertExtent(m, 600, 900, 18);
         assertVolume(m, 600f * 900 * 18 - 17_500 * 18, V_TOL);
+    }
+
+    // ---- Circle cutouts -------------------------------------------------
+
+    /** Polygon-approximation area for a circle of radius r at the segmentation
+     *  resolution PartMeshBuilder uses internally — used as expected volume
+     *  in circle-cutout tests so the assertion isn't tied to the exact N. */
+    private static float circleArea(float r) {
+        int n = 32;  // matches PartMeshBuilder.CIRCLE_SEGMENTS
+        return 0.5f * n * r * r * (float) Math.sin(2 * Math.PI / n);
+    }
+
+    @Test
+    void throughCircleRemovesMaterial() {
+        // 35mm-diameter through hole at panel centre.
+        float radius = 17.5f;
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Circle(300, 450, radius, null, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        assertVolume(m, 600f * 900 * 18 - circleArea(radius) * 18, V_TOL_CIRCLE);
+        // Mesh centre (at panel centre = circle centre) → no material.
+        assertNoMaterialAt(m, 0, 0, 0);
+        // Far from the circle → solid.
+        assertHasMaterialAt(m, mx(50, 600), my(50, 900), 0);
+    }
+
+    @Test
+    void cupHolePartialDepthCircle() {
+        // 35mm-diameter, 13mm-deep cup hole on a 19mm panel — European hinge
+        // cup. Floor at +halfT − 13 = 9.5 − 13 = −3.5.
+        float radius = 17.5f;
+        float depth = 13f;
+        Mesh m = buildRaw(600, 900, 19, List.of(
+                new Cutout.Circle(300, 450, radius, depth, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 19);
+        assertVolume(m, 600f * 900 * 19 - circleArea(radius) * depth, V_TOL_CIRCLE);
+        // Below the floor (−4 < −3.5) → solid.
+        assertHasMaterialAt(m, 0, 0, -4f);
+        // Above the floor (−3 > −3.5) → empty.
+        assertNoMaterialAt(m, 0, 0, -3f);
+        // Bottom face still spans the full panel.
+        assertFaceCoversAtZ(m, -9.5f, -300f, 300f, -450f, 450f, L_TOL);
+    }
+
+    @Test
+    void rectAndCircleCutoutsOnSamePanel() {
+        // Non-overlapping rect through and circle through.
+        float radius = 25f;
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Rect(100, 100, 100, 100, null, Cutout.Face.FRONT),
+                new Cutout.Circle(450, 700, radius, null, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        float removed = (100f * 100 + circleArea(radius)) * 18;
+        assertVolume(m, 600f * 900 * 18 - removed, V_TOL_CIRCLE);
+        assertNoMaterialAt(m, mx(150, 600), my(150, 900), 0);  // rect centre
+        assertNoMaterialAt(m, mx(450, 600), my(700, 900), 0);  // circle centre
+    }
+
+    @Test
+    void circlePocketOverlappingRectThrough() {
+        // T-slot-ish: a rect through-cut crossed by a wider circular pocket
+        // that opens into the slot (entry hole pattern). Through wins in the
+        // overlap, so the removed-volume contribution from the pocket is only
+        // its area minus the overlap, times its depth.
+        //
+        // Through rect: (250, 400, 100, 100) — 10_000 mm² × 18 mm thickness.
+        // Circle pocket centred at (300, 450), radius 80, depth 5. The rect
+        // sits entirely inside the circle (max-distance corner is √(50²+50²)
+        // ≈ 70.7 mm < 80 mm radius). So pocket-only area = circle − rect.
+        float radius = 80f;
+        float depth = 5f;
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Rect(250, 400, 100, 100, null, Cutout.Face.FRONT),
+                new Cutout.Circle(300, 450, radius, depth, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        float pocketOnlyArea = circleArea(radius) - 10_000f;
+        float removed = 10_000f * 18 + pocketOnlyArea * depth;
+        assertVolume(m, 600f * 900 * 18 - removed, V_TOL_CIRCLE);
+        // Rect centre → through, no material at any Z.
+        assertNoMaterialAt(m, 0, 0, 0);
+        assertNoMaterialAt(m, 0, 0, -5);
+        // Pocket-only ring (outside rect, inside circle): material below floor.
+        // Sample at (370, 450) — 70 mm from circle centre, well outside the
+        // rect (which ends at x=350) and well inside the circle.
+        float halfT = 9f;
+        assertHasMaterialAt(m, mx(370, 600), my(450, 900), 0f);          // mid-thickness, solid
+        assertNoMaterialAt(m, mx(370, 600), my(450, 900), halfT - 4f);   // above pocket floor (+5)
     }
 }
