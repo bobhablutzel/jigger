@@ -53,6 +53,15 @@
             <version>3.0.4</version>
         </dependency>
 
+        <!-- JTS Topology Suite — polygon clipping (Boolean ops) and Delaunay
+             triangulation for the part-mesh builder. Feeds the unified
+             "regions of constant Z" algorithm in PartMeshBuilder. -->
+        <dependency>
+            <groupId>org.locationtech.jts</groupId>
+            <artifactId>jts-core</artifactId>
+            <version>1.20.0</version>
+        </dependency>
+
         <!-- JSVG — pure-Java SVG renderer, used for the splash screen -->
         <dependency>
             <groupId>com.github.weisj</groupId>
