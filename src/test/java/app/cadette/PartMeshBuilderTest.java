@@ -21,7 +21,6 @@ package app.cadette;
 import app.cadette.model.Cutout;
 import app.cadette.model.PartMeshBuilder;
 import com.jme3.scene.Mesh;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Method;
@@ -138,7 +137,6 @@ class PartMeshBuilderTest {
     // ---- Partial-depth pockets (E3b) ------------------------------------
 
     @Test
-    @Disabled("partial-depth pockets land in a follow-up commit")
     void pocketRemovesPartialMaterial() {
         // 50 × 50 × 5mm-deep pocket. Removed 50²·5 = 12_500 mm³.
         Mesh m = buildRaw(600, 900, 18, List.of(
@@ -148,7 +146,6 @@ class PartMeshBuilderTest {
     }
 
     @Test
-    @Disabled("partial-depth pockets land in a follow-up commit")
     void pocketFloorSitsAtCorrectZ() {
         // 5mm-deep front pocket on an 18mm panel: floor at +halfT − 5 = +4.
         // Material exists below the floor, not above it.
@@ -169,7 +166,6 @@ class PartMeshBuilderTest {
     }
 
     @Test
-    @Disabled("partial-depth pockets land in a follow-up commit")
     void throughCutOverlappingPocketWinsNoFloorInOverlap() {
         // through (200, 200, 100, 100) and pocket (250, 250, 100, 100, 5).
         // Overlap region (250, 250)–(300, 300): through wins → no material.
@@ -189,7 +185,6 @@ class PartMeshBuilderTest {
     }
 
     @Test
-    @Disabled("partial-depth pockets land in a follow-up commit")
     void overlappingPocketsDeepestWins() {
         // P1 (100, 100, 100, 100, depth 3) and P2 (150, 150, 100, 100, depth 8).
         // Overlap: (150, 150)–(200, 200), 2500 mm². Deeper (8) wins in overlap.
@@ -213,7 +208,6 @@ class PartMeshBuilderTest {
     // ---- Back-face pockets (B.5) ----------------------------------------
 
     @Test
-    @Disabled("partial-depth pockets land in a follow-up commit")
     void backFacePocketRecessesOnNegativeZSide() {
         // Back-face pocket of depth 5 on an 18mm panel: floor at −halfT + 5 = −4.
         Mesh m = buildRaw(600, 900, 18, List.of(
@@ -235,7 +229,6 @@ class PartMeshBuilderTest {
     }
 
     @Test
-    @Disabled("partial-depth pockets land in a follow-up commit")
     void coincidentFrontAndBackPocketsThatMeetActAsThrough() {
         // Front depth 10 + back depth 10 on 18mm panel: pockets meet, no material.
         // Equivalent to a 50 × 50 through cut.

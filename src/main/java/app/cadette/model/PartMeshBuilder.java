@@ -41,29 +41,57 @@ import java.util.function.Consumer;
  * jME3's {@code Box} primitive convention so downstream scene placement is
  * unchanged.
  *
- * <h2>Algorithm — regions of constant Z, triangulated via JTS</h2>
+ * <h2>Algorithm — partition into regions of constant Z, triangulate via JTS</h2>
  *
- * <p>The panel is modelled as a 2D polygon (in part-local coordinates).
- * Through-cut shapes are subtracted from this polygon via JTS Boolean ops; the
- * remaining region — possibly multi-polygon, possibly with holes — is the area
- * of the panel that has full-thickness material. We emit a top face at
- * {@code +halfT}, a bottom face at {@code -halfT}, and a vertical wall per
- * edge of the boundary.
+ * <ol>
+ *   <li><b>Through-cuts:</b> subtract their polygons from the panel rectangle
+ *       via JTS Boolean difference. The result is the area of the panel that
+ *       has any material at all (in some Z range).</li>
  *
- * <p>JTS {@code PolygonTriangulator} (ear-clipping) handles polygon-with-holes
- * triangulation in a single call, which is the work the old rect-grid
- * decomposer was hand-rolling. After normalising to JTS canonical orientation
- * (CW exterior + CCW interior), both ring types put filled material on the
- * RIGHT of the walking direction, so the outward wall normal is uniformly the
- * left-hand perpendicular to each edge.
+ *   <li><b>Pockets:</b> overlay each partial-depth pocket on the existing
+ *       region partition. For each pocket, every region either has no
+ *       intersection (unchanged), is wholly inside the pocket (its (topZ,
+ *       bottomZ) extents collapse toward the pocket floor), or splits into
+ *       overlap + leftover sub-regions. Front pockets lower {@code topZ};
+ *       back pockets raise {@code bottomZ}. Overlapping pockets at different
+ *       depths resolve naturally via min/max — the deeper one wins because
+ *       it pulls the floor further from the panel surface.</li>
  *
- * <h2>Partial-depth pockets — deferred</h2>
+ *   <li><b>Front+back collision:</b> a region whose front and back pockets
+ *       meet has {@code topZ <= bottomZ} — no material left. Drop it; its
+ *       boundary becomes equivalent to a through-cut for neighbour regions.</li>
  *
- * <p>Partial-depth cutouts ({@code depthMm != null}) are silently skipped in
- * this commit. They will be reintroduced in a follow-up using the same
- * region-partition machinery: each pocket splits the affected region into
- * sub-regions with their own (top, bottom) Z extents, walls bridge any
- * Z-discrepancy at boundaries.
+ *   <li><b>Mesh emission:</b> each surviving region emits a top face at its
+ *       {@code topZ}, a bottom face at its {@code bottomZ}, and a vertical
+ *       wall per ring edge spanning {@code (bottomZ, topZ)}.</li>
+ * </ol>
+ *
+ * <p>JTS canonical orientation (CW exterior + CCW interior, set via
+ * {@code .normalize()}) puts filled material on the RIGHT of the walking
+ * direction in either ring type, so the outward wall normal is uniformly the
+ * left-hand perpendicular.
+ *
+ * <h2>Internal walls and visual rendering</h2>
+ *
+ * <p>At a boundary between two regions with different (topZ, bottomZ), each
+ * region emits its own wall over its full Z range. The portion where both
+ * regions have material is "internal" — both walls coincide spatially with
+ * opposite normals. With back-face culling these don't Z-fight: each wall is
+ * front-face from one side only, and the side with material occludes the view
+ * of either wall from outside the panel. The portion where only one region
+ * has material is the visible cliff (e.g. the pocket-floor-to-panel-top
+ * transition), drawn by the taller region's wall.
+ *
+ * <p>Trade-off: this emits more triangles than the rect-grid algorithm did
+ * (which computed wall ranges from band discrepancies). For the algorithm's
+ * simplicity it's an acceptable cost — the volume is correct (internal walls
+ * cancel by sign) and rendering is correct (occlusion + culling).
+ *
+ * <h2>Non-rect cutouts — deferred</h2>
+ *
+ * <p>{@link Cutout.Circle}, {@link Cutout.Polygon}, and {@link Cutout.Spline}
+ * are silently skipped here; they will drop in alongside {@link Cutout.Rect}
+ * once a {@code polygonize} helper for each shape is added.
  */
 public final class PartMeshBuilder {
 
@@ -83,28 +111,84 @@ public final class PartMeshBuilder {
      */
     public static Mesh build(float widthMm, float heightMm, float thicknessMm,
                              List<Cutout> cutouts) {
-        Geometry hasMaterial = rectPolygon(0, 0, widthMm, heightMm);
-        for (Cutout c : cutouts) {
-            Polygon hole = throughCutPolygon(c);
-            if (hole == null) continue;  // partial-depth or non-rect: deferred
-            hasMaterial = hasMaterial.difference(hole);
-            if (hasMaterial.isEmpty()) break;
-        }
-        // JTS's canonical orientation is CW exterior + CCW interior; difference()
-        // produces this form, but a freshly-built polygon (no-cutout case) keeps
-        // its input winding. Normalise so emit code can assume one convention.
-        hasMaterial.normalize();
-
         float halfW = widthMm * 0.5f;
         float halfH = heightMm * 0.5f;
         float halfT = thicknessMm * 0.5f;
 
+        // Step 1: subtract through-cuts. JTS clips out-of-bounds pieces.
+        Geometry hasMaterial = rectPolygon(0, 0, widthMm, heightMm);
+        for (Cutout c : cutouts) {
+            Polygon hole = throughCutPolygon(c);
+            if (hole == null) continue;
+            hasMaterial = hasMaterial.difference(hole);
+            if (hasMaterial.isEmpty()) break;
+        }
+        // JTS canonical: CW exterior + CCW interior. difference() produces this
+        // form; freshly-built polygons keep their input winding. Normalise so
+        // the emit code can assume one convention.
+        hasMaterial.normalize();
+
+        // Step 2: start with each remaining polygon as a full-thickness region,
+        // then overlay each partial-depth pocket.
+        List<Region> regions = new ArrayList<>();
+        forEachPolygon(hasMaterial, p -> regions.add(new Region(p, halfT, -halfT)));
+        for (Cutout c : cutouts) {
+            if (!(c instanceof Cutout.Rect r) || r.depthMm() == null) continue;
+            applyPocket(regions, r, halfT);
+        }
+
+        // Step 3: drop regions where front+back pockets met (no material left).
+        regions.removeIf(rg -> rg.topZ - rg.bottomZ < 1e-7f);
+
+        // Step 4: emit faces and walls for each surviving region.
         MeshBuf buf = new MeshBuf();
-        forEachPolygon(hasMaterial, p -> {
-            emitFaces(buf, p, halfW, halfH, halfT);
-            emitWalls(buf, p, halfW, halfH, halfT);
-        });
+        for (Region rg : regions) {
+            emitFaces(buf, rg, halfW, halfH);
+            emitWalls(buf, rg, halfW, halfH);
+        }
         return buf.toMesh();
+    }
+
+    // ---- Region partitioning --------------------------------------------
+
+    /**
+     * A maximal sub-area of the panel with constant solid material extents:
+     * material exists for {@code z ∈ [bottomZ, topZ]} everywhere within
+     * {@code polygon}. Through-cut areas are absent entirely (no region
+     * covers them); front+back collisions show up as collapsed regions
+     * with {@code topZ <= bottomZ} and are dropped before emit.
+     */
+    private record Region(Polygon polygon, float topZ, float bottomZ) {}
+
+    /**
+     * Splits each existing region by the pocket polygon. The intersection
+     * gets the pocket's contribution to its top/bottom Z extent (front pocket
+     * lowers {@code topZ}, back pocket raises {@code bottomZ}); the leftover
+     * keeps the original extents.
+     *
+     * <p>Overlap with deeper pockets resolves naturally: a region that's
+     * already been pulled to {@code topZ = halfT - 8} by a deep pocket stays
+     * there when a shallow pocket (depth 3) is later applied, since
+     * {@code min(halfT - 8, halfT - 3) = halfT - 8}.
+     */
+    private static void applyPocket(List<Region> regions, Cutout.Rect r, float halfT) {
+        Polygon pocket = rectPolygon(r.xMm(), r.yMm(), r.widthMm(), r.heightMm());
+        boolean isFront = r.face() == Cutout.Face.FRONT;
+        float depth = r.depthMm();
+
+        List<Region> next = new ArrayList<>(regions.size() + 4);
+        for (Region rg : regions) {
+            Geometry overlap = rg.polygon.intersection(pocket);
+            Geometry leftover = rg.polygon.difference(pocket);
+            forEachPolygon(overlap, p -> {
+                float newTop = isFront ? Math.min(rg.topZ, halfT - depth) : rg.topZ;
+                float newBot = isFront ? rg.bottomZ : Math.max(rg.bottomZ, -halfT + depth);
+                next.add(new Region(p, newTop, newBot));
+            });
+            forEachPolygon(leftover, p -> next.add(new Region(p, rg.topZ, rg.bottomZ)));
+        }
+        regions.clear();
+        regions.addAll(next);
     }
 
     // ---- Polygonisation --------------------------------------------------
@@ -120,14 +204,12 @@ public final class PartMeshBuilder {
     }
 
     /**
-     * Returns a JTS polygon for a through-cut, or null if the cutout is
-     * partial-depth, non-rect, or not yet supported. JTS handles
-     * out-of-bounds clipping during the difference operation, so we don't
-     * need to clip here.
+     * JTS polygon for a through-cut, or null for partial-depth and non-rect
+     * cutouts. JTS handles out-of-bounds clipping in the difference op.
      */
     private static Polygon throughCutPolygon(Cutout c) {
         if (!(c instanceof Cutout.Rect r)) return null;  // circle/polygon/spline: TODO
-        if (r.depthMm() != null) return null;            // partial-depth: TODO
+        if (r.depthMm() != null) return null;            // partial-depth handled in step 2
         return rectPolygon(r.xMm(), r.yMm(), r.widthMm(), r.heightMm());
     }
 
@@ -146,19 +228,17 @@ public final class PartMeshBuilder {
     // ---- Faces -----------------------------------------------------------
 
     /**
-     * Triangulate the polygon (with any holes) once via JTS ear-clipping;
-     * emit each triangle as a top face at {@code +halfT} and a bottom face at
-     * {@code -halfT}.
+     * Triangulate the region's polygon; emit each triangle as a top face at
+     * {@code topZ} and a bottom face at {@code bottomZ}.
      *
-     * <p>The triangulator output follows the input polygon's orientation
-     * (CW from above, since we normalised to JTS canonical). The top face
-     * needs CCW from above for its +Z normal, so emit reversed (a, c, b).
-     * The bottom face needs CW from above (= CCW from below) for its -Z
-     * normal, so emit original (a, b, c).
+     * <p>Triangulator output follows the input polygon's orientation (CW from
+     * above, since we normalised to JTS canonical). The top face needs CCW
+     * from above for its +Z normal, so emit reversed (a, c, b). The bottom
+     * face needs CW from above (= CCW from below) for its -Z normal, so emit
+     * original (a, b, c).
      */
-    private static void emitFaces(MeshBuf buf, Polygon p,
-                                  float halfW, float halfH, float halfT) {
-        Geometry tris = PolygonTriangulator.triangulate(p);
+    private static void emitFaces(MeshBuf buf, Region rg, float halfW, float halfH) {
+        Geometry tris = PolygonTriangulator.triangulate(rg.polygon);
         for (int i = 0; i < tris.getNumGeometries(); i++) {
             Polygon tri = (Polygon) tris.getGeometryN(i);
             Coordinate[] cs = tri.getExteriorRing().getCoordinates();
@@ -166,10 +246,10 @@ public final class PartMeshBuilder {
             float bx = (float) cs[1].x - halfW, by = (float) cs[1].y - halfH;
             float cx = (float) cs[2].x - halfW, cy = (float) cs[2].y - halfH;
             buf.addTriangle(
-                    ax, ay, halfT, cx, cy, halfT, bx, by, halfT,
+                    ax, ay, rg.topZ, cx, cy, rg.topZ, bx, by, rg.topZ,
                     0, 0, 1);
             buf.addTriangle(
-                    ax, ay, -halfT, bx, by, -halfT, cx, cy, -halfT,
+                    ax, ay, rg.bottomZ, bx, by, rg.bottomZ, cx, cy, rg.bottomZ,
                     0, 0, -1);
         }
     }
@@ -177,21 +257,19 @@ public final class PartMeshBuilder {
     // ---- Walls -----------------------------------------------------------
 
     /**
-     * One vertical wall per edge of every ring (exterior + any holes). In JTS
-     * canonical orientation (CW exterior + CCW interior), both ring types put
-     * filled material on the RIGHT of the walking direction, so the outward
-     * normal is uniformly the left-hand perpendicular.
+     * One vertical wall per edge of every ring (exterior + any holes), spanning
+     * the region's full {@code (bottomZ, topZ)} range with the outward normal
+     * (left-hand perpendicular of the walking direction in JTS canonical).
      */
-    private static void emitWalls(MeshBuf buf, Polygon p,
-                                  float halfW, float halfH, float halfT) {
-        emitRingWalls(buf, p.getExteriorRing(), halfW, halfH, halfT);
-        for (int i = 0; i < p.getNumInteriorRing(); i++) {
-            emitRingWalls(buf, p.getInteriorRingN(i), halfW, halfH, halfT);
+    private static void emitWalls(MeshBuf buf, Region rg, float halfW, float halfH) {
+        emitRingWalls(buf, rg.polygon.getExteriorRing(), rg, halfW, halfH);
+        for (int i = 0; i < rg.polygon.getNumInteriorRing(); i++) {
+            emitRingWalls(buf, rg.polygon.getInteriorRingN(i), rg, halfW, halfH);
         }
     }
 
-    private static void emitRingWalls(MeshBuf buf, LinearRing ring,
-                                      float halfW, float halfH, float halfT) {
+    private static void emitRingWalls(MeshBuf buf, LinearRing ring, Region rg,
+                                      float halfW, float halfH) {
         Coordinate[] cs = ring.getCoordinates();
         for (int i = 0; i < cs.length - 1; i++) {
             float x1 = (float) cs[i].x     - halfW;
@@ -201,18 +279,15 @@ public final class PartMeshBuilder {
             float dx = x2 - x1, dy = y2 - y1;
             float len = (float) Math.hypot(dx, dy);
             if (len < 1e-7f) continue;
-            // Left-hand perpendicular = outward normal (filled material on the right).
             float nx = -dy / len;
             float ny =  dx / len;
-            // Quad CCW from the +normal side. Walking p2 → p1 along the bottom,
-            // up to p1's top, across to p2's top: this puts the geometric normal
-            // on the LEFT of the original (p1 → p2) edge direction, matching
-            // (nx, ny).
+            // CCW from the +normal side: walk p2 → p1 across the bottom, then
+            // up to p1's top, then across to p2's top.
             buf.addQuad(
-                    x2, y2, -halfT,
-                    x1, y1, -halfT,
-                    x1, y1,  halfT,
-                    x2, y2,  halfT,
+                    x2, y2, rg.bottomZ,
+                    x1, y1, rg.bottomZ,
+                    x1, y1, rg.topZ,
+                    x2, y2, rg.topZ,
                     nx, ny, 0);
         }
     }
