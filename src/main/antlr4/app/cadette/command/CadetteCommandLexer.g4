@@ -31,6 +31,7 @@ CIRCLE     : 'circle' ;
 RADIUS     : 'radius' ;
 POLYGON    : 'polygon' ;
 SPLINE     : 'spline' ;
+SHAPE      : 'shape' ;
 DELETE     : 'delete' | 'del' ;
 MOVE       : 'move' | 'mv' ;
 RESIZE     : 'resize' ;

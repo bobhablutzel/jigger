@@ -63,6 +63,25 @@ public class CommandExecutor {
     private final Deque<UndoableAction> redoStack = new ArrayDeque<>();
 
     /**
+     * Session-scoped registry of named shapes declared via the
+     * {@code shape <name> polygon|spline ...} command. Reused at
+     * {@code cut <part> shape <name> at x, y} call sites.
+     *
+     * <p>Strict script-locality (separate registry per script) is a
+     * follow-up; today's behaviour is session-wide. See
+     * {@code project_shape_library_backlog.md}.
+     */
+    private final Map<String, Shape> shapeRegistry = new LinkedHashMap<>();
+
+    public void registerShape(String name, Shape shape) {
+        shapeRegistry.put(name, shape);
+    }
+
+    public Shape lookupShape(String name) {
+        return shapeRegistry.get(name);
+    }
+
+    /**
      * Stack of variable scopes active during template instantiation (and, in
      * Phase B, inside for-loops). Innermost scope is at the top. VAR_REF
      * expressions evaluate by walking the stack inner-to-outer.

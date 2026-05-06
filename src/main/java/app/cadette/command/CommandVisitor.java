@@ -624,6 +624,30 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     }
 
     @Override
+    public String visitShapeDefPolygon(CadetteCommandParser.ShapeDefPolygonContext ctx) {
+        String name = extractName(ctx.objectName());
+        List<Point2D> verts = ctx.vertexPair().stream()
+                .map(v -> new Point2D(
+                        toMm(evalFloat(v.expression(0))),
+                        toMm(evalFloat(v.expression(1)))))
+                .toList();
+        executor.registerShape(name, new Shape.Polygon(verts));
+        return "Defined polygon shape '" + name + "' with " + verts.size() + " vertices.";
+    }
+
+    @Override
+    public String visitShapeDefSpline(CadetteCommandParser.ShapeDefSplineContext ctx) {
+        String name = extractName(ctx.objectName());
+        List<Point2D> pts = ctx.vertexPair().stream()
+                .map(v -> new Point2D(
+                        toMm(evalFloat(v.expression(0))),
+                        toMm(evalFloat(v.expression(1)))))
+                .toList();
+        executor.registerShape(name, new Shape.Spline(pts));
+        return "Defined spline shape '" + name + "' with " + pts.size() + " control points.";
+    }
+
+    @Override
     public String visitCutCommand(CadetteCommandParser.CutCommandContext ctx) {
         String partName = extractName(ctx.objectName());
         Part part = scene.getPart(partName);
@@ -711,6 +735,25 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                     .toList();
             Float depth = s.DEPTH() != null ? toMm(evalFloat(s.expression())) : null;
             return new Cutout.Spline(controls, depth, Cutout.Face.FRONT);
+        }
+        if (ctx instanceof CadetteCommandParser.NamedShapeCutShapeContext n) {
+            // SHAPE <name> AT <ax>, <ay> [DEPTH <d>]
+            String shapeName = extractName(n.objectName());
+            Shape shape = executor.lookupShape(shapeName);
+            if (shape == null) {
+                throw new IllegalArgumentException("Unknown shape: '" + shapeName + "'");
+            }
+            float ax = toMm(evalFloat(n.expression(0)));
+            float ay = toMm(evalFloat(n.expression(1)));
+            Float depth = n.DEPTH() != null ? toMm(evalFloat(n.expression(2))) : null;
+            // Translate the shape's local-origin points by the anchor.
+            List<Point2D> translated = shape.points().stream()
+                    .map(p -> new Point2D(p.xMm() + ax, p.yMm() + ay))
+                    .toList();
+            return switch (shape) {
+                case Shape.Polygon ignored -> new Cutout.Polygon(translated, depth, Cutout.Face.FRONT);
+                case Shape.Spline ignored  -> new Cutout.Spline(translated, depth, Cutout.Face.FRONT);
+            };
         }
         throw new IllegalStateException("Unhandled cutShape alternative: "
                 + ctx.getClass().getSimpleName());

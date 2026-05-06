@@ -84,6 +84,7 @@ command
     | statsCommand
     | runCommand
     | validateCommand
+    | shapeDefinitionCommand
     ;
 
 createCommand
@@ -243,6 +244,16 @@ cutShape
       (DEPTH expression)?                       # polygonCutShape
     | SPLINE vertexPair (COMMA vertexPair)*
       (DEPTH expression)?                       # splineCutShape
+    | SHAPE objectName AT expression COMMA expression
+      (DEPTH expression)?                       # namedShapeCutShape
+    ;
+
+// `shape <name> polygon|spline (x,y), (x,y), ...` — declares a named shape
+// at the origin. Reused via `cut <part> shape <name> at x, y`. The shape's
+// vertices are stored as-is and translated by the anchor at use time.
+shapeDefinitionCommand
+    : SHAPE objectName POLYGON vertexPair (COMMA vertexPair)*    # shapeDefPolygon
+    | SHAPE objectName SPLINE  vertexPair (COMMA vertexPair)*    # shapeDefSpline
     ;
 
 // Parenthesised (x, y) pair for vertex lists. Parens disambiguate

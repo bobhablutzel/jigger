@@ -444,4 +444,69 @@ class CutCommandTest extends HeadlessTestBase {
         assertTrue(result.contains("clipped at the boundary"),
                 "spline with off-panel control point should emit the clip note: " + result);
     }
+
+    // ---- Named shapes -------------------------------------------------
+
+    @Test
+    void shapeDefinitionPolygonRegistersAndCanBeUsed() {
+        // Define a shape at the origin, then use it at an anchor on the panel.
+        // Translated vertices should be (anchor + shape coords).
+        String defResult = exec("shape my_handle polygon (0, 0), (50, 0), (50, 30), (0, 30)");
+        assertTrue(defResult.contains("Defined polygon shape 'my_handle'"),
+                "shape definition should confirm: " + defResult);
+
+        exec("cut \"panel\" shape my_handle at 100, 200");
+        Cutout.Polygon p = (Cutout.Polygon) cutoutsOf("panel").get(0);
+        assertEquals(4, p.vertices().size());
+        // Anchor (100, 200) + shape vertex (0, 0) = (100, 200).
+        assertEquals(100, p.vertices().get(0).xMm(), 0.001);
+        assertEquals(200, p.vertices().get(0).yMm(), 0.001);
+        // Anchor + (50, 30) = (150, 230).
+        assertEquals(150, p.vertices().get(2).xMm(), 0.001);
+        assertEquals(230, p.vertices().get(2).yMm(), 0.001);
+    }
+
+    @Test
+    void shapeDefinitionSplineRegistersAndCanBeUsed() {
+        exec("shape blob spline (0, 0), (40, 0), (40, 40), (0, 40)");
+        exec("cut \"panel\" shape blob at 200, 300");
+        Cutout.Spline s = (Cutout.Spline) cutoutsOf("panel").get(0);
+        assertEquals(4, s.controlPoints().size());
+        // Anchor (200, 300) + control (0, 0) = (200, 300).
+        assertEquals(200, s.controlPoints().get(0).xMm(), 0.001);
+        assertEquals(300, s.controlPoints().get(0).yMm(), 0.001);
+    }
+
+    @Test
+    void namedShapeAcceptsDepth() {
+        exec("shape pin polygon (0, 0), (10, 0), (10, 10), (0, 10)");
+        exec("cut \"panel\" shape pin at 100, 100 depth 5");
+        Cutout.Polygon p = (Cutout.Polygon) cutoutsOf("panel").get(0);
+        assertEquals(5f, p.depthMm(), 0.001);
+    }
+
+    @Test
+    void unknownShapeNameProducesError() {
+        // Reference a shape that was never defined → command fails with a
+        // recognisable error message (not a silent failure).
+        exec("shape known_one polygon (0, 0), (10, 0), (10, 10)");
+        String result = exec("cut \"panel\" shape mystery at 100, 100");
+        assertTrue(result.toLowerCase().contains("unknown shape")
+                || result.toLowerCase().contains("error"),
+                "expected error for undefined shape: " + result);
+    }
+
+    @Test
+    void sameShapeUsedAtMultipleAnchors() {
+        // The whole point of named shapes — declare once, place repeatedly.
+        exec("shape pin polygon (0, 0), (10, 0), (10, 10), (0, 10)");
+        exec("cut \"panel\" shape pin at 100, 100");
+        exec("cut \"panel\" shape pin at 300, 100");
+        exec("cut \"panel\" shape pin at 500, 100");
+        List<Cutout> cuts = cutoutsOf("panel");
+        assertEquals(3, cuts.size());
+        assertEquals(100, ((Cutout.Polygon) cuts.get(0)).vertices().get(0).xMm(), 0.001);
+        assertEquals(300, ((Cutout.Polygon) cuts.get(1)).vertices().get(0).xMm(), 0.001);
+        assertEquals(500, ((Cutout.Polygon) cuts.get(2)).vertices().get(0).xMm(), 0.001);
+    }
 }
