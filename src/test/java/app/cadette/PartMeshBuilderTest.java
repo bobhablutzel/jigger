@@ -28,6 +28,7 @@ import java.util.List;
 
 import static app.cadette.MeshInvariants.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Tests the custom mesh builder for parts with rect cutouts — both through
@@ -424,5 +425,71 @@ class PartMeshBuilderTest {
         Mesh explicitClose = buildRaw(600, 900, 18, List.of(
                 new Cutout.Polygon(List.of(v0, v1, v2, v0), null, Cutout.Face.FRONT)));
         assertEquals(signedVolume(autoClosed), signedVolume(explicitClose), V_TOL);
+    }
+
+    // ---- Spline cutouts (Catmull-Rom) ------------------------------------
+
+    @Test
+    void splineThroughCutAreaIsCloseToControlHullPlusBulge() {
+        // 4 control points at the corners of a 100×100 square. Catmull-Rom is
+        // interpolating, so the curve passes through every corner. Between
+        // corners it bulges OUTSIDE the convex hull (each midpoint dips out
+        // by roughly tension * side/8 ≈ 12.5 mm for centripetal alpha=0.5).
+        // Bulge area per side ≈ (2/3) · base · height = (2/3) · 100 · 12.5 ≈ 833.
+        // Total area ≈ 10000 + 4·833 ≈ 13_300 mm². We assert wide bounds:
+        // at least the convex hull area (curve goes outside, never inside),
+        // and at most 2× the hull (rules out runaway loops/overshoot).
+        var v0 = new app.cadette.model.Point2D(100, 100);
+        var v1 = new app.cadette.model.Point2D(200, 100);
+        var v2 = new app.cadette.model.Point2D(200, 200);
+        var v3 = new app.cadette.model.Point2D(100, 200);
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Spline(List.of(v0, v1, v2, v3), null, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        float removed = 600f * 900 * 18 - signedVolume(m);
+        float hullArea = 100 * 100;
+        assertTrue(removed >= hullArea * 18,
+                "curve must enclose the control-point hull: removed=" + removed);
+        assertTrue(removed <= 2 * hullArea * 18,
+                "curve should not overshoot beyond ~2× the hull: removed=" + removed);
+    }
+
+    @Test
+    void splineCurvePassesThroughControlPoints() {
+        // Catmull-Rom is interpolating: the control points lie exactly on
+        // the curve. So in the cut mesh, any point on a control-point
+        // location should be on the boundary — material on one side, empty
+        // on the other (depending on which side the curve interior is on).
+        // Easier check: a point clearly inside the convex hull of the
+        // control points should be empty (cut), one clearly outside should
+        // be solid.
+        var v0 = new app.cadette.model.Point2D(100, 100);
+        var v1 = new app.cadette.model.Point2D(200, 100);
+        var v2 = new app.cadette.model.Point2D(200, 200);
+        var v3 = new app.cadette.model.Point2D(100, 200);
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Spline(List.of(v0, v1, v2, v3), null, Cutout.Face.FRONT)));
+        // Center of the curve → inside, no material.
+        assertNoMaterialAt(m, mx(150, 600), my(150, 900), 0);
+        // Far outside → solid.
+        assertHasMaterialAt(m, mx(50, 600), my(50, 900), 0);
+    }
+
+    @Test
+    void splinePartialDepthLeavesBottomSolid() {
+        // Front-face spline pocket on an 18mm panel: depth 5, floor at +4.
+        // Bottom (-Z) face must still span the full panel.
+        var v0 = new app.cadette.model.Point2D(100, 100);
+        var v1 = new app.cadette.model.Point2D(200, 100);
+        var v2 = new app.cadette.model.Point2D(200, 200);
+        var v3 = new app.cadette.model.Point2D(100, 200);
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Spline(List.of(v0, v1, v2, v3), 5f, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        // Inside the pocket below the floor → material; above → empty.
+        assertHasMaterialAt(m, mx(150, 600), my(150, 900), 0f);   // below floor (+4)
+        assertNoMaterialAt(m, mx(150, 600), my(150, 900), 6f);    // above floor
+        // Bottom face still solid across the full panel.
+        assertFaceCoversAtZ(m, -9f, -300f, 300f, -450f, 450f, L_TOL);
     }
 }

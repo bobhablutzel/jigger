@@ -633,10 +633,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         Cutout cutout = buildCutout(ctx.cutShape());
         String abbr = executor.getUnits().getAbbreviation();
         // PartMeshBuilder silently drops cutouts that clip to nothing —
-        // catch the easy case (entirely outside the cut face) here so the
-        // user gets feedback at command time instead of a missing render.
-        if (!cutoutIntersectsPartFace(cutout, part)) {
-            return String.format("Cutout %s falls entirely outside '%s' (%.1f × %.1f %s); ignored.",
+        // catch that here so the user gets feedback at command time. The
+        // check is shape-accurate (polygonizes the cutout and asks JTS),
+        // not a bbox approximation, so polygons/splines whose vertices
+        // straddle the panel but whose actual shape misses it are caught.
+        if (!PartMeshBuilder.intersectsPanelFace(cutout,
+                part.getCutWidthMm(), part.getCutHeightMm())) {
+            return String.format("Cutout %s falls outside '%s' (%.1f × %.1f %s); ignored.",
                     describeCutout(cutout, abbr), partName,
                     fromMm(part.getCutWidthMm()), fromMm(part.getCutHeightMm()), abbr);
         }
@@ -644,15 +647,23 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         executor.pushAction(new CutAction(scene, partName, cutout));
         // rebuildPartMesh handles mesh regeneration + markCutSheetDirty.
         scene.rebuildPartMesh(partName);
-        return "Added cutout to '" + partName + "': " + describeCutout(cutout, abbr);
+        StringBuilder result = new StringBuilder("Added cutout to '")
+                .append(partName).append("': ").append(describeCutout(cutout, abbr));
+        if (cutoutExtendsPastPanel(cutout, part)) {
+            result.append("\n  Note: cutout extends past the panel edge; clipped at the boundary.");
+        }
+        return result.toString();
     }
 
-    private static boolean cutoutIntersectsPartFace(Cutout c, Part p) {
+    /** True if the cutout's bbox crosses any panel edge. Triggers an
+     *  informational note so the user can spot typos that produce wildly
+     *  off-panel coordinates (e.g. polygon vertex at 1500 instead of 150). */
+    private static boolean cutoutExtendsPastPanel(Cutout c, Part p) {
         BoundingBox b = c.bounds();
-        return b.maxXMm() > 0
-                && b.xMm() < p.getCutWidthMm()
-                && b.maxYMm() > 0
-                && b.yMm() < p.getCutHeightMm();
+        return b.xMm() < 0
+                || b.maxXMm() > p.getCutWidthMm()
+                || b.yMm() < 0
+                || b.maxYMm() > p.getCutHeightMm();
     }
 
     /** Dispatch on the cutShape alternative to build the appropriate Cutout variant. */
@@ -691,6 +702,16 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             Float depth = p.DEPTH() != null ? toMm(evalFloat(p.expression())) : null;
             return new Cutout.Polygon(vertices, depth, Cutout.Face.FRONT);
         }
+        if (ctx instanceof CadetteCommandParser.SplineCutShapeContext s) {
+            // SPLINE (x1, y1), (x2, y2), ... [DEPTH <d>]  — Catmull-Rom
+            List<Point2D> controls = s.vertexPair().stream()
+                    .map(v -> new Point2D(
+                            toMm(evalFloat(v.expression(0))),
+                            toMm(evalFloat(v.expression(1)))))
+                    .toList();
+            Float depth = s.DEPTH() != null ? toMm(evalFloat(s.expression())) : null;
+            return new Cutout.Spline(controls, depth, Cutout.Face.FRONT);
+        }
         throw new IllegalStateException("Unhandled cutShape alternative: "
                 + ctx.getClass().getSimpleName());
     }
@@ -720,6 +741,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                     : " through";
             return String.format("polygon (%d vertices)%s",
                     p.vertices().size(), depth);
+        }
+        if (cutout instanceof Cutout.Spline s) {
+            String depth = s.depthMm() != null
+                    ? String.format(" %.1f %s deep", fromMm(s.depthMm()), abbr)
+                    : " through";
+            return String.format("spline (%d control points)%s",
+                    s.controlPoints().size(), depth);
         }
         return cutout.toString();  // variants not yet user-facing
     }

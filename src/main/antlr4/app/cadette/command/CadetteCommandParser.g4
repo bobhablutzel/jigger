@@ -241,6 +241,8 @@ cutShape
       (DEPTH expression)?                       # circleCutShape
     | POLYGON vertexPair (COMMA vertexPair)*
       (DEPTH expression)?                       # polygonCutShape
+    | SPLINE vertexPair (COMMA vertexPair)*
+      (DEPTH expression)?                       # splineCutShape
     ;
 
 // Parenthesised (x, y) pair for vertex lists. Parens disambiguate

@@ -30,6 +30,7 @@ RECT       : 'rect' | 'rectangle' ;
 CIRCLE     : 'circle' ;
 RADIUS     : 'radius' ;
 POLYGON    : 'polygon' ;
+SPLINE     : 'spline' ;
 DELETE     : 'delete' | 'del' ;
 MOVE       : 'move' | 'mv' ;
 RESIZE     : 'resize' ;

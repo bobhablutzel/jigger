@@ -143,7 +143,7 @@ class CutCommandTest extends HeadlessTestBase {
         // A 600×900 panel; a circle centered at (1000, 1000) radius 25 lies
         // entirely off the cut face. Same rejection path as for rect.
         String result = exec("cut \"panel\" circle at 1000, 1000 radius 25");
-        assertTrue(result.contains("falls entirely outside"),
+        assertTrue(result.contains("falls outside"),
                 "expected rejection: " + result);
         assertEquals(0, cutoutsOf("panel").size());
     }
@@ -155,7 +155,7 @@ class CutCommandTest extends HeadlessTestBase {
         // clip it to nothing — instead we reject at command time so the
         // user sees a clear message and the cutout is never stored.
         String result = exec("cut \"panel\" rect at 1000, 1000 size 50, 50");
-        assertTrue(result.contains("falls entirely outside"),
+        assertTrue(result.contains("falls outside"),
                 "expected rejection message: " + result);
         assertEquals(0, cutoutsOf("panel").size(),
                 "rejected cuts must not be stored");
@@ -353,5 +353,95 @@ class CutCommandTest extends HeadlessTestBase {
         String result = exec("cut \"panel\" polygon (10, 10), (20, 10), (15, 25)");
         assertTrue(result.contains("polygon"), "response should describe polygon: " + result);
         assertTrue(result.contains("3 vertices"), "response should mention vertex count: " + result);
+    }
+
+    // ---- Spline cuts (Catmull-Rom) -------------------------------------
+
+    @Test
+    void splineCutAddsToThePart() {
+        String result = exec("cut \"panel\" spline (100, 100), (200, 100), (200, 200), (100, 200)");
+        assertFalse(result.toLowerCase().contains("error"), result);
+
+        List<Cutout> cuts = cutoutsOf("panel");
+        assertEquals(1, cuts.size());
+        assertInstanceOf(Cutout.Spline.class, cuts.get(0));
+        Cutout.Spline s = (Cutout.Spline) cuts.get(0);
+        assertEquals(4, s.controlPoints().size());
+        assertNull(s.depthMm(), "no depth clause → through-cut (null)");
+    }
+
+    @Test
+    void splineCutAcceptsDepth() {
+        exec("cut \"panel\" spline (100, 100), (200, 100), (200, 200), (100, 200) depth 5");
+        Cutout.Spline s = (Cutout.Spline) cutoutsOf("panel").get(0);
+        assertEquals(5f, s.depthMm(), 0.001);
+    }
+
+    @Test
+    void splineCutCommandResponseDescribesShape() {
+        String result = exec("cut \"panel\" spline (100, 100), (200, 100), (200, 200), (100, 200)");
+        assertTrue(result.contains("spline"), "response should describe spline: " + result);
+        assertTrue(result.contains("4 control points"),
+                "response should mention control-point count: " + result);
+    }
+
+    @Test
+    void polygonEntirelyOutsidePartBoundsIsRejected() {
+        // Triangle with all vertices beyond the panel's right edge.
+        String result = exec("cut \"panel\" polygon (700, 100), (800, 100), (750, 200)");
+        assertTrue(result.contains("falls outside"),
+                "expected rejection: " + result);
+        assertEquals(0, cutoutsOf("panel").size(), "rejected cut should not be added");
+    }
+
+    @Test
+    void polygonWithExtremeAspectRatioStraddlingPanelEdgeDoesNotExplode() {
+        // The user-reported case: thin sliver triangle with one vertex far
+        // outside the panel. The bbox check would let it through; the legacy
+        // JTS overlay would throw a TopologyException at mesh-build time.
+        // OverlayNGRobust handles it; if even that fails to find a sane
+        // intersection, the command rejects cleanly.
+        String result = exec("cut \"panel\" polygon (100, 100), (200, 100), (15000, 250) depth 5");
+        assertFalse(result.toLowerCase().contains("exception"),
+                "should not propagate JTS exception: " + result);
+    }
+
+    // ---- "Cutout extends past panel" informational note ---------------
+
+    @Test
+    void rectExtendingPastPanelEmitsClipNote() {
+        String result = exec("cut \"panel\" rect at 550, 850 size 200, 200");
+        assertTrue(result.contains("clipped at the boundary"),
+                "rect that extends past the panel should emit the clip note: " + result);
+    }
+
+    @Test
+    void rectFullyInsidePanelDoesNotEmitClipNote() {
+        String result = exec("cut \"panel\" rect at 100, 100 size 50, 50");
+        assertFalse(result.contains("clipped at the boundary"),
+                "fully-inside rect should not emit the clip note: " + result);
+    }
+
+    @Test
+    void circleExtendingPastPanelEmitsClipNote() {
+        // Centre near the right edge; circle bbox extends past x=600.
+        String result = exec("cut \"panel\" circle at 580, 450 radius 50");
+        assertTrue(result.contains("clipped at the boundary"),
+                "circle that extends past the panel should emit the clip note: " + result);
+    }
+
+    @Test
+    void polygonExtendingPastPanelEmitsClipNote() {
+        // Triangle with one vertex far past the right edge.
+        String result = exec("cut \"panel\" polygon (100, 100), (200, 100), (1500, 250)");
+        assertTrue(result.contains("clipped at the boundary"),
+                "polygon with off-panel vertex should emit the clip note: " + result);
+    }
+
+    @Test
+    void splineExtendingPastPanelEmitsClipNote() {
+        String result = exec("cut \"panel\" spline (100, 100), (200, 100), (1500, 250), (100, 250)");
+        assertTrue(result.contains("clipped at the boundary"),
+                "spline with off-panel control point should emit the clip note: " + result);
     }
 }
