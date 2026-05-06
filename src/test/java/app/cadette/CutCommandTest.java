@@ -128,13 +128,14 @@ class CutCommandTest extends HeadlessTestBase {
     }
 
     @Test
-    void circleCommandResponseFlagsThe3DRenderGap() {
-        // Until layer 4 (mesh generation for non-rect cutouts) ships, the
-        // command should explicitly tell the user that the 3D mesh won't
-        // show the pocket — so they don't think their cut "didn't work".
+    void circleCommandResponseDescribesPocket() {
+        // 3D mesh now renders circle pockets, so no heads-up needed — the
+        // response just confirms the cutout that was added.
         String result = exec("cut \"panel\" circle at 50, 50 radius 17.5 depth 11");
-        assertTrue(result.contains("3D mesh does not yet render"),
-                "expected 3D-render heads-up: " + result);
+        assertTrue(result.contains("circle"), "response should describe the cutout: " + result);
+        assertTrue(result.contains("17.5"), "response should include the radius: " + result);
+        assertFalse(result.contains("does not yet render"),
+                "stale heads-up should be gone: " + result);
     }
 
     @Test
@@ -318,5 +319,39 @@ class CutCommandTest extends HeadlessTestBase {
                 "cutout size should render in inches, not mm:\n" + bom);
         assertFalse(bom.contains("75.0mm") || bom.contains("75mm"),
                 "cutout line should not leak mm after unit switch:\n" + bom);
+    }
+
+    // ---- Polygon cuts -------------------------------------------------
+
+    @Test
+    void polygonCutAddsToThePart() {
+        // Triangle through-cut.
+        String result = exec("cut \"panel\" polygon (10, 10), (20, 10), (15, 25)");
+        assertFalse(result.toLowerCase().contains("error"), result);
+
+        List<Cutout> cuts = cutoutsOf("panel");
+        assertEquals(1, cuts.size());
+        assertInstanceOf(Cutout.Polygon.class, cuts.get(0));
+        Cutout.Polygon p = (Cutout.Polygon) cuts.get(0);
+        assertEquals(3, p.vertices().size());
+        assertEquals(10, p.vertices().get(0).xMm(), 0.001);
+        assertEquals(10, p.vertices().get(0).yMm(), 0.001);
+        assertEquals(20, p.vertices().get(1).xMm(), 0.001);
+        assertEquals(15, p.vertices().get(2).xMm(), 0.001);
+        assertNull(p.depthMm(), "no depth clause → through-cut (null)");
+    }
+
+    @Test
+    void polygonCutAcceptsDepth() {
+        exec("cut \"panel\" polygon (10, 10), (20, 10), (15, 25) depth 5");
+        Cutout.Polygon p = (Cutout.Polygon) cutoutsOf("panel").get(0);
+        assertEquals(5f, p.depthMm(), 0.001);
+    }
+
+    @Test
+    void polygonCutCommandResponseDescribesShape() {
+        String result = exec("cut \"panel\" polygon (10, 10), (20, 10), (15, 25)");
+        assertTrue(result.contains("polygon"), "response should describe polygon: " + result);
+        assertTrue(result.contains("3 vertices"), "response should mention vertex count: " + result);
     }
 }

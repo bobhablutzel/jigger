@@ -29,6 +29,7 @@ CUT        : 'cut' ;
 RECT       : 'rect' | 'rectangle' ;
 CIRCLE     : 'circle' ;
 RADIUS     : 'radius' ;
+POLYGON    : 'polygon' ;
 DELETE     : 'delete' | 'del' ;
 MOVE       : 'move' | 'mv' ;
 RESIZE     : 'resize' ;

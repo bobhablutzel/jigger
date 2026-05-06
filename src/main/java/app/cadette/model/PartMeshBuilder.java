@@ -89,11 +89,11 @@ import java.util.function.Consumer;
  *
  * <h2>Cutout shapes</h2>
  *
- * <p>{@link Cutout.Rect} and {@link Cutout.Circle} are supported.
- * {@link Cutout.Polygon} and {@link Cutout.Spline} drop in by extending the
- * {@code polygonize} switch with their respective vertex producers. Circles
- * are sampled to {@value #CIRCLE_SEGMENTS}-segment polygons; chord error for
- * a 35 mm cup hole at this resolution is ≈0.08 mm, well under any visible
+ * <p>{@link Cutout.Rect}, {@link Cutout.Circle}, and {@link Cutout.Polygon}
+ * are supported. {@link Cutout.Spline} drops in by extending the
+ * {@code polygonize} switch with a Catmull-Rom tessellator. Circles are
+ * sampled to {@value #CIRCLE_SEGMENTS}-segment polygons; chord error for a
+ * 35 mm cup hole at this resolution is ≈0.08 mm, well under any visible
  * threshold for cabinet-scale rendering.
  */
 public final class PartMeshBuilder {
@@ -227,11 +227,31 @@ public final class PartMeshBuilder {
      */
     private static Polygon polygonize(Cutout c) {
         return switch (c) {
-            case Cutout.Rect r   -> rectPolygon(r.xMm(), r.yMm(), r.widthMm(), r.heightMm());
+            case Cutout.Rect r    -> rectPolygon(r.xMm(), r.yMm(), r.widthMm(), r.heightMm());
             case Cutout.Circle ci -> circlePolygon(ci.cxMm(), ci.cyMm(), ci.radiusMm());
-            case Cutout.Polygon ignored -> null;
+            case Cutout.Polygon p -> polygonFromVertices(p.vertices());
             case Cutout.Spline ignored -> null;
         };
+    }
+
+    /**
+     * JTS polygon from a vertex list. Auto-closes if the caller didn't repeat
+     * the first vertex at the end. Degenerate inputs (fewer than 3 distinct
+     * points) collapse to a zero-area polygon and JTS will discard them
+     * harmlessly during the difference op.
+     */
+    private static Polygon polygonFromVertices(List<Point2D> vertices) {
+        if (vertices.size() < 3) return null;
+        boolean alreadyClosed =
+                Math.abs(vertices.get(0).xMm() - vertices.get(vertices.size() - 1).xMm()) < 1e-6f
+                && Math.abs(vertices.get(0).yMm() - vertices.get(vertices.size() - 1).yMm()) < 1e-6f;
+        int n = vertices.size() + (alreadyClosed ? 0 : 1);
+        Coordinate[] cs = new Coordinate[n];
+        for (int i = 0; i < vertices.size(); i++) {
+            cs[i] = new Coordinate(vertices.get(i).xMm(), vertices.get(i).yMm());
+        }
+        if (!alreadyClosed) cs[n - 1] = cs[0];
+        return GF.createPolygon(cs);
     }
 
     private static void forEachPolygon(Geometry g, Consumer<Polygon> fn) {

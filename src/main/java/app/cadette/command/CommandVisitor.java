@@ -644,16 +644,7 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         executor.pushAction(new CutAction(scene, partName, cutout));
         // rebuildPartMesh handles mesh regeneration + markCutSheetDirty.
         scene.rebuildPartMesh(partName);
-        String result = "Added cutout to '" + partName + "': " + describeCutout(cutout, abbr);
-        // Non-rect cutouts are recorded and appear in cut sheet + BOM, but
-        // the 3D mesh generator only handles rectangles today. Surface that
-        // gap once at command time so users aren't surprised by an unchanged
-        // 3D view. (PartMeshBuilder skips non-rects silently.)
-        if (!(cutout instanceof Cutout.Rect)) {
-            result += "\n  (Note: 3D mesh does not yet render non-rectangular cutouts; "
-                    + "the cutout still appears on the cut sheet and in the BOM.)";
-        }
-        return result;
+        return "Added cutout to '" + partName + "': " + describeCutout(cutout, abbr);
     }
 
     private static boolean cutoutIntersectsPartFace(Cutout c, Part p) {
@@ -690,6 +681,16 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             Float depth = c.DEPTH() != null ? toMm(evalFloat(exprs.get(3))) : null;
             return new Cutout.Circle(cx, cy, radius, depth, Cutout.Face.FRONT);
         }
+        if (ctx instanceof CadetteCommandParser.PolygonCutShapeContext p) {
+            // POLYGON (x1, y1), (x2, y2), ... [DEPTH <d>]
+            List<Point2D> vertices = p.vertexPair().stream()
+                    .map(v -> new Point2D(
+                            toMm(evalFloat(v.expression(0))),
+                            toMm(evalFloat(v.expression(1)))))
+                    .toList();
+            Float depth = p.DEPTH() != null ? toMm(evalFloat(p.expression())) : null;
+            return new Cutout.Polygon(vertices, depth, Cutout.Face.FRONT);
+        }
         throw new IllegalStateException("Unhandled cutShape alternative: "
                 + ctx.getClass().getSimpleName());
     }
@@ -712,6 +713,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             return String.format("circle at (%.1f, %.1f) %s radius %.1f %s%s",
                     fromMm(c.cxMm()), fromMm(c.cyMm()), abbr,
                     fromMm(c.radiusMm()), abbr, depth);
+        }
+        if (cutout instanceof Cutout.Polygon p) {
+            String depth = p.depthMm() != null
+                    ? String.format(" %.1f %s deep", fromMm(p.depthMm()), abbr)
+                    : " through";
+            return String.format("polygon (%d vertices)%s",
+                    p.vertices().size(), depth);
         }
         return cutout.toString();  // variants not yet user-facing
     }

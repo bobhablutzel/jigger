@@ -225,9 +225,9 @@ joinCommand
     : JOIN objectName TO objectName WITH jointType joinArg*
     ;
 
-// `cut <part> rect at x, y size w, h [depth N]` — removes a region from a part.
-// Shape alternatives (circle, polygon, spline) will be added as separate
-// cutShape productions in a later phase; the model already carries stubs.
+// `cut <part> <shape> [depth N]` — removes a region from a part.
+// Shapes: rect, circle, polygon (vertex list). Spline is the next variant
+// to land; the model already carries stubs for both polygon and spline.
 cutCommand
     : CUT objectName cutShape
     ;
@@ -239,6 +239,15 @@ cutShape
     | CIRCLE AT expression COMMA expression
       RADIUS expression
       (DEPTH expression)?                       # circleCutShape
+    | POLYGON vertexPair (COMMA vertexPair)*
+      (DEPTH expression)?                       # polygonCutShape
+    ;
+
+// Parenthesised (x, y) pair for vertex lists. Parens disambiguate
+// against the variable-arity comma-separated coordinate streams that
+// rect/circle use with their fixed coordinate counts.
+vertexPair
+    : LPAREN expression COMMA expression RPAREN
     ;
 
 joinArg

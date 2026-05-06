@@ -27,6 +27,7 @@ import java.lang.reflect.Method;
 import java.util.List;
 
 import static app.cadette.MeshInvariants.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Tests the custom mesh builder for parts with rect cutouts — both through
@@ -359,5 +360,69 @@ class PartMeshBuilderTest {
         float halfT = 9f;
         assertHasMaterialAt(m, mx(370, 600), my(450, 900), 0f);          // mid-thickness, solid
         assertNoMaterialAt(m, mx(370, 600), my(450, 900), halfT - 4f);   // above pocket floor (+5)
+    }
+
+    // ---- Polygon cutouts ------------------------------------------------
+
+    /** Shoelace area for a polygon defined by its vertex list. */
+    private static float polygonArea(app.cadette.model.Point2D... pts) {
+        float sum = 0;
+        for (int i = 0; i < pts.length; i++) {
+            app.cadette.model.Point2D a = pts[i];
+            app.cadette.model.Point2D b = pts[(i + 1) % pts.length];
+            sum += a.xMm() * b.yMm() - b.xMm() * a.yMm();
+        }
+        return Math.abs(sum) * 0.5f;
+    }
+
+    @Test
+    void triangleThroughCutRemovesMaterial() {
+        // Right triangle: legs 100 mm each, area = 5000.
+        var v0 = new app.cadette.model.Point2D(100, 100);
+        var v1 = new app.cadette.model.Point2D(200, 100);
+        var v2 = new app.cadette.model.Point2D(100, 200);
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Polygon(List.of(v0, v1, v2), null, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        assertVolume(m, 600f * 900 * 18 - polygonArea(v0, v1, v2) * 18, V_TOL);
+        // Inside the triangle (centroid roughly at (133, 133)) → no material.
+        assertNoMaterialAt(m, mx(133, 600), my(133, 900), 0);
+        // Far from triangle → solid.
+        assertHasMaterialAt(m, mx(400, 600), my(400, 900), 0);
+    }
+
+    @Test
+    void pentagonPartialDepthRemovesMaterial() {
+        // 5-vertex partial-depth pocket. Volume removed = area × depth.
+        var v0 = new app.cadette.model.Point2D(100, 100);
+        var v1 = new app.cadette.model.Point2D(150, 100);
+        var v2 = new app.cadette.model.Point2D(165, 140);
+        var v3 = new app.cadette.model.Point2D(125, 170);
+        var v4 = new app.cadette.model.Point2D(85, 140);
+        float depth = 5f;
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Polygon(List.of(v0, v1, v2, v3, v4), depth, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        assertVolume(m, 600f * 900 * 18 - polygonArea(v0, v1, v2, v3, v4) * depth, V_TOL);
+        // Inside pocket below floor → material; above floor → empty.
+        // Pentagon centroid ≈ (125, 130). Floor at +halfT - depth = 4.
+        assertHasMaterialAt(m, mx(125, 600), my(130, 900), 0f);
+        assertNoMaterialAt(m, mx(125, 600), my(130, 900), 6f);
+        // Bottom face still solid across the panel.
+        assertFaceCoversAtZ(m, -9f, -300f, 300f, -450f, 450f, L_TOL);
+    }
+
+    @Test
+    void polygonAcceptsExplicitClosingVertex() {
+        // Caller repeats the first vertex at the end — should produce the
+        // same mesh as the auto-closed version.
+        var v0 = new app.cadette.model.Point2D(100, 100);
+        var v1 = new app.cadette.model.Point2D(200, 100);
+        var v2 = new app.cadette.model.Point2D(100, 200);
+        Mesh autoClosed = buildRaw(600, 900, 18, List.of(
+                new Cutout.Polygon(List.of(v0, v1, v2), null, Cutout.Face.FRONT)));
+        Mesh explicitClose = buildRaw(600, 900, 18, List.of(
+                new Cutout.Polygon(List.of(v0, v1, v2, v0), null, Cutout.Face.FRONT)));
+        assertEquals(signedVolume(autoClosed), signedVolume(explicitClose), V_TOL);
     }
 }
