@@ -47,7 +47,12 @@ public enum JointType {
                     MaterialType.HARDWOOD, MaterialType.SOFTWOOD, MaterialType.MDF)),
     POCKET_SCREW("Pocket screw", false,
             EnumSet.of(MaterialType.PLYWOOD, MaterialType.HARDWOOD,
-                    MaterialType.SOFTWOOD, MaterialType.MDF));
+                    MaterialType.SOFTWOOD, MaterialType.MDF)),
+    COUNTERSUNK_SCREW("Countersunk screw", false,
+            EnumSet.of(MaterialType.PLYWOOD, MaterialType.HARDWOOD,
+                    MaterialType.SOFTWOOD, MaterialType.MDF)),
+    GLUE("Glue", false,
+            EnumSet.allOf(MaterialType.class));
     // Future: BISCUIT, DOWEL, DOVETAIL, MORTISE_TENON, BOX_JOINT
 
     private final String displayName;

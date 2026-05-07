@@ -223,7 +223,7 @@ public class CutSheetExporter {
             // CutSheetRenderer's Java2D path, but using PDFBox's line API
             // and PDF's bottom-left origin (so the part-local Y → PDF Y
             // mapping is inverted relative to the Java2D version).
-            drawPdfCutoutOverlays(cs, part, px, py, ph, scale,
+            drawPdfCutoutOverlays(cs, part, px, py, pw, ph, scale,
                     partCutouts.getOrDefault(part.getPartName(), List.of()));
 
             // Part label
@@ -270,10 +270,16 @@ public class CutSheetExporter {
      */
     private static void drawPdfCutoutOverlays(PDPageContentStream cs,
                                               SheetLayout.PlacedPart part,
-                                              float px, float py, float ph, float scale,
+                                              float px, float py, float pw, float ph, float scale,
                                               List<app.cadette.model.Cutout> cutouts)
             throws IOException {
         if (cutouts.isEmpty()) return;
+        // Clip to the part's rect so a cutout extending past the part edge
+        // doesn't render dashed lines into empty space — matches the
+        // CutSheetRenderer (Java2D) clipping behaviour.
+        cs.saveGraphicsState();
+        cs.addRect(px, py, pw, ph);
+        cs.clip();
         setStrokeColor(cs, CutSheetRenderer.CUTOUT_COLOR);
         cs.setLineWidth(0.5f);
         cs.setLineDashPattern(new float[]{2.5f, 2f}, 0);
@@ -313,6 +319,7 @@ public class CutSheetExporter {
         }
         // Reset dash pattern so subsequent strokes (label baselines, etc.) are solid.
         cs.setLineDashPattern(new float[]{}, 0);
+        cs.restoreGraphicsState();
     }
 
     /**

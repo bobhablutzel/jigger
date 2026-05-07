@@ -243,7 +243,7 @@ public class CutSheetRenderer {
 
             // Cutout overlays (dashed) — drawn on top of the part fill but
             // under the label so labels stay legible when overlapping cuts.
-            drawCutoutOverlays(g2, part, px, py, scale, partCutouts);
+            drawCutoutOverlays(g2, part, px, py, pw, ph, scale, partCutouts);
 
             // Label: part name + dimensions
             drawPartLabel(g2, part, px, py, pw, ph, units);
@@ -263,16 +263,24 @@ public class CutSheetRenderer {
      * Draw dashed-line overlays for each rectangular cutout on the placed part.
      * Non-rect cutout variants (Circle, Polygon, Spline) are skipped — they'll
      * land here when their respective Phase E renderers are wired up.
+     *
+     * <p>Clips overlays to the part's rect on the sheet so a cutout authored
+     * with bounds extending past the part edge doesn't render dashed lines
+     * into empty space — the actual cut clips at the boundary, the visual
+     * should match.
      */
     private static void drawCutoutOverlays(Graphics2D g2, SheetLayout.PlacedPart part,
-                                            float px, float py, float scale,
+                                            float px, float py, float pw, float ph,
+                                            float scale,
                                             Map<String, List<Cutout>> partCutouts) {
         List<Cutout> cutouts = partCutouts.getOrDefault(part.getPartName(), List.of());
         if (cutouts.isEmpty()) return;
 
         Stroke originalStroke = g2.getStroke();
         Color originalColor = g2.getColor();
+        Shape originalClip = g2.getClip();
 
+        g2.clip(new Rectangle2D.Float(px, py, pw, ph));
         g2.setColor(CUTOUT_COLOR);
         g2.setStroke(CUTOUT_STROKE);
 
@@ -290,6 +298,7 @@ public class CutSheetRenderer {
             // Cutout.Polygon / Spline: skip until those variants land.
         }
 
+        g2.setClip(originalClip);
         g2.setStroke(originalStroke);
         g2.setColor(originalColor);
     }

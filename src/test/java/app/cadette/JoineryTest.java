@@ -358,4 +358,80 @@ class JoineryTest extends HeadlessTestBase {
         assertEquals("JB/left", joints.get(0).receivingPartName());
         assertEquals("JB/bottom", joints.get(0).insertedPartName());
     }
+
+    // ---- Glue (face-glue, no hardware) ----
+
+    @Test
+    void testGlueJoint() {
+        exec("create part \"side\" size 400, 600 at 0,0,0");
+        exec("create part \"liner\" size 400, 600 at 0,0,0");
+        String result = exec("join \"side\" to \"liner\" with glue");
+        assertTrue(result.contains("Glue"), "Should report glue joint: " + result);
+
+        var joints = sceneManager.getJointRegistry().getJointsForPart("side");
+        assertEquals(1, joints.size());
+        Joint g = joints.get(0);
+        assertEquals(JointType.GLUE, g.type());
+        assertInstanceOf(Joint.Glue.class, g);
+        assertEquals("side", g.receivingPartName());
+        assertEquals("liner", g.insertedPartName());
+    }
+
+    @Test
+    void testGlueJointDoesNotInferCutout() {
+        // Glue is structural/logical — no machined geometry. Joint-inferred
+        // cutouts list should be empty.
+        exec("create part \"side\" size 400, 600 at 0,0,0");
+        exec("create part \"liner\" size 400, 600 at 0,0,0");
+        exec("join \"side\" to \"liner\" with glue");
+
+        Joint g = sceneManager.getJointRegistry().getJointsForPart("side").get(0);
+        assertEquals(java.util.Optional.empty(),
+                g.inferReceivingCutout(sceneManager.getPart("side"),
+                                       sceneManager.getPart("liner"),
+                                       sceneManager));
+    }
+
+    // ---- Countersunk screws (perpendicular flush-head) ----
+
+    @Test
+    void testCountersunkScrewJoint() {
+        exec("create part \"runner\" size 800, 19 at 0,0,0");
+        exec("create part \"base\" size 800, 600 at 0,0,0");
+        String result = exec("join \"base\" to \"runner\" with countersunk_screw screws 4 spacing 200");
+        assertTrue(result.contains("Countersunk"), "Should report countersunk: " + result);
+
+        var joints = sceneManager.getJointRegistry().getJointsForPart("base");
+        assertEquals(1, joints.size());
+        Joint cs = joints.get(0);
+        assertEquals(JointType.COUNTERSUNK_SCREW, cs.type());
+        assertInstanceOf(Joint.CountersunkScrew.class, cs);
+        Joint.CountersunkScrew screw = (Joint.CountersunkScrew) cs;
+        assertEquals(4, screw.screwCount());
+        assertEquals(200f, screw.screwSpacingMm(), 0.1f);
+    }
+
+    @Test
+    void testCountersunkScrewBomLine() {
+        exec("create part \"runner\" size 800, 19 at 0,0,0");
+        exec("create part \"base\" size 800, 600 at 0,0,0");
+        exec("join \"base\" to \"runner\" with countersunk_screw screws 4 spacing 200");
+
+        String bom = exec("show cutlist");
+        assertTrue(bom.toLowerCase().contains("countersunk"),
+                "BOM should list countersunk screws: " + bom);
+        assertTrue(bom.contains("4"),
+                "BOM should reflect screw count: " + bom);
+    }
+
+    @Test
+    void testGlueJointBomLine() {
+        exec("create part \"side\" size 400, 600 at 0,0,0");
+        exec("create part \"liner\" size 400, 600 at 0,0,0");
+        exec("join \"side\" to \"liner\" with glue");
+
+        String bom = exec("show cutlist");
+        assertTrue(bom.toLowerCase().contains("glue"),
+                "BOM should mention glue-up: " + bom);
+    }
 }

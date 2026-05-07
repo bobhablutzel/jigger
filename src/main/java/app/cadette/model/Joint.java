@@ -18,6 +18,8 @@
 
 package app.cadette.model;
 
+import app.cadette.UnitSystem;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -36,7 +38,8 @@ import java.util.Optional;
  * type-level question, not a per-instance one).
  */
 public sealed interface Joint
-        permits Joint.Butt, Joint.Dado, Joint.Rabbet, Joint.PocketScrew {
+        permits Joint.Butt, Joint.Dado, Joint.Rabbet, Joint.PocketScrew,
+                Joint.CountersunkScrew, Joint.Glue {
 
     String receivingPartName();
 
@@ -70,6 +73,30 @@ public sealed interface Joint
     default List<ValidationIssue> validate(Part receiving, Part inserted,
                                            JointGeometryContext ctx) {
         return List.of();
+    }
+
+    /**
+     * BOM fastener entries this joint contributes (e.g., screws, glue-ups).
+     * Default: empty for joints with no hardware. Overrides return one or
+     * more {@link CutListGenerator.FastenerEntry} items; the cut-list
+     * aggregates same-labelled entries across all joints.
+     *
+     * <p>Per-variant placement keeps {@link CutListGenerator} from needing
+     * to know about every joint kind — adding a new joint with a new
+     * fastener is a one-line override here, no edit to the generator.
+     */
+    default List<CutListGenerator.FastenerEntry> bomFasteners() {
+        return List.of();
+    }
+
+    /**
+     * Per-part operation note for the cut-list (e.g., "dado 9mm deep for
+     * 'shelf'"). Default: empty for joints with no machining or hardware
+     * operation. Each variant formats its own description; the generator
+     * just calls this and emits.
+     */
+    default Optional<String> describeOperation(UnitSystem units) {
+        return Optional.empty();
     }
 
     /**
@@ -109,6 +136,12 @@ public sealed interface Joint
                                               JointGeometryContext ctx) {
             return JointValidator.validateDado(this, receiving, inserted, ctx);
         }
+
+        @Override
+        public Optional<String> describeOperation(UnitSystem units) {
+            return Optional.of(String.format("dado %.1f %s deep for \"%s\"",
+                    units.fromMm(depthMm), units.getAbbreviation(), insertedPartName));
+        }
     }
 
     record Rabbet(String receivingPartName, String insertedPartName, float depthMm, SourceLocation source)
@@ -135,6 +168,12 @@ public sealed interface Joint
                                               JointGeometryContext ctx) {
             return JointValidator.validateRabbet(this, receiving, inserted, ctx);
         }
+
+        @Override
+        public Optional<String> describeOperation(UnitSystem units) {
+            return Optional.of(String.format("rabbet %.1f %s deep for \"%s\"",
+                    units.fromMm(depthMm), units.getAbbreviation(), insertedPartName));
+        }
     }
 
     record PocketScrew(String receivingPartName, String insertedPartName,
@@ -144,6 +183,80 @@ public sealed interface Joint
             this(receivingPartName, insertedPartName, screwCount, screwSpacingMm, null);
         }
         @Override public JointType type() { return JointType.POCKET_SCREW; }
-        // No cutout. Future: hardware contribution to BOM.
+
+        @Override
+        public List<CutListGenerator.FastenerEntry> bomFasteners() {
+            return screwCount > 0
+                    ? List.of(new CutListGenerator.FastenerEntry("Pocket screws", screwCount))
+                    : List.of();
+        }
+
+        @Override
+        public Optional<String> describeOperation(UnitSystem units) {
+            return screwCount > 0
+                    ? Optional.of(String.format("%d pocket screw hole(s) for \"%s\"",
+                            screwCount, insertedPartName))
+                    : Optional.empty();
+        }
+    }
+
+    /**
+     * Perpendicular wood screws driven through a clearance hole in the
+     * receiving part into the inserted part, with the head sitting flush in
+     * a countersunk recess. Distinct from {@link PocketScrew} in mechanics
+     * (perpendicular vs angled, countersunk recess vs hidden pocket) and
+     * shop operation (countersink bit vs Kreg jig).
+     *
+     * <p>v1 carries no cutout inference — explicit countersunk recess and
+     * clearance hole live as separate {@code cut circle ... depth} commands
+     * if the user wants them visible. The joint contributes a fastener line
+     * to the BOM and a per-part operation note.
+     */
+    record CountersunkScrew(String receivingPartName, String insertedPartName,
+                            int screwCount, float screwSpacingMm, SourceLocation source) implements Joint {
+        public CountersunkScrew(String receivingPartName, String insertedPartName,
+                                int screwCount, float screwSpacingMm) {
+            this(receivingPartName, insertedPartName, screwCount, screwSpacingMm, null);
+        }
+        @Override public JointType type() { return JointType.COUNTERSUNK_SCREW; }
+
+        @Override
+        public List<CutListGenerator.FastenerEntry> bomFasteners() {
+            return screwCount > 0
+                    ? List.of(new CutListGenerator.FastenerEntry("Countersunk screws", screwCount))
+                    : List.of();
+        }
+
+        @Override
+        public Optional<String> describeOperation(UnitSystem units) {
+            return screwCount > 0
+                    ? Optional.of(String.format("%d countersunk hole(s) for \"%s\"",
+                            screwCount, insertedPartName))
+                    : Optional.empty();
+        }
+    }
+
+    /**
+     * Adhesive-only joint between two parts' adjoining faces. No cutout, no
+     * hardware. Used for laminating doubled stock, glue-ups of multi-piece
+     * assemblies, and any case where the parts attach via glue alone. The
+     * joint contributes an "Adhesive" line to the BOM as a glue-up step
+     * count; future work can compute glue-surface area from face overlap.
+     */
+    record Glue(String receivingPartName, String insertedPartName, SourceLocation source) implements Joint {
+        public Glue(String receivingPartName, String insertedPartName) {
+            this(receivingPartName, insertedPartName, null);
+        }
+        @Override public JointType type() { return JointType.GLUE; }
+
+        @Override
+        public List<CutListGenerator.FastenerEntry> bomFasteners() {
+            return List.of(new CutListGenerator.FastenerEntry("Glue-ups", 1));
+        }
+
+        @Override
+        public Optional<String> describeOperation(UnitSystem units) {
+            return Optional.of(String.format("glue-up to \"%s\"", insertedPartName));
+        }
     }
 }

@@ -240,6 +240,18 @@ public class MaterialCatalog {
                 .build());
 
         register(Material.builder()
+                .name("baltic-birch-18mm")
+                .displayName("18mm Baltic Birch Plywood (5x5 sheet)")
+                .type(MaterialType.PLYWOOD)
+                .kind(MaterialKind.SHEET_GOOD)
+                .thicknessMm(18f)
+                .sheetWidthMm(1524f).sheetHeightMm(1524f)
+                .grainDirection(GrainDirection.ALONG_LENGTH)
+                .measurementSystem(MeasurementSystem.METRIC)
+                .displayColor(new ColorRGBA(0.76f, 0.60f, 0.42f, 1f))
+                .build());
+
+        register(Material.builder()
                 .name("plywood-12mm")
                 .displayName("12mm Plywood")
                 .type(MaterialType.PLYWOOD)
@@ -249,6 +261,18 @@ public class MaterialCatalog {
                 .grainDirection(GrainDirection.ALONG_LENGTH)
                 .measurementSystem(MeasurementSystem.METRIC)
                 .displayColor(new ColorRGBA(0.72f, 0.56f, 0.38f, 1f))
+                .build());
+
+        register(Material.builder()
+                .name("baltic-birch-9mm")
+                .displayName("9mm Baltic Birch Plywood (5x5 sheet)")
+                .type(MaterialType.PLYWOOD)
+                .kind(MaterialKind.SHEET_GOOD)
+                .thicknessMm(9f)
+                .sheetWidthMm(1524f).sheetHeightMm(1524f)
+                .grainDirection(GrainDirection.ALONG_LENGTH)
+                .measurementSystem(MeasurementSystem.METRIC)
+                .displayColor(new ColorRGBA(0.76f, 0.60f, 0.42f, 1f))
                 .build());
 
         register(Material.builder()

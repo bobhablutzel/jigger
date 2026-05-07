@@ -58,6 +58,9 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         String shape = ctx.shape().getText();
         String name = extractName(ctx.objectName());
 
+        String collision = nameCollisionError(name);
+        if (collision != null) return collision;
+
         Vector3f position = Vector3f.ZERO;
         Vector3f size = defaultSize();
         ColorRGBA color = ColorRGBA.White;
@@ -137,6 +140,9 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     @Override
     public String visitCreatePartCommand(CadetteCommandParser.CreatePartCommandContext ctx) {
         String name = extractName(ctx.objectName());
+
+        String collision = nameCollisionError(name);
+        if (collision != null) return collision;
 
         app.cadette.model.Material material = executor.getDefaultMaterial();
         CadetteCommandParser.PartSizeContext partSizeCtx = null;
@@ -598,6 +604,9 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             case RABBET -> new Joint.Rabbet(receivingName, insertedName, depthMm, src);
             case POCKET_SCREW -> new Joint.PocketScrew(receivingName, insertedName,
                     screwCount, screwSpacingMm, src);
+            case COUNTERSUNK_SCREW -> new Joint.CountersunkScrew(receivingName, insertedName,
+                    screwCount, screwSpacingMm, src);
+            case GLUE -> new Joint.Glue(receivingName, insertedName, src);
         };
 
         scene.getJointRegistry().addJoint(joint);
@@ -2209,6 +2218,23 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         String raw = interpolateString(rawObjectName(ctx));
         String prefix = executor.getCurrentInstancePrefix();
         return prefix != null ? prefix + "/" + raw : raw;
+    }
+
+    /**
+     * Returns an error message if a scene object already exists with the given
+     * name — covers both parts and primitive shapes (box / sphere / cylinder)
+     * since they share the SceneManager's name registry. Returns {@code null}
+     * if the name is free.
+     *
+     * <p>Without this guard, a duplicate {@code create} silently overwrites
+     * the registry entry while leaving the previous wrapper attached to the
+     * scene graph. The previous object becomes a "ghost": still rendered in
+     * 3D but invisible to {@code list}, {@code cut}, {@code move}, etc.
+     */
+    private String nameCollisionError(String name) {
+        if (scene.getObjectRecord(name) == null) return null;
+        return "An object named '" + name + "' already exists. "
+                + "Use a different name, or delete the existing object first.";
     }
 
     private static String rawObjectName(CadetteCommandParser.ObjectNameContext ctx) {

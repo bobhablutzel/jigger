@@ -111,19 +111,7 @@ public class CutListGenerator {
     }
 
     private static Optional<String> describeOperation(Joint j, UnitSystem units) {
-        String abbr = units.getAbbreviation();
-        return switch (j) {
-            case Joint.Dado d -> Optional.of(String.format(
-                    "dado %.1f %s deep for \"%s\"",
-                    units.fromMm(d.depthMm()), abbr, d.insertedPartName()));
-            case Joint.Rabbet r -> Optional.of(String.format(
-                    "rabbet %.1f %s deep for \"%s\"",
-                    units.fromMm(r.depthMm()), abbr, r.insertedPartName()));
-            case Joint.PocketScrew ps when ps.screwCount() > 0 -> Optional.of(String.format(
-                    "%d pocket screw hole(s) for \"%s\"",
-                    ps.screwCount(), ps.insertedPartName()));
-            default -> Optional.empty();  // butt or zero-screw pocket-screw — no machining
-        };
+        return j.describeOperation(units);
     }
 
     private static String describeCutout(Cutout cutout, UnitSystem units) {
@@ -189,13 +177,19 @@ public class CutListGenerator {
     /**
      * Generate fastener summary from joints.
      */
+    /**
+     * Aggregate fastener entries from every joint's {@code bomFasteners()}
+     * contribution, summed by type label. Adding a new joint type that
+     * carries hardware is a one-line override on the variant — this method
+     * doesn't need to change.
+     */
     public static List<FastenerEntry> generateFasteners(JointRegistry joints) {
-        int totalPocketScrews = joints.getAllJoints().stream()
-                .mapToInt(j -> j instanceof Joint.PocketScrew ps ? ps.screwCount() : 0)
-                .sum();
-        return totalPocketScrews > 0
-                ? List.of(new FastenerEntry("Pocket screws", totalPocketScrews))
-                : List.of();
-        // Future: biscuits, dowels, etc.
+        Map<String, Integer> totals = new LinkedHashMap<>();
+        joints.getAllJoints().stream()
+                .flatMap(j -> j.bomFasteners().stream())
+                .forEach(fe -> totals.merge(fe.getType(), fe.getCount(), Integer::sum));
+        return totals.entrySet().stream()
+                .map(e -> new FastenerEntry(e.getKey(), e.getValue()))
+                .toList();
     }
 }
