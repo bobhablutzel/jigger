@@ -700,6 +700,16 @@ public class SceneManager extends SimpleApplication implements JointGeometryCont
                 }));
     }
 
+    /**
+     * Per-part keep regions. Keeps are user-authored only; no joint-inferred
+     * equivalent (joints are subtractive). Mirrors {@link #getEffectiveCutouts}
+     * so the cut-sheet renderers can overlay both kinds.
+     */
+    public java.util.Map<String, java.util.List<Cutout>> getEffectiveKeeps() {
+        return parts.values().stream().collect(java.util.stream.Collectors.toMap(
+                Part::getName, Part::getKeeps));
+    }
+
     private com.jme3.scene.Mesh buildPartMesh(Part part) {
         List<Cutout> inferred = JointCutoutInferrer.inferFor(
                 part, jointRegistry, parts, this, warningSink);
@@ -709,7 +719,7 @@ public class SceneManager extends SimpleApplication implements JointGeometryCont
         List<Cutout> all = new ArrayList<>(part.getCutouts());
         all.addAll(inferred);
         return PartMeshBuilder.build(part.getCutWidthMm(), part.getCutHeightMm(),
-                part.getThicknessMm(), all);
+                part.getThicknessMm(), all, part.getKeeps());
     }
 
     // ---- JointGeometryContext ----

@@ -68,6 +68,8 @@ command
     | rotateCommand
     | joinCommand
     | cutCommand
+    | keepCommand
+    | filletCommand
     | displayCommand
     | hideCommand
     | listCommand
@@ -210,6 +212,7 @@ nameLike
     : ID
     | WIDTH | HEIGHT | DEPTH | SIZE | COLOR | MATERIAL | GRAIN | PART | KERF
     | MM | CM | M | IN | FT | YD
+    | FRONT | BACK
     ;
 
 partSize
@@ -233,19 +236,52 @@ cutCommand
     : CUT objectName cutShape
     ;
 
-cutShape
-    : RECT AT expression COMMA expression
-      SIZE expression COMMA expression
-      (DEPTH expression)?                       # rectCutShape
-    | CIRCLE AT expression COMMA expression
+// `keep <part> <shape>` — same shape grammar as cut, opposite operation.
+// Keeps only the material *inside* the shape; removes everything outside.
+// Useful for defining non-rectangular outlines (curved handles, irregular
+// shapes) by tracing what to retain rather than what to remove.
+keepCommand
+    : KEEP objectName cutShape
+    ;
+
+// `fillet <part> at x, y radius r facing <NE|NW|SE|SW> [depth d]` —
+// rounds an outer 2D corner with a quarter-arc tangent to the two edges.
+// Sugar over a polygon cut of the small wedge between the L-shape corner
+// and the inscribed arc. The `facing` direction names the quadrant the
+// corner *opens into* (i.e. where the empty space is, opposite the
+// material side). Cardinal directions are parsed by the visitor as a
+// nameLike (no new keyword pollution); numeric-degrees facing is a
+// follow-up.
+filletCommand
+    : FILLET objectName AT expression COMMA expression
       RADIUS expression
-      (DEPTH expression)?                       # circleCutShape
-    | POLYGON vertexPair (COMMA vertexPair)*
-      (DEPTH expression)?                       # polygonCutShape
-    | SPLINE vertexPair (COMMA vertexPair)*
-      (DEPTH expression)?                       # splineCutShape
-    | SHAPE objectName AT expression COMMA expression
-      (DEPTH expression)?                       # namedShapeCutShape
+      FACING nameLike
+      (DEPTH expression)?
+    ;
+
+// Cut shape: keyword-prefixed shape with arg clauses. Rect/circle/named-shape
+// take order-independent clauses (AT/SIZE/RADIUS/DEPTH); the visitor enforces
+// which clauses are required for which shape and rejects mismatches. Polygon/
+// spline/curve carry their data in a vertex list rather than clauses, so they
+// just take an optional DEPTH at the end.
+cutShape
+    : RECT shapeArg+                                          # rectCutShape
+    | CIRCLE shapeArg+                                        # circleCutShape
+    | POLYGON vertexPair (COMMA vertexPair)* shapeArg*        # polygonCutShape
+    | SPLINE vertexPair (COMMA vertexPair)* shapeArg*         # splineCutShape
+    | CURVE vertexPair (COMMA vertexPair)* shapeArg*          # curveCutShape
+    | SHAPE objectName shapeArg+                              # namedShapeCutShape
+    ;
+
+// Order-independent argument clauses. The visitor enforces which clauses are
+// required (e.g. AT + SIZE for rect, AT + RADIUS for circle) and rejects
+// nonsensical pairings (RADIUS on a rect, SIZE on a polygon, etc.).
+shapeArg
+    : AT expression COMMA expression           # shapeArgAt
+    | SIZE expression COMMA expression         # shapeArgSize
+    | RADIUS expression                        # shapeArgRadius
+    | DEPTH expression                         # shapeArgDepth
+    | FACE nameLike                            # shapeArgFace
     ;
 
 // `shape <name> polygon|spline (x,y), (x,y), ...` — declares a named shape

@@ -22,9 +22,9 @@ import com.jme3.math.Vector3f;
 import lombok.Builder;
 import lombok.Data;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * A single cut piece of material.
@@ -51,8 +51,23 @@ public class Part {
     private final Vector3f position;    // offset from origin (or assembly origin)
     private final GrainRequirement grainRequirement;
 
+    // CopyOnWriteArrayList: the visitor thread mutates this list (addCutout
+    // from `cut` commands) while the JME3 GL thread iterates it inside
+    // PartMeshBuilder.build. COW gives the iterator a stable snapshot at the
+    // cost of a small array copy per write; our cutout counts are small enough
+    // that this is invisible.
     @Builder.Default
-    private final List<Cutout> cutouts = new ArrayList<>();
+    private final List<Cutout> cutouts = new CopyOnWriteArrayList<>();
+
+    /**
+     * Keep regions: shapes that constrain the part's outline by intersection.
+     * The mesh keeps only the area inside any keep region (and outside any
+     * cut). Lets the user define a curved or non-rectangular silhouette by
+     * tracing what to retain rather than what to remove. Empty list = no
+     * constraint (the rectangular blank itself is the silhouette).
+     */
+    @Builder.Default
+    private final List<Cutout> keeps = new CopyOnWriteArrayList<>();
 
     /** Material thickness in mm. */
     public float getThicknessMm() {
@@ -80,5 +95,18 @@ public class Part {
     /** Read-only view of the cutouts — prevents external callers from mutating the backing list. */
     public List<Cutout> getCutouts() {
         return Collections.unmodifiableList(cutouts);
+    }
+
+    /** Add a keep region — material outside the shape gets removed. */
+    public void addKeep(Cutout keep) {
+        keeps.add(keep);
+    }
+
+    public boolean removeKeep(Cutout keep) {
+        return keeps.remove(keep);
+    }
+
+    public List<Cutout> getKeeps() {
+        return Collections.unmodifiableList(keeps);
     }
 }

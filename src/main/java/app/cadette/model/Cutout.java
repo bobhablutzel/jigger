@@ -44,7 +44,7 @@ import java.util.List;
  * project_phase_e_cutouts.md for the staging plan.
  */
 public sealed interface Cutout
-        permits Cutout.Rect, Cutout.Circle, Cutout.Polygon, Cutout.Spline {
+        permits Cutout.Rect, Cutout.Circle, Cutout.Polygon, Cutout.Spline, Cutout.Curve {
 
     /**
      * Which face of the part the cutout opens on. The cut-face local
@@ -128,6 +128,36 @@ public sealed interface Cutout
      * extent math, which is a renderer concern.
      */
     record Spline(List<Point2D> controlPoints, Float depthMm, Face face) implements Cutout {
+        @Override
+        public BoundingBox bounds() {
+            if (controlPoints.isEmpty()) return new BoundingBox(0, 0, 0, 0);
+            float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY;
+            float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+            for (Point2D p : controlPoints) {
+                if (p.xMm() < minX) minX = p.xMm();
+                if (p.yMm() < minY) minY = p.yMm();
+                if (p.xMm() > maxX) maxX = p.xMm();
+                if (p.yMm() > maxY) maxY = p.yMm();
+            }
+            return new BoundingBox(minX, minY, maxX - minX, maxY - minY);
+        }
+    }
+
+    /**
+     * Cubic Bezier curve cutout. Control points come in groups of 3 — the
+     * curve is closed periodic with N segments where each segment is the
+     * cubic from {@code P[3i]} (start, on the curve), through handles
+     * {@code P[3i+1]} and {@code P[3i+2]} (off the curve), to
+     * {@code P[3(i+1) mod 3N]} (the next on-curve point, also the start of
+     * the next segment). Total control point count is always a multiple of
+     * 3, with at least 6 (≥2 segments) for a non-degenerate closed shape.
+     *
+     * <p>The control-point hull is a conservative upper bound on the curve's
+     * extent — cubic Beziers stay inside their convex hull. Tight bounds
+     * would require per-segment evaluation; bbox suffices for the bbox
+     * checks we run on cutouts today.
+     */
+    record Curve(List<Point2D> controlPoints, Float depthMm, Face face) implements Cutout {
         @Override
         public BoundingBox bounds() {
             if (controlPoints.isEmpty()) return new BoundingBox(0, 0, 0, 0);

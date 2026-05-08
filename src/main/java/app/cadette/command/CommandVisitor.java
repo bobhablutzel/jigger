@@ -688,6 +688,132 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         return result.toString();
     }
 
+    @Override
+    public String visitFilletCommand(CadetteCommandParser.FilletCommandContext ctx) {
+        String partName = extractName(ctx.objectName());
+        Part part = scene.getPart(partName);
+        if (part == null) {
+            return "Part '" + partName + "' not found.";
+        }
+
+        var exprs = ctx.expression();
+        float cx = toMm(evalFloat(exprs.get(0)));
+        float cy = toMm(evalFloat(exprs.get(1)));
+        float radius = toMm(evalFloat(exprs.get(2)));
+        Float depth = ctx.DEPTH() != null ? toMm(evalFloat(exprs.get(3))) : null;
+
+        String facingName = ctx.nameLike().getText().toUpperCase();
+        Float facingDeg = parseFacingCardinal(facingName);
+        if (facingDeg == null) {
+            return "Unknown facing direction '" + facingName + "'. Valid: NE, NW, SE, SW.";
+        }
+
+        List<Point2D> verts = filletWedgeVertices(cx, cy, radius, facingDeg);
+        Cutout cutout = new Cutout.Polygon(verts, depth, Cutout.Face.FRONT);
+
+        String abbr = executor.getUnits().getAbbreviation();
+        if (!PartMeshBuilder.intersectsPanelFace(cutout,
+                part.getCutWidthMm(), part.getCutHeightMm())) {
+            return String.format("Fillet at (%.1f, %.1f) %s falls outside '%s' (%.1f × %.1f %s); ignored.",
+                    fromMm(cx), fromMm(cy), abbr, partName,
+                    fromMm(part.getCutWidthMm()), fromMm(part.getCutHeightMm()), abbr);
+        }
+        part.addCutout(cutout);
+        executor.pushAction(new CutAction(scene, partName, cutout));
+        scene.rebuildPartMesh(partName);
+
+        String depthStr = depth != null
+                ? String.format(" %.1f %s deep", fromMm(depth), abbr)
+                : " through";
+        return String.format("Filleted '%s' at (%.1f, %.1f) %s, radius %.1f %s, facing %s%s",
+                partName, fromMm(cx), fromMm(cy), abbr,
+                fromMm(radius), abbr, facingName, depthStr);
+    }
+
+    /** Cardinal facing → degrees. {@code null} for unrecognised names. */
+    private static Float parseFacingCardinal(String name) {
+        return switch (name) {
+            case "NE" -> 45f;
+            case "NW" -> 135f;
+            case "SW" -> 225f;
+            case "SE" -> 315f;
+            default -> null;
+        };
+    }
+
+    /**
+     * Polygon vertices for a fillet wedge: corner point, tangent point on
+     * edge 1, arc samples, tangent point on edge 2. Auto-closes back to
+     * the corner. The wedge is the small region between the L-shape corner
+     * and the quarter-arc tangent to both edges.
+     */
+    private static List<Point2D> filletWedgeVertices(float cx, float cy, float r, float facingDeg) {
+        int arcSamples = 12;
+        double facingRad = Math.toRadians(facingDeg);
+        // Edges of material adjacent to the corner, 135° from facing each side.
+        double e1Rad = facingRad - Math.toRadians(135);
+        double e2Rad = facingRad + Math.toRadians(135);
+        // Tangent points B (on edge 1), D (on edge 2).
+        float bx = cx + r * (float) Math.cos(e1Rad);
+        float by = cy + r * (float) Math.sin(e1Rad);
+        float dxv = cx + r * (float) Math.cos(e2Rad);
+        float dyv = cy + r * (float) Math.sin(e2Rad);
+        // Arc centre: into the material along the bisector, distance r·√2.
+        double matRad = facingRad + Math.PI;
+        double diag = r * Math.sqrt(2);
+        float ax = cx + (float) (diag * Math.cos(matRad));
+        float ay = cy + (float) (diag * Math.sin(matRad));
+        // Arc spans 90°; pick the short way around.
+        double thetaB = Math.atan2(by - ay, bx - ax);
+        double thetaD = Math.atan2(dyv - ay, dxv - ax);
+        double delta = thetaD - thetaB;
+        if (delta > Math.PI)  delta -= 2 * Math.PI;
+        if (delta < -Math.PI) delta += 2 * Math.PI;
+
+        List<Point2D> verts = new ArrayList<>();
+        verts.add(new Point2D(cx, cy));
+        verts.add(new Point2D(bx, by));
+        for (int i = 1; i < arcSamples; i++) {
+            double t = (double) i / arcSamples;
+            double theta = thetaB + t * delta;
+            verts.add(new Point2D(
+                    ax + r * (float) Math.cos(theta),
+                    ay + r * (float) Math.sin(theta)));
+        }
+        verts.add(new Point2D(dxv, dyv));
+        return verts;
+    }
+
+    @Override
+    public String visitKeepCommand(CadetteCommandParser.KeepCommandContext ctx) {
+        String partName = extractName(ctx.objectName());
+        Part part = scene.getPart(partName);
+        if (part == null) {
+            return "Part '" + partName + "' not found.";
+        }
+        Cutout keep = buildCutout(ctx.cutShape());
+        String abbr = executor.getUnits().getAbbreviation();
+        // A keep region with no overlap with the panel would erase the panel
+        // entirely. Reject as a probable user error rather than silently
+        // produce an empty mesh.
+        if (!PartMeshBuilder.intersectsPanelFace(keep,
+                part.getCutWidthMm(), part.getCutHeightMm())) {
+            return String.format("Keep region %s falls outside '%s' (%.1f × %.1f %s); rejected "
+                    + "(would erase the panel).",
+                    describeCutout(keep, abbr), partName,
+                    fromMm(part.getCutWidthMm()), fromMm(part.getCutHeightMm()), abbr);
+        }
+        part.addKeep(keep);
+        executor.pushAction(new KeepAction(scene, partName, keep));
+        scene.rebuildPartMesh(partName);
+        StringBuilder result = new StringBuilder("Added keep region to '")
+                .append(partName).append("': ").append(describeCutout(keep, abbr));
+        if (cutoutExtendsPastPanel(keep, part)) {
+            result.append("\n  Note: keep region extends past the panel edge; clipped at the boundary.");
+        }
+        return result.toString();
+    }
+
     /** True if the cutout's bbox crosses any panel edge. Triggers an
      *  informational note so the user can spot typos that produce wildly
      *  off-panel coordinates (e.g. polygon vertex at 1500 instead of 150). */
@@ -702,70 +828,147 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     /** Dispatch on the cutShape alternative to build the appropriate Cutout variant. */
     private Cutout buildCutout(CadetteCommandParser.CutShapeContext ctx) {
         if (ctx instanceof CadetteCommandParser.RectCutShapeContext r) {
-            // AT <x>, <y> SIZE <w>, <h> [DEPTH <d>] — expressions are evaluated
-            // against the active scope, which includes any template vars if
-            // we're inside a template body.
-            var exprs = r.expression();
-            float x = toMm(evalFloat(exprs.get(0)));
-            float y = toMm(evalFloat(exprs.get(1)));
-            float w = toMm(evalFloat(exprs.get(2)));
-            float h = toMm(evalFloat(exprs.get(3)));
-            Float depth = r.DEPTH() != null ? toMm(evalFloat(exprs.get(4))) : null;
-            // Hand-typed `cut` commands always cut from the part's front face;
-            // joint inference picks the face dynamically and constructs Rect directly.
-            return new Cutout.Rect(x, y, w, h, depth, Cutout.Face.FRONT);
+            // Args (AT/SIZE/DEPTH/FACE) in any order; visitor enforces required set.
+            ShapeArgs args = parseShapeArgs(r.shapeArg());
+            // Reject mismatches first so the user gets a useful "wrong clause"
+            // message rather than a "missing required clause" one.
+            if (args.radius != null) throw new IllegalArgumentException("rect cut does not take `radius`");
+            if (args.at == null) throw new IllegalArgumentException("rect cut requires `at <x>, <y>`");
+            if (args.size == null) throw new IllegalArgumentException("rect cut requires `size <w>, <h>`");
+            return new Cutout.Rect(args.at[0], args.at[1], args.size[0], args.size[1],
+                    args.depth, args.face);
         }
         if (ctx instanceof CadetteCommandParser.CircleCutShapeContext c) {
-            // AT <cx>, <cy> RADIUS <r> [DEPTH <d>] — expressions are
-            // evaluated against the active scope as for rect.
-            var exprs = c.expression();
-            float cx = toMm(evalFloat(exprs.get(0)));
-            float cy = toMm(evalFloat(exprs.get(1)));
-            float radius = toMm(evalFloat(exprs.get(2)));
-            Float depth = c.DEPTH() != null ? toMm(evalFloat(exprs.get(3))) : null;
-            return new Cutout.Circle(cx, cy, radius, depth, Cutout.Face.FRONT);
+            ShapeArgs args = parseShapeArgs(c.shapeArg());
+            if (args.size != null) throw new IllegalArgumentException("circle cut does not take `size`; use `radius`");
+            if (args.at == null) throw new IllegalArgumentException("circle cut requires `at <cx>, <cy>`");
+            if (args.radius == null) throw new IllegalArgumentException("circle cut requires `radius <r>`");
+            return new Cutout.Circle(args.at[0], args.at[1], args.radius, args.depth, args.face);
         }
         if (ctx instanceof CadetteCommandParser.PolygonCutShapeContext p) {
-            // POLYGON (x1, y1), (x2, y2), ... [DEPTH <d>]
             List<Point2D> vertices = p.vertexPair().stream()
                     .map(v -> new Point2D(
                             toMm(evalFloat(v.expression(0))),
                             toMm(evalFloat(v.expression(1)))))
                     .toList();
-            Float depth = p.DEPTH() != null ? toMm(evalFloat(p.expression())) : null;
-            return new Cutout.Polygon(vertices, depth, Cutout.Face.FRONT);
+            ShapeArgs args = parseShapeArgs(p.shapeArg());
+            rejectVertexShapeMismatches("polygon", args);
+            return new Cutout.Polygon(vertices, args.depth, args.face);
         }
         if (ctx instanceof CadetteCommandParser.SplineCutShapeContext s) {
-            // SPLINE (x1, y1), (x2, y2), ... [DEPTH <d>]  — Catmull-Rom
+            // Catmull-Rom — interpolating, control points lie on the curve.
             List<Point2D> controls = s.vertexPair().stream()
                     .map(v -> new Point2D(
                             toMm(evalFloat(v.expression(0))),
                             toMm(evalFloat(v.expression(1)))))
                     .toList();
-            Float depth = s.DEPTH() != null ? toMm(evalFloat(s.expression())) : null;
-            return new Cutout.Spline(controls, depth, Cutout.Face.FRONT);
+            ShapeArgs args = parseShapeArgs(s.shapeArg());
+            rejectVertexShapeMismatches("spline", args);
+            return new Cutout.Spline(controls, args.depth, args.face);
+        }
+        if (ctx instanceof CadetteCommandParser.CurveCutShapeContext cv) {
+            // Cubic Bezier — control points in groups of 3, periodic closure.
+            List<Point2D> controls = cv.vertexPair().stream()
+                    .map(v -> new Point2D(
+                            toMm(evalFloat(v.expression(0))),
+                            toMm(evalFloat(v.expression(1)))))
+                    .toList();
+            if (controls.size() < 6 || controls.size() % 3 != 0) {
+                throw new IllegalArgumentException(
+                        "curve needs a multiple of 3 control points (≥6 for ≥2 segments); got "
+                        + controls.size());
+            }
+            ShapeArgs args = parseShapeArgs(cv.shapeArg());
+            rejectVertexShapeMismatches("curve", args);
+            return new Cutout.Curve(controls, args.depth, args.face);
         }
         if (ctx instanceof CadetteCommandParser.NamedShapeCutShapeContext n) {
-            // SHAPE <name> AT <ax>, <ay> [DEPTH <d>]
+            // SHAPE <name> with AT/DEPTH args in any order.
             String shapeName = extractName(n.objectName());
             Shape shape = executor.lookupShape(shapeName);
             if (shape == null) {
                 throw new IllegalArgumentException("Unknown shape: '" + shapeName + "'");
             }
-            float ax = toMm(evalFloat(n.expression(0)));
-            float ay = toMm(evalFloat(n.expression(1)));
-            Float depth = n.DEPTH() != null ? toMm(evalFloat(n.expression(2))) : null;
-            // Translate the shape's local-origin points by the anchor.
+            ShapeArgs args = parseShapeArgs(n.shapeArg());
+            if (args.size != null || args.radius != null) throw new IllegalArgumentException(
+                    "shape reference does not take `size` or `radius`");
+            if (args.at == null) throw new IllegalArgumentException(
+                    "shape reference requires `at <ax>, <ay>`");
+            float ax = args.at[0];
+            float ay = args.at[1];
+            Float depth = args.depth;
+            Cutout.Face face = args.face;
             List<Point2D> translated = shape.points().stream()
                     .map(p -> new Point2D(p.xMm() + ax, p.yMm() + ay))
                     .toList();
             return switch (shape) {
-                case Shape.Polygon ignored -> new Cutout.Polygon(translated, depth, Cutout.Face.FRONT);
-                case Shape.Spline ignored  -> new Cutout.Spline(translated, depth, Cutout.Face.FRONT);
+                case Shape.Polygon ignored -> new Cutout.Polygon(translated, depth, face);
+                case Shape.Spline ignored  -> new Cutout.Spline(translated, depth, face);
             };
         }
         throw new IllegalStateException("Unhandled cutShape alternative: "
                 + ctx.getClass().getSimpleName());
+    }
+
+    /**
+     * Parsed bag of shape clauses. Each field is null if the corresponding
+     * clause wasn't present. Caller validates required clauses for its shape.
+     */
+    private static final class ShapeArgs {
+        float[] at;             // [x, y] in mm
+        float[] size;           // [w, h] in mm
+        Float radius;           // mm
+        Float depth;            // mm
+        Cutout.Face face = Cutout.Face.FRONT;  // defaults to front
+    }
+
+    /** Reject AT/SIZE/RADIUS clauses on shapes whose geometry is defined by
+     *  vertex lists (polygon, spline, curve). Only DEPTH and FACE make sense
+     *  there. */
+    private static void rejectVertexShapeMismatches(String shapeName, ShapeArgs args) {
+        if (args.at != null) throw new IllegalArgumentException(
+                shapeName + " cut does not take `at` — coordinates come from the vertex list");
+        if (args.size != null) throw new IllegalArgumentException(
+                shapeName + " cut does not take `size`");
+        if (args.radius != null) throw new IllegalArgumentException(
+                shapeName + " cut does not take `radius`");
+    }
+
+    /** Walk shape-arg clauses and collect them into a {@link ShapeArgs} bag,
+     *  rejecting duplicates of the same clause. */
+    private ShapeArgs parseShapeArgs(List<CadetteCommandParser.ShapeArgContext> args) {
+        ShapeArgs out = new ShapeArgs();
+        boolean faceSeen = false;
+        for (var arg : args) {
+            if (arg instanceof CadetteCommandParser.ShapeArgAtContext at) {
+                if (out.at != null) throw new IllegalArgumentException("`at` specified twice");
+                out.at = new float[] {
+                        toMm(evalFloat(at.expression(0))),
+                        toMm(evalFloat(at.expression(1))) };
+            } else if (arg instanceof CadetteCommandParser.ShapeArgSizeContext sz) {
+                if (out.size != null) throw new IllegalArgumentException("`size` specified twice");
+                out.size = new float[] {
+                        toMm(evalFloat(sz.expression(0))),
+                        toMm(evalFloat(sz.expression(1))) };
+            } else if (arg instanceof CadetteCommandParser.ShapeArgRadiusContext rd) {
+                if (out.radius != null) throw new IllegalArgumentException("`radius` specified twice");
+                out.radius = toMm(evalFloat(rd.expression()));
+            } else if (arg instanceof CadetteCommandParser.ShapeArgDepthContext dp) {
+                if (out.depth != null) throw new IllegalArgumentException("`depth` specified twice");
+                out.depth = toMm(evalFloat(dp.expression()));
+            } else if (arg instanceof CadetteCommandParser.ShapeArgFaceContext fc) {
+                if (faceSeen) throw new IllegalArgumentException("`face` specified twice");
+                faceSeen = true;
+                String name = fc.nameLike().getText().toLowerCase();
+                out.face = switch (name) {
+                    case "front" -> Cutout.Face.FRONT;
+                    case "back" -> Cutout.Face.BACK;
+                    default -> throw new IllegalArgumentException(
+                            "Unknown face '" + name + "'. Valid: front, back.");
+                };
+            }
+        }
+        return out;
     }
 
     /** Human-readable cutout description for command output. */
@@ -800,6 +1003,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                     : " through";
             return String.format("spline (%d control points)%s",
                     s.controlPoints().size(), depth);
+        }
+        if (cutout instanceof Cutout.Curve cv) {
+            String depth = cv.depthMm() != null
+                    ? String.format(" %.1f %s deep", fromMm(cv.depthMm()), abbr)
+                    : " through";
+            int segments = cv.controlPoints().size() / 3;
+            return String.format("curve (%d Bezier segments)%s", segments, depth);
         }
         return cutout.toString();  // variants not yet user-facing
     }
@@ -1077,10 +1287,11 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 return "No sheet goods in scene (only hardwood/metal parts) — nothing to export.";
             }
             var cutouts = scene.getEffectiveCutouts();
+            var keeps = scene.getEffectiveKeeps();
             if (isPdf) {
-                CutSheetExporter.exportPdf(layouts, units, outputPath, cutouts);
+                CutSheetExporter.exportPdf(layouts, units, outputPath, cutouts, keeps);
             } else {
-                CutSheetExporter.exportImage(layouts, units, outputPath, cutouts);
+                CutSheetExporter.exportImage(layouts, units, outputPath, cutouts, keeps);
             }
             return "Exported cut sheets to " + outputPath.toAbsolutePath();
         } catch (Exception e) {

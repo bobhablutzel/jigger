@@ -61,7 +61,7 @@ public class CutSheetExporter {
     /** Export layouts as a PNG or JPEG image without cutout overlays (legacy callers). */
     public static void exportImage(List<SheetLayout> layouts, UnitSystem units,
                                    Path outputPath) throws IOException {
-        exportImage(layouts, units, outputPath, java.util.Map.of());
+        exportImage(layouts, units, outputPath, java.util.Map.of(), java.util.Map.of());
     }
 
     /**
@@ -71,7 +71,8 @@ public class CutSheetExporter {
      */
     public static void exportImage(List<SheetLayout> layouts, UnitSystem units,
                                    Path outputPath,
-                                   java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts)
+                                   java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts,
+                                   java.util.Map<String, List<app.cadette.model.Cutout>> partKeeps)
             throws IOException {
         String ext = getExtension(outputPath).toLowerCase();
         if (!ext.equals("png") && !ext.equals("jpg") && !ext.equals("jpeg")) {
@@ -82,7 +83,7 @@ public class CutSheetExporter {
         BufferedImage image = new BufferedImage(IMAGE_WIDTH, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D g2 = image.createGraphics();
         CutSheetRenderer.render(g2, IMAGE_WIDTH, height, layouts, units, true,
-                java.util.Set.of(), null, partCutouts);
+                java.util.Set.of(), null, partCutouts, partKeeps);
         g2.dispose();
 
         String formatName = ext.equals("jpg") ? "jpeg" : ext;
@@ -92,17 +93,19 @@ public class CutSheetExporter {
     /** Export PDF without cutout overlays (legacy callers). */
     public static void exportPdf(List<SheetLayout> layouts, UnitSystem units,
                                  Path outputPath) throws IOException {
-        exportPdf(layouts, units, outputPath, java.util.Map.of());
+        exportPdf(layouts, units, outputPath, java.util.Map.of(), java.util.Map.of());
     }
 
     /**
      * Export layouts as a multi-page PDF with vector graphics.
      * Each sheet of material gets its own PDF page for clear printing.
-     * Per-part rect cutouts are overlaid as dashed red outlines when supplied.
+     * Per-part rect cutouts are overlaid as dashed red outlines when supplied;
+     * keep regions outline what to retain (X marker on the discarded part).
      */
     public static void exportPdf(List<SheetLayout> layouts, UnitSystem units,
                                  Path outputPath,
-                                 java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts)
+                                 java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts,
+                                 java.util.Map<String, List<app.cadette.model.Cutout>> partKeeps)
             throws IOException {
         try (PDDocument doc = new PDDocument()) {
             PDType1Font fontBold = new PDType1Font(Standard14Fonts.FontName.HELVETICA_BOLD);
@@ -119,7 +122,7 @@ public class CutSheetExporter {
 
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                     drawPdfSheet(cs, layout, i + 1, units, pageW, pageH,
-                            fontBold, fontNormal, fontItalic, partCutouts);
+                            fontBold, fontNormal, fontItalic, partCutouts, partKeeps);
                 }
             }
 
@@ -145,7 +148,8 @@ public class CutSheetExporter {
                                      float pageW, float pageH,
                                      PDType1Font fontBold, PDType1Font fontNormal,
                                      PDType1Font fontItalic,
-                                     java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts)
+                                     java.util.Map<String, List<app.cadette.model.Cutout>> partCutouts,
+                                     java.util.Map<String, List<app.cadette.model.Cutout>> partKeeps)
             throws IOException {
         // Compute scale to fit sheet within page margins
         float drawableW = pageW - 2 * PDF_MARGIN;
@@ -219,12 +223,12 @@ public class CutSheetExporter {
             cs.addRect(px, py, pw, ph);
             cs.stroke();
 
-            // Cutout overlays (dashed) — same dashed-red treatment as
-            // CutSheetRenderer's Java2D path, but using PDFBox's line API
-            // and PDF's bottom-left origin (so the part-local Y → PDF Y
-            // mapping is inverted relative to the Java2D version).
+            // Cutout overlays (dashed) + X marker on discarded regions —
+            // same treatment as CutSheetRenderer's Java2D path, using
+            // PDFBox's path API and PDF's bottom-left origin.
             drawPdfCutoutOverlays(cs, part, px, py, pw, ph, scale,
-                    partCutouts.getOrDefault(part.getPartName(), List.of()));
+                    partCutouts.getOrDefault(part.getPartName(), List.of()),
+                    partKeeps.getOrDefault(part.getPartName(), List.of()));
 
             // Part label
             drawPdfPartLabel(cs, part, px, py, pw, ph, units,
@@ -271,54 +275,164 @@ public class CutSheetExporter {
     private static void drawPdfCutoutOverlays(PDPageContentStream cs,
                                               SheetLayout.PlacedPart part,
                                               float px, float py, float pw, float ph, float scale,
-                                              List<app.cadette.model.Cutout> cutouts)
+                                              List<app.cadette.model.Cutout> cutouts,
+                                              List<app.cadette.model.Cutout> keeps)
             throws IOException {
-        if (cutouts.isEmpty()) return;
-        // Clip to the part's rect so a cutout extending past the part edge
-        // doesn't render dashed lines into empty space — matches the
-        // CutSheetRenderer (Java2D) clipping behaviour.
+        if (cutouts.isEmpty() && keeps.isEmpty()) return;
+        // Clip to the part's rect for the dashed outlines.
         cs.saveGraphicsState();
         cs.addRect(px, py, pw, ph);
         cs.clip();
         setStrokeColor(cs, CutSheetRenderer.CUTOUT_COLOR);
         cs.setLineWidth(0.5f);
         cs.setLineDashPattern(new float[]{2.5f, 2f}, 0);
-        for (app.cadette.model.Cutout c : cutouts) {
-            if (c instanceof app.cadette.model.Cutout.Rect r) {
-                float cx, cy, cw, ch;
-                if (part.isRotated()) {
-                    cx = px + r.yMm() * scale;
-                    cy = py + ph - (r.xMm() + r.widthMm()) * scale;
-                    cw = r.heightMm() * scale;
-                    ch = r.widthMm() * scale;
-                } else {
-                    cx = px + r.xMm() * scale;
-                    cy = py + ph - (r.yMm() + r.heightMm()) * scale;
-                    cw = r.widthMm() * scale;
-                    ch = r.heightMm() * scale;
-                }
-                if (cw < 0.5f || ch < 0.5f) continue;
-                cs.addRect(cx, cy, cw, ch);
-                cs.stroke();
-            } else if (c instanceof app.cadette.model.Cutout.Circle ci) {
-                // PDF Y is bottom-up; for circles we just need the center
-                // and radius. Rotation only swaps cx/cy of the center.
-                float r = ci.radiusMm() * scale;
-                if (r < 0.5f) continue;
-                float centerX, centerY;
-                if (part.isRotated()) {
-                    centerX = px + ci.cyMm() * scale;
-                    centerY = py + ph - ci.cxMm() * scale;
-                } else {
-                    centerX = px + ci.cxMm() * scale;
-                    centerY = py + ph - ci.cyMm() * scale;
-                }
-                drawPdfCircle(cs, centerX, centerY, r);
-            }
-            // Cutout.Polygon / Spline: skip until those variants land.
-        }
-        // Reset dash pattern so subsequent strokes (label baselines, etc.) are solid.
+        for (app.cadette.model.Cutout c : cutouts) drawPdfCutoutShape(cs, c, part, px, py, ph, scale);
+        for (app.cadette.model.Cutout k : keeps)   drawPdfCutoutShape(cs, k, part, px, py, ph, scale);
         cs.setLineDashPattern(new float[]{}, 0);
+        cs.restoreGraphicsState();
+
+        // X marker over discarded regions. For each cut shape: clip to the
+        // shape, draw two diagonals across the shape's bbox. For each keep
+        // shape: clip to (part − shape) using PDF even-odd fill rule (outer
+        // CW + inner CCW path), draw two diagonals across the part's bbox.
+        for (app.cadette.model.Cutout c : cutouts) {
+            drawPdfXOnCutShape(cs, c, part, px, py, pw, ph, scale);
+        }
+        for (app.cadette.model.Cutout k : keeps) {
+            drawPdfXOnKeepComplement(cs, k, part, px, py, pw, ph, scale);
+        }
+    }
+
+    /** Dashed outline for one cutout shape (rect / circle today). */
+    private static void drawPdfCutoutShape(PDPageContentStream cs,
+                                           app.cadette.model.Cutout c,
+                                           SheetLayout.PlacedPart part,
+                                           float px, float py, float ph, float scale)
+            throws IOException {
+        if (c instanceof app.cadette.model.Cutout.Rect r) {
+            float[] xy = pdfRectXY(r, part, px, py, ph, scale);
+            if (xy[2] < 0.5f || xy[3] < 0.5f) return;
+            cs.addRect(xy[0], xy[1], xy[2], xy[3]);
+            cs.stroke();
+        } else if (c instanceof app.cadette.model.Cutout.Circle ci) {
+            float radius = ci.radiusMm() * scale;
+            if (radius < 0.5f) return;
+            float[] cxcy = pdfCircleCenter(ci, part, px, py, ph, scale);
+            drawPdfCircle(cs, cxcy[0], cxcy[1], radius);
+        }
+        // Polygon / Spline / Curve: skip until those variants land.
+    }
+
+    /** PDF rect coords (cx, cy, cw, ch) for a {@link app.cadette.model.Cutout.Rect}. */
+    private static float[] pdfRectXY(app.cadette.model.Cutout.Rect r,
+                                     SheetLayout.PlacedPart part,
+                                     float px, float py, float ph, float scale) {
+        if (part.isRotated()) {
+            return new float[] {
+                    px + r.yMm() * scale,
+                    py + ph - (r.xMm() + r.widthMm()) * scale,
+                    r.heightMm() * scale,
+                    r.widthMm() * scale
+            };
+        }
+        return new float[] {
+                px + r.xMm() * scale,
+                py + ph - (r.yMm() + r.heightMm()) * scale,
+                r.widthMm() * scale,
+                r.heightMm() * scale
+        };
+    }
+
+    /** PDF circle centre for a {@link app.cadette.model.Cutout.Circle}. */
+    private static float[] pdfCircleCenter(app.cadette.model.Cutout.Circle ci,
+                                           SheetLayout.PlacedPart part,
+                                           float px, float py, float ph, float scale) {
+        if (part.isRotated()) {
+            return new float[] {
+                    px + ci.cyMm() * scale,
+                    py + ph - ci.cxMm() * scale
+            };
+        }
+        return new float[] {
+                px + ci.cxMm() * scale,
+                py + ph - ci.cyMm() * scale
+        };
+    }
+
+    /** X across the cut shape's bbox, clipped to the shape. */
+    private static void drawPdfXOnCutShape(PDPageContentStream cs,
+                                           app.cadette.model.Cutout c,
+                                           SheetLayout.PlacedPart part,
+                                           float px, float py, float pw, float ph, float scale)
+            throws IOException {
+        if (c instanceof app.cadette.model.Cutout.Rect r) {
+            float[] xy = pdfRectXY(r, part, px, py, ph, scale);
+            if (xy[2] < 0.5f || xy[3] < 0.5f) return;
+            cs.saveGraphicsState();
+            cs.addRect(xy[0], xy[1], xy[2], xy[3]);
+            cs.clip();
+            cs.setLineWidth(0.5f);
+            cs.moveTo(xy[0], xy[1]);  cs.lineTo(xy[0] + xy[2], xy[1] + xy[3]);  cs.stroke();
+            cs.moveTo(xy[0], xy[1] + xy[3]);  cs.lineTo(xy[0] + xy[2], xy[1]);  cs.stroke();
+            cs.restoreGraphicsState();
+        } else if (c instanceof app.cadette.model.Cutout.Circle ci) {
+            float radius = ci.radiusMm() * scale;
+            if (radius < 0.5f) return;
+            float[] cxcy = pdfCircleCenter(ci, part, px, py, ph, scale);
+            cs.saveGraphicsState();
+            // Use the same kappa-Bezier circle as drawPdfCircle to define
+            // the clip path. addCircle-like sequence ending in clipEvenOdd.
+            float k = 0.5522847498f * radius;
+            cs.moveTo(cxcy[0] + radius, cxcy[1]);
+            cs.curveTo(cxcy[0] + radius, cxcy[1] + k,  cxcy[0] + k, cxcy[1] + radius,  cxcy[0], cxcy[1] + radius);
+            cs.curveTo(cxcy[0] - k, cxcy[1] + radius,  cxcy[0] - radius, cxcy[1] + k,  cxcy[0] - radius, cxcy[1]);
+            cs.curveTo(cxcy[0] - radius, cxcy[1] - k,  cxcy[0] - k, cxcy[1] - radius,  cxcy[0], cxcy[1] - radius);
+            cs.curveTo(cxcy[0] + k, cxcy[1] - radius,  cxcy[0] + radius, cxcy[1] - k,  cxcy[0] + radius, cxcy[1]);
+            cs.closePath();
+            cs.clip();
+            cs.setLineWidth(0.5f);
+            cs.moveTo(cxcy[0] - radius, cxcy[1] - radius);
+            cs.lineTo(cxcy[0] + radius, cxcy[1] + radius);
+            cs.stroke();
+            cs.moveTo(cxcy[0] - radius, cxcy[1] + radius);
+            cs.lineTo(cxcy[0] + radius, cxcy[1] - radius);
+            cs.stroke();
+            cs.restoreGraphicsState();
+        }
+    }
+
+    /** X across the part rect, clipped to (part − keep shape) via even-odd. */
+    private static void drawPdfXOnKeepComplement(PDPageContentStream cs,
+                                                 app.cadette.model.Cutout k,
+                                                 SheetLayout.PlacedPart part,
+                                                 float px, float py, float pw, float ph, float scale)
+            throws IOException {
+        cs.saveGraphicsState();
+        // Outer path: part rect.
+        cs.addRect(px, py, pw, ph);
+        // Inner path (the "hole"): the keep shape. Even-odd fill rule on
+        // both paths gives us the part-minus-shape region.
+        if (k instanceof app.cadette.model.Cutout.Rect r) {
+            float[] xy = pdfRectXY(r, part, px, py, ph, scale);
+            cs.addRect(xy[0], xy[1], xy[2], xy[3]);
+        } else if (k instanceof app.cadette.model.Cutout.Circle ci) {
+            float radius = ci.radiusMm() * scale;
+            float[] cxcy = pdfCircleCenter(ci, part, px, py, ph, scale);
+            float kappa = 0.5522847498f * radius;
+            cs.moveTo(cxcy[0] + radius, cxcy[1]);
+            cs.curveTo(cxcy[0] + radius, cxcy[1] + kappa,  cxcy[0] + kappa, cxcy[1] + radius,  cxcy[0], cxcy[1] + radius);
+            cs.curveTo(cxcy[0] - kappa, cxcy[1] + radius,  cxcy[0] - radius, cxcy[1] + kappa,  cxcy[0] - radius, cxcy[1]);
+            cs.curveTo(cxcy[0] - radius, cxcy[1] - kappa,  cxcy[0] - kappa, cxcy[1] - radius,  cxcy[0], cxcy[1] - radius);
+            cs.curveTo(cxcy[0] + kappa, cxcy[1] - radius,  cxcy[0] + radius, cxcy[1] - kappa,  cxcy[0] + radius, cxcy[1]);
+            cs.closePath();
+        } else {
+            cs.restoreGraphicsState();
+            return;  // Polygon/Spline/Curve: skip
+        }
+        cs.clipEvenOdd();
+        cs.setLineWidth(0.5f);
+        cs.moveTo(px, py);  cs.lineTo(px + pw, py + ph);  cs.stroke();
+        cs.moveTo(px, py + ph);  cs.lineTo(px + pw, py);  cs.stroke();
         cs.restoreGraphicsState();
     }
 

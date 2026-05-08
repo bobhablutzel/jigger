@@ -385,6 +385,130 @@ class CutCommandTest extends HeadlessTestBase {
                 "response should mention control-point count: " + result);
     }
 
+    // ---- Curve cuts (cubic Bezier) ----------------------------------
+
+    @Test
+    void curveCutAddsToThePart() {
+        // 6 control points = 2 segments, the minimum closed-curve case.
+        String result = exec("cut \"panel\" curve "
+                + "(100, 100), (110, 80), (190, 80), "
+                + "(200, 100), (190, 200), (110, 200)");
+        assertFalse(result.toLowerCase().contains("error"), result);
+
+        List<Cutout> cuts = cutoutsOf("panel");
+        assertEquals(1, cuts.size());
+        assertInstanceOf(Cutout.Curve.class, cuts.get(0));
+        Cutout.Curve cv = (Cutout.Curve) cuts.get(0);
+        assertEquals(6, cv.controlPoints().size());
+        assertNull(cv.depthMm(), "no depth clause → through-cut (null)");
+    }
+
+    @Test
+    void curveCutAcceptsDepth() {
+        exec("cut \"panel\" curve "
+                + "(100, 100), (110, 80), (190, 80), "
+                + "(200, 100), (190, 200), (110, 200) depth 5");
+        Cutout.Curve cv = (Cutout.Curve) cutoutsOf("panel").get(0);
+        assertEquals(5f, cv.depthMm(), 0.001);
+    }
+
+    @Test
+    void curveCutCommandResponseDescribesSegments() {
+        String result = exec("cut \"panel\" curve "
+                + "(100, 100), (110, 80), (190, 80), "
+                + "(200, 100), (190, 200), (110, 200)");
+        assertTrue(result.contains("curve"), "response should describe curve: " + result);
+        assertTrue(result.contains("2 Bezier segments"),
+                "response should mention 2 segments (6 control points / 3): " + result);
+    }
+
+    @Test
+    void curveCutWithBadControlPointCountIsRejected() {
+        // Not a multiple of 3 → visitor throws IllegalArgumentException.
+        String result = exec("cut \"panel\" curve "
+                + "(100, 100), (110, 80), (190, 80), (200, 100)");  // 4 points
+        assertTrue(result.toLowerCase().contains("multiple of 3"),
+                "expected error about control-point count: " + result);
+    }
+
+    // ---- Keep operation ---------------------------------------------
+
+    @Test
+    void keepRectAddsToThePart() {
+        String result = exec("keep \"panel\" rect at 100, 100 size 200, 200");
+        assertFalse(result.toLowerCase().contains("error"), result);
+        assertTrue(result.contains("keep region"), "response should describe keep: " + result);
+
+        Part p = sceneManager.getPart("panel");
+        assertEquals(1, p.getKeeps().size());
+        assertInstanceOf(Cutout.Rect.class, p.getKeeps().get(0));
+        // Cuts list stays empty.
+        assertEquals(0, p.getCutouts().size());
+    }
+
+    @Test
+    void keepEntirelyOutsidePartIsRejected() {
+        // A keep entirely off the panel would erase the part. Reject as
+        // probable user error.
+        String result = exec("keep \"panel\" rect at 700, 100 size 50, 50");
+        assertTrue(result.toLowerCase().contains("falls outside"),
+                "expected rejection: " + result);
+        assertEquals(0, sceneManager.getPart("panel").getKeeps().size());
+    }
+
+    @Test
+    void keepCanUseSplineForCurvedOutline() {
+        // The motivating use case: trace the silhouette you want to keep.
+        String result = exec("keep \"panel\" spline "
+                + "(100, 100), (200, 100), (200, 200), (100, 200)");
+        assertFalse(result.toLowerCase().contains("error"), result);
+        assertEquals(1, sceneManager.getPart("panel").getKeeps().size());
+        assertInstanceOf(Cutout.Spline.class, sceneManager.getPart("panel").getKeeps().get(0));
+    }
+
+    // ---- Fillet command --------------------------------------------
+
+    @Test
+    void filletAddsPolygonCutout() {
+        String result = exec("fillet \"panel\" at 70, 40 radius 5 facing NW");
+        assertFalse(result.toLowerCase().contains("error"), result);
+        assertTrue(result.contains("Filleted"), "response should confirm: " + result);
+
+        Part p = sceneManager.getPart("panel");
+        assertEquals(1, p.getCutouts().size());
+        assertInstanceOf(Cutout.Polygon.class, p.getCutouts().get(0));
+        // 14 vertices: corner + B + 11 arc samples + D.
+        assertEquals(14, ((Cutout.Polygon) p.getCutouts().get(0)).vertices().size());
+    }
+
+    @Test
+    void filletAcceptsAllCardinalFacings() {
+        for (String facing : List.of("NE", "NW", "SE", "SW")) {
+            // Reset between iterations so each fillet is the only cutout.
+            resetScene();
+            exec("create part \"panel\" size 600, 900 at 0, 0, 0");
+            String result = exec("fillet \"panel\" at 300, 450 radius 5 facing " + facing);
+            assertFalse(result.toLowerCase().contains("unknown"),
+                    "should accept " + facing + ": " + result);
+            assertEquals(1, sceneManager.getPart("panel").getCutouts().size());
+        }
+    }
+
+    @Test
+    void filletWithDepthCreatesPocket() {
+        exec("fillet \"panel\" at 70, 40 radius 5 facing NW depth 5");
+        Cutout.Polygon p = (Cutout.Polygon) sceneManager.getPart("panel").getCutouts().get(0);
+        assertEquals(5f, p.depthMm(), 0.001);
+    }
+
+    @Test
+    void filletUnknownFacingRejected() {
+        String result = exec("fillet \"panel\" at 70, 40 radius 5 facing UP");
+        assertTrue(result.toLowerCase().contains("unknown facing"),
+                "expected unknown-facing error: " + result);
+        assertEquals(0, sceneManager.getPart("panel").getCutouts().size());
+    }
+
     @Test
     void polygonEntirelyOutsidePartBoundsIsRejected() {
         // Triangle with all vertices beyond the panel's right edge.
@@ -508,5 +632,102 @@ class CutCommandTest extends HeadlessTestBase {
         assertEquals(100, ((Cutout.Polygon) cuts.get(0)).vertices().get(0).xMm(), 0.001);
         assertEquals(300, ((Cutout.Polygon) cuts.get(1)).vertices().get(0).xMm(), 0.001);
         assertEquals(500, ((Cutout.Polygon) cuts.get(2)).vertices().get(0).xMm(), 0.001);
+    }
+
+    // ---- Order-independent shape args -------------------------------
+
+    @Test
+    void rectArgsAcceptAnyOrder() {
+        exec("cut \"panel\" rect at 100, 100 size 50, 50");          // original order
+        exec("cut \"panel\" rect size 60, 60 at 200, 200");          // swapped
+        exec("cut \"panel\" rect depth 5 at 300, 300 size 70, 70");  // depth first
+
+        assertEquals(3, cutoutsOf("panel").size());
+        Cutout.Rect r0 = (Cutout.Rect) cutoutsOf("panel").get(0);
+        Cutout.Rect r1 = (Cutout.Rect) cutoutsOf("panel").get(1);
+        Cutout.Rect r2 = (Cutout.Rect) cutoutsOf("panel").get(2);
+        assertEquals(50, r0.widthMm(), 0.001);
+        assertEquals(60, r1.widthMm(), 0.001);
+        assertEquals(70, r2.widthMm(), 0.001);
+        assertEquals(5f, r2.depthMm(), 0.001);
+    }
+
+    @Test
+    void circleArgsAcceptAnyOrder() {
+        // The example the user gave: radius before at.
+        exec("cut \"panel\" circle radius 25 at 200, 300");
+        Cutout.Circle c = (Cutout.Circle) cutoutsOf("panel").get(0);
+        assertEquals(200, c.cxMm(), 0.001);
+        assertEquals(300, c.cyMm(), 0.001);
+        assertEquals(25, c.radiusMm(), 0.001);
+    }
+
+    @Test
+    void rectMissingSizeIsRejected() {
+        String result = exec("cut \"panel\" rect at 100, 100");
+        assertTrue(result.toLowerCase().contains("requires `size"),
+                "expected size-required error: " + result);
+    }
+
+    @Test
+    void circleWithSizeIsRejected() {
+        // size doesn't make sense for a circle; visitor catches the mismatch.
+        String result = exec("cut \"panel\" circle at 100, 100 size 50, 50");
+        assertTrue(result.toLowerCase().contains("does not take `size"),
+                "expected size-on-circle rejection: " + result);
+    }
+
+    @Test
+    void duplicateClauseIsRejected() {
+        String result = exec("cut \"panel\" rect at 100, 100 at 200, 200 size 50, 50");
+        assertTrue(result.toLowerCase().contains("specified twice"),
+                "expected duplicate-clause error: " + result);
+    }
+
+    // ---- face front|back -------------------------------------------
+
+    @Test
+    void rectCutDefaultsToFrontFace() {
+        exec("cut \"panel\" rect at 100, 100 size 50, 50 depth 5");
+        Cutout.Rect r = (Cutout.Rect) cutoutsOf("panel").get(0);
+        assertEquals(Cutout.Face.FRONT, r.face());
+    }
+
+    @Test
+    void rectCutAcceptsBackFace() {
+        exec("cut \"panel\" rect at 100, 100 size 50, 50 depth 5 face back");
+        Cutout.Rect r = (Cutout.Rect) cutoutsOf("panel").get(0);
+        assertEquals(Cutout.Face.BACK, r.face());
+    }
+
+    @Test
+    void circleCutAcceptsBackFace() {
+        exec("cut \"panel\" circle at 200, 200 radius 17.5 depth 13 face back");
+        Cutout.Circle c = (Cutout.Circle) cutoutsOf("panel").get(0);
+        assertEquals(Cutout.Face.BACK, c.face());
+    }
+
+    @Test
+    void polygonCutAcceptsBackFace() {
+        exec("cut \"panel\" polygon (10, 10), (20, 10), (15, 25) depth 5 face back");
+        Cutout.Polygon p = (Cutout.Polygon) cutoutsOf("panel").get(0);
+        assertEquals(Cutout.Face.BACK, p.face());
+    }
+
+    @Test
+    void faceArgOrderIndependent() {
+        // face can come anywhere in the arg list.
+        exec("cut \"panel\" rect face back at 100, 100 depth 5 size 50, 50");
+        Cutout.Rect r = (Cutout.Rect) cutoutsOf("panel").get(0);
+        assertEquals(Cutout.Face.BACK, r.face());
+    }
+
+    @Test
+    void unknownFaceRejected() {
+        // 'sideways' is a plain ID (not a keyword) → reaches the visitor's
+        // face-name dispatcher, which rejects it.
+        String result = exec("cut \"panel\" rect at 100, 100 size 50, 50 face sideways");
+        assertTrue(result.toLowerCase().contains("unknown face"),
+                "expected unknown-face error: " + result);
     }
 }

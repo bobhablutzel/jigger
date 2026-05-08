@@ -91,11 +91,13 @@ import java.util.function.Consumer;
  *
  * <h2>Cutout shapes</h2>
  *
- * <p>All four {@link Cutout} shape variants ({@link Cutout.Rect},
- * {@link Cutout.Circle}, {@link Cutout.Polygon}, {@link Cutout.Spline}) are
- * supported. Circles sample to {@value #CIRCLE_SEGMENTS}-segment polygons.
- * Splines tessellate as periodic centripetal Catmull-Rom curves with
- * {@value #SPLINE_SAMPLES_PER_SEGMENT} samples per segment.
+ * <p>All five {@link Cutout} shape variants ({@link Cutout.Rect},
+ * {@link Cutout.Circle}, {@link Cutout.Polygon}, {@link Cutout.Spline},
+ * {@link Cutout.Curve}) are supported. Circles sample to
+ * {@value #CIRCLE_SEGMENTS}-segment polygons. Splines tessellate as periodic
+ * centripetal Catmull-Rom curves with {@value #SPLINE_SAMPLES_PER_SEGMENT}
+ * samples per segment. Curves tessellate as periodic cubic Beziers via
+ * de Casteljau with {@value #CURVE_SAMPLES_PER_SEGMENT} samples per segment.
  */
 public final class PartMeshBuilder {
 
@@ -107,26 +109,50 @@ public final class PartMeshBuilder {
     /** Samples per segment when tessellating a Catmull-Rom spline. */
     private static final int SPLINE_SAMPLES_PER_SEGMENT = 16;
 
+    /** Samples per segment when tessellating a cubic Bezier curve. */
+    private static final int CURVE_SAMPLES_PER_SEGMENT = 16;
+
     private PartMeshBuilder() {}
 
     public static Mesh build(Part part) {
         return build(part.getCutWidthMm(), part.getCutHeightMm(),
-                part.getThicknessMm(), part.getCutouts());
+                part.getThicknessMm(), part.getCutouts(), part.getKeeps());
     }
 
     /**
      * Build directly from raw dimensions + a cutout list — used by tests, and
      * by SceneManager when merging joint-inferred cutouts with the part's
-     * explicit ones before mesh construction.
+     * explicit ones before mesh construction. No keep regions in this path.
      */
     public static Mesh build(float widthMm, float heightMm, float thicknessMm,
                              List<Cutout> cutouts) {
+        return build(widthMm, heightMm, thicknessMm, cutouts, List.of());
+    }
+
+    /**
+     * Full build with both cuts and keeps. Keeps are intersected with the
+     * panel before cuts are subtracted — the panel becomes
+     * {@code (panel ∩ keep_1 ∩ keep_2 ∩ ...) - cut_1 - cut_2 - ...}.
+     */
+    public static Mesh build(float widthMm, float heightMm, float thicknessMm,
+                             List<Cutout> cutouts, List<Cutout> keeps) {
         float halfW = widthMm * 0.5f;
         float halfH = heightMm * 0.5f;
         float halfT = thicknessMm * 0.5f;
 
-        // Step 1: subtract through-cuts. JTS clips out-of-bounds pieces.
         Geometry hasMaterial = rectPolygon(0, 0, widthMm, heightMm);
+
+        // Step 0: intersect with keep regions. Keeps constrain the panel
+        // outline before any cuts are applied. v1 ignores keep depthMm —
+        // through only ("relief carving" partial-depth keeps are deferred).
+        for (Cutout k : keeps) {
+            Polygon shape = polygonize(k);
+            if (shape == null) continue;
+            hasMaterial = robustIntersection(hasMaterial, shape);
+            if (hasMaterial.isEmpty()) break;
+        }
+
+        // Step 1: subtract through-cuts. JTS clips out-of-bounds pieces.
         for (Cutout c : cutouts) {
             if (c.depthMm() != null) continue;       // partial-depth handled in step 2
             Polygon hole = polygonize(c);
@@ -267,6 +293,7 @@ public final class PartMeshBuilder {
             case Cutout.Circle ci -> circlePolygon(ci.cxMm(), ci.cyMm(), ci.radiusMm());
             case Cutout.Polygon p -> polygonFromVertices(p.vertices());
             case Cutout.Spline s  -> polygonFromVertices(tessellateCatmullRom(s.controlPoints()));
+            case Cutout.Curve cv  -> polygonFromVertices(tessellateBezier(cv.controlPoints()));
         };
     }
 
@@ -302,6 +329,46 @@ public final class PartMeshBuilder {
             }
         }
         return result;
+    }
+
+    /**
+     * Tessellate a periodic cubic Bezier curve into a polygon vertex list.
+     * Control points come in groups of 3: each group {@code (P[3i], P[3i+1],
+     * P[3i+2])} plus the next group's start {@code P[3(i+1) mod 3N]} forms
+     * a cubic segment. With N segments the curve closes back to P[0]
+     * naturally — no straight closing chord is appended.
+     *
+     * <p>Evaluation uses de Casteljau (numerically robust, no power-basis
+     * arithmetic). {@value #CURVE_SAMPLES_PER_SEGMENT} samples per segment;
+     * for a quarter-arc with kappa control points this is well under
+     * one-pixel chord error at any cabinet-rendering scale.
+     */
+    private static List<Point2D> tessellateBezier(List<Point2D> control) {
+        int n = control.size();
+        if (n < 6 || n % 3 != 0) return control;  // visitor validates; defense in depth
+        int segments = n / 3;
+        List<Point2D> result = new ArrayList<>(segments * CURVE_SAMPLES_PER_SEGMENT);
+        for (int i = 0; i < segments; i++) {
+            Point2D p0 = control.get(3 * i);
+            Point2D p1 = control.get(3 * i + 1);
+            Point2D p2 = control.get(3 * i + 2);
+            Point2D p3 = control.get((3 * (i + 1)) % n);
+            for (int j = 0; j < CURVE_SAMPLES_PER_SEGMENT; j++) {
+                float t = (float) j / CURVE_SAMPLES_PER_SEGMENT;
+                result.add(deCasteljau(p0, p1, p2, p3, t));
+            }
+        }
+        return result;
+    }
+
+    /** de Casteljau evaluation of a cubic Bezier at parameter t ∈ [0, 1]. */
+    private static Point2D deCasteljau(Point2D p0, Point2D p1, Point2D p2, Point2D p3, float t) {
+        Point2D q0 = lerp(p0, p1, t);
+        Point2D q1 = lerp(p1, p2, t);
+        Point2D q2 = lerp(p2, p3, t);
+        Point2D r0 = lerp(q0, q1, t);
+        Point2D r1 = lerp(q1, q2, t);
+        return lerp(r0, r1, t);
     }
 
     /** Centripetal parameterization spacing: |Δp|^0.5 = (Δx² + Δy²)^0.25. */

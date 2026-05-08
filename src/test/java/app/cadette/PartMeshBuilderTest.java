@@ -69,6 +69,19 @@ class PartMeshBuilderTest {
         }
     }
 
+    /** 5-arg build for keep tests. */
+    private static Mesh buildRaw(float widthMm, float heightMm, float thicknessMm,
+                                 List<Cutout> cutouts, List<Cutout> keeps) {
+        try {
+            Method m = PartMeshBuilder.class.getDeclaredMethod("build",
+                    float.class, float.class, float.class, List.class, List.class);
+            m.setAccessible(true);
+            return (Mesh) m.invoke(null, widthMm, heightMm, thicknessMm, cutouts, keeps);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     /** Mesh-space X for a part-local X coordinate (mesh is centred). */
     private static float mx(float partLocalX, float widthMm)  { return partLocalX - widthMm * 0.5f; }
     private static float my(float partLocalY, float heightMm) { return partLocalY - heightMm * 0.5f; }
@@ -473,6 +486,88 @@ class PartMeshBuilderTest {
         assertNoMaterialAt(m, mx(150, 600), my(150, 900), 0);
         // Far outside → solid.
         assertHasMaterialAt(m, mx(50, 600), my(50, 900), 0);
+    }
+
+    @Test
+    void bezierCurveApproximatesCircle() {
+        // 4-segment cubic Bezier with kappa control points = near-exact
+        // circle. Anchors at (cx±r, cy) and (cx, cy±r); handles offset
+        // tangentially by k=0.5522847·r. 12 control points total. Volume
+        // removed should be very close to πr²·t.
+        float cx = 300, cy = 450, r = 50f;
+        float k = 0.5522847f * r;
+        var p = new java.util.ArrayList<app.cadette.model.Point2D>();
+        // Segment 0: (cx+r, cy) → (cx, cy+r)
+        p.add(new app.cadette.model.Point2D(cx + r, cy));
+        p.add(new app.cadette.model.Point2D(cx + r, cy + k));
+        p.add(new app.cadette.model.Point2D(cx + k, cy + r));
+        // Segment 1: (cx, cy+r) → (cx-r, cy)
+        p.add(new app.cadette.model.Point2D(cx, cy + r));
+        p.add(new app.cadette.model.Point2D(cx - k, cy + r));
+        p.add(new app.cadette.model.Point2D(cx - r, cy + k));
+        // Segment 2: (cx-r, cy) → (cx, cy-r)
+        p.add(new app.cadette.model.Point2D(cx - r, cy));
+        p.add(new app.cadette.model.Point2D(cx - r, cy - k));
+        p.add(new app.cadette.model.Point2D(cx - k, cy - r));
+        // Segment 3: (cx, cy-r) → (cx+r, cy) — closes back to anchor 0
+        p.add(new app.cadette.model.Point2D(cx, cy - r));
+        p.add(new app.cadette.model.Point2D(cx + k, cy - r));
+        p.add(new app.cadette.model.Point2D(cx + r, cy - k));
+
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Curve(p, null, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        // Expected: π·r²·t. Tolerance accommodates kappa-Bezier ≈ circle
+        // (~0.03% accuracy) plus float drift through 64 polygon vertices.
+        float expected = (float) (Math.PI * r * r * 18);
+        float actual = 600f * 900 * 18 - signedVolume(m);
+        assertTrue(Math.abs(actual - expected) < 200f,
+                "Bezier-approximated circle area should be near πr²·t: actual="
+                + actual + " expected=" + expected);
+        assertNoMaterialAt(m, mx(cx, 600), my(cy, 900), 0);  // centre is empty
+    }
+
+    @Test
+    void bezierCurveDegenerateInputIsSilentlyIgnored() {
+        // Wrong control-point count (not multiple of 3) — `polygonFromVertices`
+        // returns null at the polygonize switch, JTS doesn't try the difference,
+        // mesh is unchanged.
+        var p = List.of(
+                new app.cadette.model.Point2D(100, 100),
+                new app.cadette.model.Point2D(150, 100));  // only 2 points
+        Mesh m = buildRaw(600, 900, 18, List.of(
+                new Cutout.Curve(p, null, Cutout.Face.FRONT)));
+        assertExtent(m, 600, 900, 18);
+        assertVolume(m, 600f * 900 * 18, V_TOL);
+    }
+
+    // ---- Keep operations ------------------------------------------
+
+    @Test
+    void keepRectShrinksPanelToRegion() {
+        // A 200×200 keep rect inside a 600×900 panel: mesh should retain
+        // only the keep region's volume, not the whole panel.
+        Mesh m = buildRaw(600, 900, 18, List.of(),
+                List.of(new Cutout.Rect(100, 100, 200, 200, null, Cutout.Face.FRONT)));
+        // Bbox is now the keep region (200×200), not the original panel.
+        // Volume = keep_area · t = 200·200·18 = 720_000.
+        assertVolume(m, 200f * 200 * 18, V_TOL);
+        // Material exists in the keep region (centre of keep = (200, 200)
+        // in part-local), not outside.
+        assertHasMaterialAt(m, mx(200, 600), my(200, 900), 0);
+        assertNoMaterialAt(m, mx(50, 600), my(50, 900), 0);  // outside keep
+    }
+
+    @Test
+    void keepThenCutCompose() {
+        // Keep a 200×200 region, then cut a 50×50 hole inside it. Final:
+        // keep_area − cut_area = 40_000 − 2_500 = 37_500 mm² × 18.
+        Mesh m = buildRaw(600, 900, 18,
+                List.of(new Cutout.Rect(150, 150, 50, 50, null, Cutout.Face.FRONT)),
+                List.of(new Cutout.Rect(100, 100, 200, 200, null, Cutout.Face.FRONT)));
+        assertVolume(m, (200f * 200 - 50 * 50) * 18, V_TOL);
+        assertNoMaterialAt(m, mx(175, 600), my(175, 900), 0);  // inside the cut
+        assertHasMaterialAt(m, mx(120, 600), my(120, 900), 0); // in keep, outside cut
     }
 
     @Test

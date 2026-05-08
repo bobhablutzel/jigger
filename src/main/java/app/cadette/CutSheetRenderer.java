@@ -68,7 +68,7 @@ public class CutSheetRenderer {
     public static void render(Graphics2D g2, int width, int height,
                               List<SheetLayout> layouts, UnitSystem units,
                               boolean forExport) {
-        render(g2, width, height, layouts, units, forExport, Set.of(), null, Map.of());
+        render(g2, width, height, layouts, units, forExport, Set.of(), null, Map.of(), Map.of());
     }
 
     /** Render with selection + hit-testing but no cutout overlays. */
@@ -76,7 +76,7 @@ public class CutSheetRenderer {
                               List<SheetLayout> layouts, UnitSystem units,
                               boolean forExport, Set<String> selectedParts,
                               List<PartRect> hitRects) {
-        render(g2, width, height, layouts, units, forExport, selectedParts, hitRects, Map.of());
+        render(g2, width, height, layouts, units, forExport, selectedParts, hitRects, Map.of(), Map.of());
     }
 
     /**
@@ -98,7 +98,8 @@ public class CutSheetRenderer {
                               List<SheetLayout> layouts, UnitSystem units,
                               boolean forExport, Set<String> selectedParts,
                               List<PartRect> hitRects,
-                              Map<String, List<Cutout>> partCutouts) {
+                              Map<String, List<Cutout>> partCutouts,
+                              Map<String, List<Cutout>> partKeeps) {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
@@ -133,7 +134,7 @@ public class CutSheetRenderer {
                 rowHeight = 0;
             }
 
-            drawSheet(g2, layout, x, y, scale, units, i + 1, forExport, selectedParts, hitRects, partCutouts);
+            drawSheet(g2, layout, x, y, scale, units, i + 1, forExport, selectedParts, hitRects, partCutouts, partKeeps);
 
             x += sheetW + SHEET_GAP;
             rowHeight = Math.max(rowHeight, sheetH);
@@ -184,7 +185,8 @@ public class CutSheetRenderer {
                                    float scale, UnitSystem units, int sheetNumber,
                                    boolean forExport, Set<String> selectedParts,
                                    List<PartRect> hitRects,
-                                   Map<String, List<Cutout>> partCutouts) {
+                                   Map<String, List<Cutout>> partCutouts,
+                                   Map<String, List<Cutout>> partKeeps) {
         float sw = layout.getSheetWidthMm() * scale;
         float sh = layout.getSheetHeightMm() * scale;
 
@@ -243,7 +245,7 @@ public class CutSheetRenderer {
 
             // Cutout overlays (dashed) — drawn on top of the part fill but
             // under the label so labels stay legible when overlapping cuts.
-            drawCutoutOverlays(g2, part, px, py, pw, ph, scale, partCutouts);
+            drawCutoutOverlays(g2, part, px, py, pw, ph, scale, partCutouts, partKeeps);
 
             // Label: part name + dimensions
             drawPartLabel(g2, part, px, py, pw, ph, units);
@@ -272,35 +274,78 @@ public class CutSheetRenderer {
     private static void drawCutoutOverlays(Graphics2D g2, SheetLayout.PlacedPart part,
                                             float px, float py, float pw, float ph,
                                             float scale,
-                                            Map<String, List<Cutout>> partCutouts) {
+                                            Map<String, List<Cutout>> partCutouts,
+                                            Map<String, List<Cutout>> partKeeps) {
         List<Cutout> cutouts = partCutouts.getOrDefault(part.getPartName(), List.of());
-        if (cutouts.isEmpty()) return;
+        List<Cutout> keeps   = partKeeps.getOrDefault(part.getPartName(), List.of());
+        if (cutouts.isEmpty() && keeps.isEmpty()) return;
 
         Stroke originalStroke = g2.getStroke();
         Color originalColor = g2.getColor();
         Shape originalClip = g2.getClip();
+        Rectangle2D.Float partRect = new Rectangle2D.Float(px, py, pw, ph);
 
-        g2.clip(new Rectangle2D.Float(px, py, pw, ph));
+        // ---- Dashed outlines (cuts + keeps share the same dash; the X marker
+        //      below disambiguates which side is discarded). ----
+        g2.clip(partRect);
         g2.setColor(CUTOUT_COLOR);
         g2.setStroke(CUTOUT_STROKE);
+        for (Cutout c : cutouts) drawCutoutShape(g2, c, part, px, py, scale);
+        for (Cutout k : keeps)   drawCutoutShape(g2, k, part, px, py, scale);
 
+        // ---- X marker on the discarded portion. The discarded region is
+        //      the union of (cut shapes) + (part - keep shape) for each keep.
+        //      A single big X clipped to that region mimics shop-floor chalk. ----
+        java.awt.geom.Area discarded = new java.awt.geom.Area();
         for (Cutout c : cutouts) {
-            if (c instanceof Cutout.Rect r) {
-                Rectangle2D.Float rect = cutoutToSheetRect(r, part, px, py, scale);
-                // Skip vanishingly small overlays so we don't draw noise pixels.
-                if (rect.width < 0.5f || rect.height < 0.5f) continue;
-                g2.draw(rect);
-            } else if (c instanceof Cutout.Circle ci) {
-                Ellipse2D.Float ellipse = circleCutoutToSheetEllipse(ci, part, px, py, scale);
-                if (ellipse.width < 0.5f || ellipse.height < 0.5f) continue;
-                g2.draw(ellipse);
-            }
-            // Cutout.Polygon / Spline: skip until those variants land.
+            Shape s = cutoutToSheetShape(c, part, px, py, scale);
+            if (s != null) discarded.add(new java.awt.geom.Area(s));
+        }
+        for (Cutout k : keeps) {
+            Shape s = cutoutToSheetShape(k, part, px, py, scale);
+            if (s == null) continue;
+            java.awt.geom.Area complement = new java.awt.geom.Area(partRect);
+            complement.subtract(new java.awt.geom.Area(s));
+            discarded.add(complement);
+        }
+        if (!discarded.isEmpty()) {
+            g2.setClip(originalClip);
+            g2.clip(discarded);
+            g2.setStroke(new BasicStroke(1f));
+            g2.draw(new Line2D.Float(px, py, px + pw, py + ph));
+            g2.draw(new Line2D.Float(px, py + ph, px + pw, py));
         }
 
         g2.setClip(originalClip);
         g2.setStroke(originalStroke);
         g2.setColor(originalColor);
+    }
+
+    /** Draw the dashed outline for one cutout shape. Used for both cuts and
+     *  keeps — the dashed boundary is the same regardless of polarity. */
+    private static void drawCutoutShape(Graphics2D g2, Cutout c,
+                                        SheetLayout.PlacedPart part,
+                                        float px, float py, float scale) {
+        if (c instanceof Cutout.Rect r) {
+            Rectangle2D.Float rect = cutoutToSheetRect(r, part, px, py, scale);
+            if (rect.width < 0.5f || rect.height < 0.5f) return;
+            g2.draw(rect);
+        } else if (c instanceof Cutout.Circle ci) {
+            Ellipse2D.Float ellipse = circleCutoutToSheetEllipse(ci, part, px, py, scale);
+            if (ellipse.width < 0.5f || ellipse.height < 0.5f) return;
+            g2.draw(ellipse);
+        }
+        // Cutout.Polygon / Spline / Curve: skip until those variants land
+        // (separate backlog: project_cutsheet_nonrect_backlog.md).
+    }
+
+    /** Java2D Shape for a cutout, used for the X-marker clipping region.
+     *  Null for shape variants whose cut-sheet rendering hasn't landed yet. */
+    private static Shape cutoutToSheetShape(Cutout c, SheetLayout.PlacedPart part,
+                                            float px, float py, float scale) {
+        if (c instanceof Cutout.Rect r)   return cutoutToSheetRect(r, part, px, py, scale);
+        if (c instanceof Cutout.Circle ci) return circleCutoutToSheetEllipse(ci, part, px, py, scale);
+        return null;
     }
 
     /**

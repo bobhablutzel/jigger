@@ -26,11 +26,16 @@ options {
 
 CREATE     : 'create' | 'cr' ;
 CUT        : 'cut' ;
+KEEP       : 'keep' ;
+FILLET     : 'fillet' ;
+FACING     : 'facing' ;
+FACE       : 'face' ;
 RECT       : 'rect' | 'rectangle' ;
 CIRCLE     : 'circle' ;
 RADIUS     : 'radius' ;
 POLYGON    : 'polygon' ;
 SPLINE     : 'spline' ;
+CURVE      : 'curve' ;
 SHAPE      : 'shape' ;
 DELETE     : 'delete' | 'del' ;
 MOVE       : 'move' | 'mv' ;
