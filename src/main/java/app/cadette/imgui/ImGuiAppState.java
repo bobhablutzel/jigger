@@ -24,8 +24,9 @@ import com.jme3.app.Application;
 import com.jme3.app.state.BaseAppState;
 import com.jme3.system.lwjgl.LwjglWindow;
 import imgui.ImGui;
-import imgui.flag.ImGuiCond;
+import imgui.flag.ImGuiCol;
 import imgui.flag.ImGuiConfigFlags;
+import imgui.flag.ImGuiDockNodeFlags;
 import imgui.flag.ImGuiInputTextFlags;
 import imgui.flag.ImGuiWindowFlags;
 import imgui.gl3.ImGuiImplGl3;
@@ -36,14 +37,18 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Draws the ImGui overlay each frame: a command panel (text input + output
- * scrollback) and a scene panel listing parts. Hooked into the jME3 lifecycle
- * via {@link BaseAppState#render}/{@code postRender}; ImGui rendering happens
- * after the 3D pass on the GL thread.
+ * Draws the ImGui overlay each frame. Three dockable panels: Command (text
+ * input + scrollback for user-driven commands), Log (warnings/info that
+ * don't deserve to clutter Command), and Scene (parts list). All three live
+ * inside a host DockSpace that covers the viewport, so the user can drag
+ * them by their title bars into whatever arrangement they prefer.
  *
- * <p>Spike-quality: no syntax color, no history-recall keybinds yet, no
- * docking (basic ImGui windows). Enough to feel whether the workflow is
- * productive.
+ * <p>Hooked into the jME3 lifecycle via {@link BaseAppState#initialize}/
+ * {@code postRender}; ImGui rendering runs after the 3D pass on the GL
+ * thread. Layout is persisted to {@code imgui.ini} automatically.
+ *
+ * <p>Spike-quality: no syntax color, no history-recall, no programmatic
+ * default layout (panels start floating; user docks them).
  */
 public class ImGuiAppState extends BaseAppState {
 
@@ -53,29 +58,32 @@ public class ImGuiAppState extends BaseAppState {
 
     // Command panel state.
     private final ImString commandInput = new ImString(512);
-    private final List<String> outputLines = new ArrayList<>();
-    private boolean scrollToBottom = false;
-    private boolean focusInput = true;  // grab focus on first frame
+    private final List<String> commandLines = new ArrayList<>();
+    private final List<String> logLines = new ArrayList<>();
+    private boolean commandScrollPending = false;
+    private boolean logScrollPending = false;
+    private boolean focusCommandInput = true;  // grab focus on first frame
 
     public ImGuiAppState(CommandExecutor executor) {
         this.executor = executor;
-        appendOutput("*** CADette ImGui SPIKE (engine-UI mode) ***");
-        appendOutput("If you see this banner, you're in the ImGui-overlay build,");
-        appendOutput("not the Swing CadetteApp. Window title should read [ImGui spike].");
-        appendOutput("");
-        appendOutput("Try: create part \"p\" length 600 material \"lumber-2x4-spf\"");
-        appendOutput("");
+        appendCommand("*** CADette ImGui SPIKE — engine-UI + docking ***");
+        appendCommand("Drag any panel's title bar to dock it (left/right/top/");
+        appendCommand("bottom edges, or onto another panel as a tab).");
+        appendCommand("Layout is saved to imgui.ini between runs.");
+        appendCommand("");
+        appendCommand("Try: create part \"p\" length 600 material \"lumber-2x4-spf\"");
+        appendCommand("");
+        appendLog("Log panel — warnings and diagnostic info land here, not in Command.");
     }
 
     @Override
     public void stateAttached(com.jme3.app.state.AppStateManager mgr) {
         super.stateAttached(mgr);
         // Route mesh-build warnings (joint cutouts that fall outside their
-        // receiver, etc.) into the output panel instead of stderr — same
-        // role the CommandPanel plays in the Swing app.
+        // receiver, etc.) to the Log panel — keeps the Command panel quiet.
         Application app = mgr.getApplication();
         if (app instanceof SceneManager scene) {
-            scene.setWarningSink(msg -> appendOutput(msg));
+            scene.setWarningSink(this::appendLog);
         }
     }
 
@@ -96,7 +104,10 @@ public class ImGuiAppState extends BaseAppState {
         }
 
         ImGui.createContext();
-        ImGui.getIO().setConfigFlags(ImGuiConfigFlags.NavEnableKeyboard);
+        // DockingEnable unlocks dock-into-panel behavior on title-bar drag
+        // and saves layout to imgui.ini.
+        ImGui.getIO().setConfigFlags(
+                ImGuiConfigFlags.NavEnableKeyboard | ImGuiConfigFlags.DockingEnable);
         ImGui.styleColorsDark();
         imGuiGlfw.init(handle, true);
         imGuiGl3.init("#version 150");
@@ -118,13 +129,20 @@ public class ImGuiAppState extends BaseAppState {
     @Override
     public void postRender() {
         // Order matters: GL3 newFrame first (builds the font atlas on first
-        // call, uploads to GPU); then GLFW newFrame (mouse/keyboard input);
-        // then ImGui newFrame (logical frame begin).
+        // call); then GLFW newFrame (mouse/keyboard); then ImGui newFrame.
         imGuiGl3.newFrame();
         imGuiGlfw.newFrame();
         ImGui.newFrame();
 
+        // Host DockSpace covering the entire main viewport. Panels that
+        // start floating can be docked onto this; "PassthruCentralNode"
+        // makes the empty centre of the dock space transparent so the 3D
+        // viewport remains visible behind it.
+        ImGui.dockSpaceOverViewport(ImGui.getMainViewport(),
+                ImGuiDockNodeFlags.PassthruCentralNode);
+
         drawCommandPanel();
+        drawLogPanel();
         drawScenePanel();
 
         ImGui.render();
@@ -134,40 +152,31 @@ public class ImGuiAppState extends BaseAppState {
     // ---- Command panel ---------------------------------------------------
 
     private void drawCommandPanel() {
-        // Anchor along the bottom-left of the window. Spike layout — proper
-        // docking comes in a follow-up.
-        float windowHeight = ImGui.getIO().getDisplaySizeY();
-        float windowWidth  = ImGui.getIO().getDisplaySizeX();
-        float panelHeight = 260f;
-        ImGui.setNextWindowPos(0, windowHeight - panelHeight, ImGuiCond.Always);
-        ImGui.setNextWindowSize(windowWidth - 320, panelHeight, ImGuiCond.Always);
+        ImGui.begin("Command", ImGuiWindowFlags.NoCollapse);
 
-        ImGui.begin("Command", ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoMove);
-
-        // Bright "SPIKE" banner — visual proof you're in the ImGui build,
-        // not the Swing app. Yellow on the dark theme is unmissable.
-        ImGui.pushStyleColor(imgui.flag.ImGuiCol.Text, 1f, 0.85f, 0.2f, 1f);
-        ImGui.text("[SPIKE — ImGui engine-UI mode]");
+        // Bright "SPIKE" banner — visual proof you're in the ImGui build.
+        ImGui.pushStyleColor(ImGuiCol.Text, 1f, 0.85f, 0.2f, 1f);
+        ImGui.text("[SPIKE — ImGui engine-UI + docking]");
         ImGui.popStyleColor();
         ImGui.separator();
 
         // Scrollback. Reserve the bottom row for the input field.
         float footerHeight = ImGui.getFrameHeightWithSpacing();
-        if (ImGui.beginChild("##scrollback", 0, -footerHeight, true)) {
-            for (String line : outputLines) {
+        if (ImGui.beginChild("##cmd-scrollback", 0, -footerHeight, true)) {
+            for (String line : commandLines) {
                 ImGui.textWrapped(line);
             }
-            if (scrollToBottom) {
+            if (commandScrollPending) {
                 ImGui.setScrollHereY(1.0f);
-                scrollToBottom = false;
+                commandScrollPending = false;
             }
         }
         ImGui.endChild();
 
         // Input line.
-        if (focusInput) {
+        if (focusCommandInput) {
             ImGui.setKeyboardFocusHere();
-            focusInput = false;
+            focusCommandInput = false;
         }
         ImGui.pushItemWidth(-1);  // full width
         int flags = ImGuiInputTextFlags.EnterReturnsTrue
@@ -178,7 +187,7 @@ public class ImGuiAppState extends BaseAppState {
                 runCommand(typed);
             }
             commandInput.set("");
-            focusInput = true;  // re-grab focus for the next command
+            focusCommandInput = true;  // re-grab focus for the next command
         }
         ImGui.popItemWidth();
 
@@ -186,36 +195,42 @@ public class ImGuiAppState extends BaseAppState {
     }
 
     private void runCommand(String command) {
-        appendOutput("> " + command);
+        appendCommand("> " + command);
         try {
             String result = executor.execute(command);
             if (result != null && !result.isEmpty()) {
                 for (String line : result.split("\n", -1)) {
-                    appendOutput(line);
+                    appendCommand(line);
                 }
             }
         } catch (Throwable t) {
-            appendOutput("Error: " + t.getMessage());
+            // Errors stay in Command (the user typed something; they should
+            // see the failure inline). Diagnostic chatter goes to Log.
+            appendCommand("Error: " + t.getMessage());
         }
-        scrollToBottom = true;
     }
 
-    private void appendOutput(String line) {
-        outputLines.add(line);
-        if (outputLines.size() > 1000) {
-            outputLines.subList(0, outputLines.size() - 1000).clear();
+    // ---- Log panel -------------------------------------------------------
+
+    private void drawLogPanel() {
+        ImGui.begin("Log", ImGuiWindowFlags.NoCollapse);
+        if (ImGui.beginChild("##log-scrollback", 0, 0, true)) {
+            for (String line : logLines) {
+                ImGui.textWrapped(line);
+            }
+            if (logScrollPending) {
+                ImGui.setScrollHereY(1.0f);
+                logScrollPending = false;
+            }
         }
+        ImGui.endChild();
+        ImGui.end();
     }
 
     // ---- Scene panel -----------------------------------------------------
 
     private void drawScenePanel() {
-        float windowWidth = ImGui.getIO().getDisplaySizeX();
-        float scenePanelWidth = 320;
-        ImGui.setNextWindowPos(windowWidth - scenePanelWidth, 0, ImGuiCond.Always);
-        ImGui.setNextWindowSize(scenePanelWidth, ImGui.getIO().getDisplaySizeY(), ImGuiCond.Always);
-
-        ImGui.begin("Scene", ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoMove);
+        ImGui.begin("Scene", ImGuiWindowFlags.NoCollapse);
 
         SceneManager scene = (SceneManager) getApplication();
         var parts = scene.getAllParts();
@@ -228,5 +243,23 @@ public class ImGuiAppState extends BaseAppState {
         }
 
         ImGui.end();
+    }
+
+    // ---- Output buffers --------------------------------------------------
+
+    private void appendCommand(String line) {
+        commandLines.add(line);
+        if (commandLines.size() > 1000) {
+            commandLines.subList(0, commandLines.size() - 1000).clear();
+        }
+        commandScrollPending = true;
+    }
+
+    private void appendLog(String line) {
+        logLines.add(line);
+        if (logLines.size() > 1000) {
+            logLines.subList(0, logLines.size() - 1000).clear();
+        }
+        logScrollPending = true;
     }
 }
