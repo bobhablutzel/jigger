@@ -111,6 +111,10 @@ public class ImGuiAppState extends BaseAppState {
      *  appear in {@link #selected}; rebuilt each frame so moves/resizes
      *  keep the highlight in place. */
     private final Map<String, com.jme3.scene.Geometry> highlightGeoms = new HashMap<>();
+    /** Last part-Mesh reference seen for each highlighted part. When the
+     *  part's mesh is rebuilt (after `cut`/`resize`/etc.), this ref no
+     *  longer matches the current one and we know to rebuild the highlight. */
+    private final Map<String, com.jme3.scene.Mesh> lastSeenPartMesh = new HashMap<>();
 
     /** History file (~/.cadette/cmd_history). Loaded once on startup,
      *  appended-and-trimmed on each command. Caps at HISTORY_MAX entries. */
@@ -606,11 +610,17 @@ public class ImGuiAppState extends BaseAppState {
 
     /**
      * Diff the current {@link #selected} set against {@link #highlightGeoms}
-     * and attach/detach yellow wireframe overlays accordingly. The overlay
-     * is a second Geometry that <em>shares the part's actual mesh</em>
-     * (post-cut, post-keep, post-miter), drawn in wireframe with depth-test
-     * off so it reads on top of the part. Sharing the mesh means cuts,
-     * miters, and rebuilds are reflected for free.
+     * and attach/detach yellow profile-outline overlays accordingly.
+     *
+     * <p>The overlay is a custom Lines mesh built from the part's final 2D
+     * profile (after cuts/keeps), extruded to the part's thickness — top
+     * ring + bottom ring + vertical connectors. Result: a clean silhouette
+     * that follows miters and through-cuts without the internal
+     * triangulation visual noise of the full-mesh wireframe.
+     *
+     * <p>Partial-depth pockets aren't in the silhouette (by definition —
+     * the outer profile is unchanged), so the wireframe outlines just the
+     * external shape and any through-holes.
      */
     private void syncSelectionHighlights() {
         SceneManager scene = (SceneManager) getApplication();
@@ -635,19 +645,21 @@ public class ImGuiAppState extends BaseAppState {
             var e = iter.next();
             if (!targetParts.contains(e.getKey())) {
                 e.getValue().removeFromParent();
+                lastSeenPartMesh.remove(e.getKey());
                 iter.remove();
             }
         }
 
         // Build / refresh highlights for everything that should be highlighted.
         for (String partName : targetParts) {
+            app.cadette.model.Part part = scene.getPart(partName);
+            if (part == null) continue;
             com.jme3.scene.Spatial wrapperSpatial =
                     scene.getObjectsNode().getChild("node_" + partName);
             if (!(wrapperSpatial instanceof com.jme3.scene.Node wrapper)) continue;
 
-            // Find the part's actual Geometry inside the wrapper (skipping
-            // any prior highlight). SceneManager names the part geom after
-            // the part itself.
+            // Find the part's actual Geometry inside the wrapper so we can
+            // mirror its local translation and detect mesh rebuilds.
             com.jme3.scene.Geometry partGeom = null;
             for (com.jme3.scene.Spatial s : wrapper.getChildren()) {
                 if (s instanceof com.jme3.scene.Geometry g
@@ -659,28 +671,131 @@ public class ImGuiAppState extends BaseAppState {
             if (partGeom == null) continue;
 
             com.jme3.scene.Geometry existing = highlightGeoms.get(partName);
-            // (Re)build when the highlight is new, the part's mesh was
-            // rebuilt under us (cut/resize/etc.), or the wrapper changed.
-            boolean meshChanged = existing != null && existing.getMesh() != partGeom.getMesh();
+            boolean partMeshRebuilt = lastSeenPartMesh.get(partName) != partGeom.getMesh();
             boolean wrapperChanged = existing != null && existing.getParent() != wrapper;
-            if (existing == null || meshChanged || wrapperChanged) {
+            if (existing == null || partMeshRebuilt || wrapperChanged) {
                 if (existing != null) existing.removeFromParent();
+                com.jme3.scene.Mesh outlineMesh = buildProfileOutlineMesh(part);
+                if (outlineMesh == null) continue;  // degenerate part
                 com.jme3.material.Material mat = new com.jme3.material.Material(
                         scene.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
                 mat.setColor("Color", com.jme3.math.ColorRGBA.Yellow);
-                mat.getAdditionalRenderState().setWireframe(true);
                 mat.getAdditionalRenderState().setDepthTest(false);  // draw on top
                 com.jme3.scene.Geometry hl = new com.jme3.scene.Geometry(
-                        "highlight_" + partName, partGeom.getMesh());
+                        "highlight_" + partName, outlineMesh);
                 hl.setMaterial(mat);
                 hl.setLocalTranslation(partGeom.getLocalTranslation());
                 wrapper.attachChild(hl);
                 highlightGeoms.put(partName, hl);
+                lastSeenPartMesh.put(partName, partGeom.getMesh());
             } else {
-                // Mesh unchanged — just track translation in case it shifted.
                 existing.setLocalTranslation(partGeom.getLocalTranslation());
             }
         }
+    }
+
+    /**
+     * Build a Lines mesh tracing the part's silhouette outline at both
+     * faces plus vertical connectors. Coordinates are centred (matching
+     * PartMeshBuilder's convention) so the geometry can share the part's
+     * geomOffset translation. Returns null if the profile is empty.
+     */
+    private static com.jme3.scene.Mesh buildProfileOutlineMesh(app.cadette.model.Part part) {
+        org.locationtech.jts.geom.Geometry profile =
+                app.cadette.model.PartMeshBuilder.computeFinalProfile(
+                        part.getCutWidthMm(), part.getCutHeightMm(),
+                        part.getCutouts(), part.getKeeps());
+        if (profile.isEmpty()) return null;
+
+        float halfW = part.getCutWidthMm()  * 0.5f;
+        float halfH = part.getCutHeightMm() * 0.5f;
+        float halfT = part.getThicknessMm() * 0.5f;
+
+        java.util.List<double[][]> rings = new java.util.ArrayList<>();
+        collectRings(profile, rings);
+        if (rings.isEmpty()) return null;
+
+        int totalVerts = 0;
+        int totalLineIdx = 0;
+        for (double[][] ring : rings) {
+            totalVerts += ring.length * 2;     // bottom + top
+            totalLineIdx += ring.length * 6;   // (n top + n bottom + n verticals) × 2 indices
+        }
+
+        java.nio.FloatBuffer posBuf =
+                org.lwjgl.BufferUtils.createFloatBuffer(totalVerts * 3);
+        java.nio.IntBuffer idxBuf =
+                org.lwjgl.BufferUtils.createIntBuffer(totalLineIdx);
+
+        int vBase = 0;
+        for (double[][] ring : rings) {
+            int n = ring.length;
+            // Bottom ring at z = -halfT (part's back face).
+            for (int i = 0; i < n; i++) {
+                posBuf.put((float) ring[i][0] - halfW);
+                posBuf.put((float) ring[i][1] - halfH);
+                posBuf.put(-halfT);
+            }
+            // Top ring at z = +halfT (part's front face).
+            for (int i = 0; i < n; i++) {
+                posBuf.put((float) ring[i][0] - halfW);
+                posBuf.put((float) ring[i][1] - halfH);
+                posBuf.put(halfT);
+            }
+            // Bottom edges.
+            for (int i = 0; i < n; i++) {
+                idxBuf.put(vBase + i);
+                idxBuf.put(vBase + ((i + 1) % n));
+            }
+            // Top edges.
+            for (int i = 0; i < n; i++) {
+                idxBuf.put(vBase + n + i);
+                idxBuf.put(vBase + n + ((i + 1) % n));
+            }
+            // Vertical connectors.
+            for (int i = 0; i < n; i++) {
+                idxBuf.put(vBase + i);
+                idxBuf.put(vBase + n + i);
+            }
+            vBase += n * 2;
+        }
+        posBuf.flip();
+        idxBuf.flip();
+
+        com.jme3.scene.Mesh mesh = new com.jme3.scene.Mesh();
+        mesh.setMode(com.jme3.scene.Mesh.Mode.Lines);
+        mesh.setBuffer(com.jme3.scene.VertexBuffer.Type.Position, 3, posBuf);
+        mesh.setBuffer(com.jme3.scene.VertexBuffer.Type.Index, 2, idxBuf);
+        mesh.updateBound();
+        return mesh;
+    }
+
+    /** Flatten a JTS profile Geometry into a list of closed rings (exterior +
+     *  holes, across all polygons). JTS closes rings by repeating the first
+     *  coordinate; we drop the duplicate so the index math wraps cleanly. */
+    private static void collectRings(org.locationtech.jts.geom.Geometry g,
+                                      java.util.List<double[][]> out) {
+        if (g instanceof org.locationtech.jts.geom.Polygon p) {
+            out.add(ringCoords(p.getExteriorRing()));
+            for (int i = 0; i < p.getNumInteriorRing(); i++) {
+                out.add(ringCoords(p.getInteriorRingN(i)));
+            }
+        } else {
+            for (int i = 0; i < g.getNumGeometries(); i++) {
+                collectRings(g.getGeometryN(i), out);
+            }
+        }
+    }
+
+    private static double[][] ringCoords(org.locationtech.jts.geom.LineString ring) {
+        org.locationtech.jts.geom.Coordinate[] cs = ring.getCoordinates();
+        int n = cs.length - 1;  // JTS closes rings; drop the duplicate
+        double[][] r = new double[n][2];
+        for (int i = 0; i < n; i++) {
+            r[i][0] = cs[i].x;
+            r[i][1] = cs[i].y;
+        }
+        return r;
     }
 
     /**

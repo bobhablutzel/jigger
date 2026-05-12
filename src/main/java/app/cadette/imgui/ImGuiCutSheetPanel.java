@@ -84,10 +84,10 @@ public class ImGuiCutSheetPanel {
         }
 
         if (textureId != -1) {
-            // UV flip vertically: GL textures default origin is bottom-left,
-            // BufferedImage rows go top-down. ImGui.image(id, w, h, uv0, uv1)
-            // → uv0=(0,1), uv1=(1,0) renders the texture right-side up.
-            ImGui.image(textureId, w, h, 0f, 1f, 1f, 0f);
+            // ImGui's image() with default UVs (0,0)→(1,1) samples the
+            // texture top-left-first, matching BufferedImage's row order.
+            // No UV flip needed.
+            ImGui.image(textureId, w, h);
         }
 
         ImGui.end();
