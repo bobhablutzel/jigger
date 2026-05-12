@@ -20,6 +20,11 @@
         <antlr4.version>4.13.1</antlr4.version>
         <lombok.version>1.18.38</lombok.version>
         <imgui.version>1.89.0</imgui.version>
+        <!-- JVM arg for the spike's exec:exec launch. Default is a harmless
+             system-property no-op; the mac-thread profile overrides this
+             to -XstartOnFirstThread when running on macOS, where GLFW
+             requires the main thread to be JVM thread 0. -->
+        <spike.first-thread-flag>-Dcadette.os=other</spike.first-thread-flag>
     </properties>
 
     <dependencies>
@@ -204,6 +209,17 @@
                 </plugins>
             </build>
         </profile>
+        <!-- Spike profile uses exec:exec (subprocess) rather than exec:java
+             (in-process). Reason: macOS requires the LWJGL3/GLFW main
+             thread to be JVM thread 0. With exec:java the spike's main()
+             runs on a Maven worker thread no matter what JVM flags are
+             passed; only a fresh JVM via exec:exec gets main() == thread 0.
+             Launch:
+                 mvn -Pspike exec:exec
+             ${spike.first-thread-flag} expands to -XstartOnFirstThread on
+             macOS (via the auto-activated mac-thread profile below) and to
+             a harmless -D property elsewhere — non-macOS JVMs reject
+             -XstartOnFirstThread as an unrecognized option. -->
         <profile>
             <id>spike</id>
             <build>
@@ -212,11 +228,28 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <configuration>
-                            <mainClass>app.cadette.imgui.CadetteImGuiSpike</mainClass>
+                            <executable>java</executable>
+                            <arguments>
+                                <argument>${spike.first-thread-flag}</argument>
+                                <argument>-classpath</argument>
+                                <classpath/>
+                                <argument>app.cadette.imgui.CadetteImGuiSpike</argument>
+                            </arguments>
                         </configuration>
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+        <!-- Auto-activated on macOS: overrides spike.first-thread-flag so
+             the spike launch passes -XstartOnFirstThread. -->
+        <profile>
+            <id>mac-thread</id>
+            <activation>
+                <os><family>mac</family></os>
+            </activation>
+            <properties>
+                <spike.first-thread-flag>-XstartOnFirstThread</spike.first-thread-flag>
+            </properties>
         </profile>
     </profiles>
 </project>
