@@ -111,8 +111,15 @@ public class ImGuiAppState extends BaseAppState {
      *  keep the highlight in place. */
     private final Map<String, com.jme3.scene.Geometry> highlightGeoms = new HashMap<>();
 
+    /** History file (~/.cadette/cmd_history). Loaded once on startup,
+     *  appended-and-trimmed on each command. Caps at HISTORY_MAX entries. */
+    private static final Path HISTORY_FILE =
+            Path.of(System.getProperty("user.home"), ".cadette", "cmd_history");
+    private static final int HISTORY_MAX = 200;
+
     public ImGuiAppState(CommandExecutor executor) {
         this.executor = executor;
+        loadHistory();
         appendCommand("*** CADette ImGui SPIKE — engine-UI + docking ***");
         appendCommand("");
         appendCommand("Viewport bindings:");
@@ -384,16 +391,44 @@ public class ImGuiAppState extends BaseAppState {
 
     /** Append a freshly-submitted command to history, dropping a duplicate
      *  consecutive entry so press-up after Enter doesn't recall the same
-     *  thing you just ran. */
+     *  thing you just ran. Also persists to disk so history spans sessions. */
     private void pushHistory(String command) {
         if (!commandHistory.isEmpty()
                 && commandHistory.get(commandHistory.size() - 1).equals(command)) {
             return;
         }
         commandHistory.add(command);
-        if (commandHistory.size() > 200) {
-            commandHistory.subList(0, commandHistory.size() - 200).clear();
+        if (commandHistory.size() > HISTORY_MAX) {
+            commandHistory.subList(0, commandHistory.size() - HISTORY_MAX).clear();
         }
+        saveHistory();
+    }
+
+    /** Load command history from ~/.cadette/cmd_history (if it exists).
+     *  Silent on errors — history is a convenience, not load-bearing. */
+    private void loadHistory() {
+        try {
+            if (Files.exists(HISTORY_FILE)) {
+                List<String> lines = Files.readAllLines(HISTORY_FILE);
+                for (String line : lines) {
+                    if (!line.isEmpty()) commandHistory.add(line);
+                }
+                // Trim if the file grew beyond the cap (older format etc.).
+                if (commandHistory.size() > HISTORY_MAX) {
+                    commandHistory.subList(0, commandHistory.size() - HISTORY_MAX).clear();
+                }
+            }
+        } catch (Exception ignored) { /* fresh start */ }
+    }
+
+    /** Persist command history to disk. Called after each push; the file
+     *  is small enough (≤ 200 lines) that rewriting on every command is
+     *  cheap and avoids partial-write/locking complexity. */
+    private void saveHistory() {
+        try {
+            Files.createDirectories(HISTORY_FILE.getParent());
+            Files.write(HISTORY_FILE, commandHistory);
+        } catch (Exception ignored) { /* non-fatal */ }
     }
 
     /**
@@ -566,72 +601,85 @@ public class ImGuiAppState extends BaseAppState {
 
     /**
      * Diff the current {@link #selected} set against {@link #highlightGeoms}
-     * and attach/detach yellow wireframe boxes accordingly. Re-runs each
-     * frame so moves/resizes keep the highlight on the part. Cheap when
-     * selection is empty (no-op).
+     * and attach/detach yellow wireframe boxes accordingly. Highlights
+     * follow the part's rotation: each box is attached as a child of the
+     * part's wrapper node, so it inherits the wrapper's transform and
+     * always traces the part's actual oriented shape (rather than its
+     * loose axis-aligned bounding box, which would balloon for diagonals
+     * like a fence-gate brace).
      */
     private void syncSelectionHighlights() {
         SceneManager scene = (SceneManager) getApplication();
 
-        // Drop highlights for items no longer selected.
+        // Compute the set of part names that should have a highlight right
+        // now. Assemblies expand to all their member parts so each part
+        // gets its own oriented box.
+        java.util.Set<String> targetParts = new LinkedHashSet<>();
+        for (String name : selected) {
+            app.cadette.model.Assembly asm = scene.getAssembly(name);
+            if (asm != null) {
+                for (app.cadette.model.Part p : asm.getParts()) {
+                    targetParts.add(p.getName());
+                }
+            } else {
+                targetParts.add(name);
+            }
+        }
+
+        // Drop highlights for parts no longer in the target set.
         var iter = highlightGeoms.entrySet().iterator();
         while (iter.hasNext()) {
             var e = iter.next();
-            if (!selected.contains(e.getKey())) {
+            if (!targetParts.contains(e.getKey())) {
                 e.getValue().removeFromParent();
                 iter.remove();
             }
         }
 
-        // Build / refresh highlights for everything currently selected.
-        for (String name : selected) {
-            com.jme3.math.Vector3f[] aabb = aabbFor(scene, name);
-            if (aabb == null) continue;
-            com.jme3.math.Vector3f center = aabb[0].add(aabb[1]).multLocal(0.5f);
-            com.jme3.math.Vector3f half = aabb[1].subtract(aabb[0]).multLocal(0.5f)
-                    .addLocal(2f, 2f, 2f);  // small inflation so we don't z-fight
+        // Build / refresh highlights for everything that should be highlighted.
+        for (String partName : targetParts) {
+            app.cadette.model.Part part = scene.getPart(partName);
+            if (part == null) continue;
+            com.jme3.scene.Spatial wrapperSpatial =
+                    scene.getObjectsNode().getChild("node_" + partName);
+            if (!(wrapperSpatial instanceof com.jme3.scene.Node wrapper)) continue;
 
-            com.jme3.scene.Geometry existing = highlightGeoms.get(name);
+            float halfX = part.getCutWidthMm()  * 0.5f;
+            float halfY = part.getCutHeightMm() * 0.5f;
+            float halfZ = part.getThicknessMm() * 0.5f;
+            // Tiny inflation so the wireframe doesn't z-fight with the
+            // part's surface.
+            float pad = 0.5f;
+
+            com.jme3.scene.Geometry existing = highlightGeoms.get(partName);
             if (existing == null) {
-                com.jme3.scene.debug.WireBox wb = new com.jme3.scene.debug.WireBox(half.x, half.y, half.z);
-                com.jme3.scene.Geometry g = new com.jme3.scene.Geometry("highlight_" + name, wb);
+                com.jme3.scene.debug.WireBox wb = new com.jme3.scene.debug.WireBox(
+                        halfX + pad, halfY + pad, halfZ + pad);
+                com.jme3.scene.Geometry g = new com.jme3.scene.Geometry("highlight_" + partName, wb);
                 com.jme3.material.Material mat = new com.jme3.material.Material(
                         scene.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
                 mat.setColor("Color", com.jme3.math.ColorRGBA.Yellow);
-                mat.getAdditionalRenderState().setDepthTest(false);  // draw on top
+                mat.getAdditionalRenderState().setDepthTest(false);
                 g.setMaterial(mat);
-                g.setLocalTranslation(center);
-                scene.getRootNode().attachChild(g);
-                highlightGeoms.put(name, g);
+                // The wrapper is anchored at the part's min-corner in world
+                // space; the part's geometry is offset by halfSize so its
+                // centre lands at wrapper origin + halfSize. Match that
+                // offset so the highlight box wraps the part exactly.
+                g.setLocalTranslation(halfX, halfY, halfZ);
+                wrapper.attachChild(g);
+                highlightGeoms.put(partName, g);
             } else {
-                // Already present — just update position/extents to track moves.
                 com.jme3.scene.debug.WireBox wb = (com.jme3.scene.debug.WireBox) existing.getMesh();
-                wb.updatePositions(half.x, half.y, half.z);
-                existing.setLocalTranslation(center);
+                wb.updatePositions(halfX + pad, halfY + pad, halfZ + pad);
+                existing.setLocalTranslation(halfX, halfY, halfZ);
+                // Re-attach in case the wrapper was rebuilt (mesh rebuild
+                // after `cut` / `resize`).
+                if (existing.getParent() != wrapper) {
+                    existing.removeFromParent();
+                    wrapper.attachChild(existing);
+                }
             }
         }
-    }
-
-    /** Resolve a selection name (part or assembly) to its world AABB. */
-    private static com.jme3.math.Vector3f[] aabbFor(SceneManager scene, String name) {
-        com.jme3.math.Vector3f[] partAabb = scene.computeObjectAABB(name);
-        if (partAabb != null) return partAabb;
-        app.cadette.model.Assembly asm = scene.getAssembly(name);
-        if (asm == null) return null;
-
-        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
-        for (app.cadette.model.Part p : asm.getParts()) {
-            com.jme3.math.Vector3f[] a = scene.computeObjectAABB(p.getName());
-            if (a == null) continue;
-            minX = Math.min(minX, a[0].x);  minY = Math.min(minY, a[0].y);  minZ = Math.min(minZ, a[0].z);
-            maxX = Math.max(maxX, a[1].x);  maxY = Math.max(maxY, a[1].y);  maxZ = Math.max(maxZ, a[1].z);
-        }
-        if (minX == Float.MAX_VALUE) return null;
-        return new com.jme3.math.Vector3f[] {
-                new com.jme3.math.Vector3f(minX, minY, minZ),
-                new com.jme3.math.Vector3f(maxX, maxY, maxZ)
-        };
     }
 
     /**
