@@ -74,11 +74,6 @@ public class CadetteImGuiSpike {
         // when the GL context comes up.
         sceneManager.getStateManager().attach(new ImGuiAppState(executor));
 
-        // start(Display, true) runs jME3's main loop on the *calling*
-        // thread — i.e. thread 0 thanks to -XstartOnFirstThread — instead
-        // of spawning a worker. macOS requires GLFW event polling on the
-        // first thread; without this, mouse/keyboard input is silently
-        // dropped and even the window's close box stops working.
-        sceneManager.start(com.jme3.system.JmeContext.Type.Display, true);
+        sceneManager.start();
     }
 }
