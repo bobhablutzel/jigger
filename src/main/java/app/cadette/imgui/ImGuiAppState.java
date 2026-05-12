@@ -151,6 +151,24 @@ public class ImGuiAppState extends BaseAppState {
     protected void onDisable() { }
 
     @Override
+    public void update(float tpf) {
+        // Gate jME3's flyCam on ImGui's "want capture" flags. Without this,
+        // dragging an ImGui panel title bar also rotates the camera (both
+        // GLFW callbacks fire for the same event). The flag is set during
+        // ImGui's newFrame; we read it here at the next update, so the
+        // gating is one frame stale but the user can't tell.
+        if (getApplication() instanceof com.jme3.app.SimpleApplication simple) {
+            var flyCam = simple.getFlyByCamera();
+            if (flyCam != null) {
+                boolean shouldCameraReceiveInput = !ImGui.getIO().getWantCaptureMouse();
+                if (flyCam.isEnabled() != shouldCameraReceiveInput) {
+                    flyCam.setEnabled(shouldCameraReceiveInput);
+                }
+            }
+        }
+    }
+
+    @Override
     public void postRender() {
         // Order matters: GL3 newFrame first (builds the font atlas on first
         // call); then GLFW newFrame (mouse/keyboard); then ImGui newFrame.
