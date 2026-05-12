@@ -45,7 +45,17 @@
       "Bash(mvn -DfailIfNoTests=false -Dtest=JointCutoutInferenceTest test)",
       "Bash(mvn test-compile *)",
       "Bash(mvn -DskipITs test -Dtest='PartMeshBuilderTest')",
-      "Bash(mvn -q clean test)"
+      "Bash(mvn -q clean test)",
+      "Bash(mvn -q dependency:resolve)",
+      "Bash(curl -s 'https://search.maven.org/solrsearch/select?q=a:imgui-java-binding&rows=20')",
+      "Bash(xargs -I {} unzip -l {})",
+      "Bash(javap -classpath ~/.m2/repository/org/jmonkeyengine/jme3-lwjgl3/3.9.0-stable/jme3-lwjgl3-3.9.0-stable.jar com.jme3.system.lwjgl.LwjglWindow)",
+      "Bash(javap -classpath ~/.m2/repository/io/github/spair/imgui-java-lwjgl3/1.89.0/imgui-java-lwjgl3-1.89.0.jar imgui.gl3.ImGuiImplGl3 imgui.glfw.ImGuiImplGlfw)",
+      "Bash(timeout 5 mvn -q exec:java -Dexec.mainClass=app.cadette.imgui.CadetteImGuiSpike)",
+      "Bash(timeout 8 mvn -q exec:java -Dexec.mainClass=app.cadette.imgui.CadetteImGuiSpike)",
+      "Read(//tmp/**)",
+      "Bash(timeout 4 mvn -q exec:java -Dexec.mainClass=app.cadette.imgui.CadetteImGuiSpike)",
+      "Bash(timeout 5 mvn -q -Pspike exec:java)"
     ]
   }
 }

@@ -12,3 +12,6 @@ target/
 # OS
 .DS_Store
 Thumbs.db
+
+# ImGui runtime layout file (panel positions, sizes) — per-machine state
+imgui.ini

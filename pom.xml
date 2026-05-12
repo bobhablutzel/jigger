@@ -19,6 +19,7 @@
         <jme3.version>3.9.0-stable</jme3.version>
         <antlr4.version>4.13.1</antlr4.version>
         <lombok.version>1.18.38</lombok.version>
+        <imgui.version>1.89.0</imgui.version>
     </properties>
 
     <dependencies>
@@ -67,6 +68,36 @@
             <groupId>com.github.weisj</groupId>
             <artifactId>jsvg</artifactId>
             <version>2.0.0</version>
+        </dependency>
+
+        <!-- imgui-java — engine-style UI for the in-window CAD tool layout
+             spike. Pure Java bindings to Dear ImGui via SpaiR/imgui-java.
+             All three platform-native artifacts bundled so the jar is
+             cross-platform without classifier juggling. -->
+        <dependency>
+            <groupId>io.github.spair</groupId>
+            <artifactId>imgui-java-binding</artifactId>
+            <version>${imgui.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.spair</groupId>
+            <artifactId>imgui-java-lwjgl3</artifactId>
+            <version>${imgui.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.spair</groupId>
+            <artifactId>imgui-java-natives-linux</artifactId>
+            <version>${imgui.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.spair</groupId>
+            <artifactId>imgui-java-natives-macos</artifactId>
+            <version>${imgui.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.github.spair</groupId>
+            <artifactId>imgui-java-natives-windows</artifactId>
+            <version>${imgui.version}</version>
         </dependency>
 
         <!-- Lombok -->
@@ -122,14 +153,13 @@
                 </configuration>
             </plugin>
 
-            <!-- Exec plugin for easy running -->
+            <!-- Exec plugin for easy running. mainClass is set via the
+                 active profile so -Dexec.mainClass overrides work; otherwise
+                 a hard-coded mainClass here would shadow the system property. -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.2.0</version>
-                <configuration>
-                    <mainClass>app.cadette.CadetteApp</mainClass>
-                </configuration>
             </plugin>
 
             <!-- Surefire for JUnit 5 -->
@@ -154,4 +184,39 @@
             </plugin>
         </plugins>
     </build>
+
+    <!-- Run profiles. `mvn -Pswing exec:java` launches the Swing CadetteApp;
+         `mvn -Pspike exec:java` launches the ImGui spike. Default (no
+         profile) prints a help message via the exec plugin's required-args
+         check. -->
+    <profiles>
+        <profile>
+            <id>swing</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <configuration>
+                            <mainClass>app.cadette.CadetteApp</mainClass>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>spike</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <configuration>
+                            <mainClass>app.cadette.imgui.CadetteImGuiSpike</mainClass>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
