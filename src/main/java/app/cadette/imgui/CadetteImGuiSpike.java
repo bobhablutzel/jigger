@@ -55,24 +55,39 @@ public class CadetteImGuiSpike {
 
         SceneManager sceneManager = new SceneManager();
 
+        System.out.println( "Created scene manager");
+
         AppSettings settings = new AppSettings(true);
+        System.out.println( "Created settings");
         // Visually distinct title so it can't be confused with CadetteApp's
         // "CADette - 3D Command Shell" window.
         settings.setTitle("[ImGui spike] CADette");
+        System.out.println( "Set title");
+
         settings.setResolution(1600, 1000);
+        System.out.println( "Set resolution");
         settings.setFrameRate(60);
+        System.out.println( "set frame rate");
         settings.setSamples(Integer.getInteger("cadette.msaa", 4));
+        System.out.println( "Set samples" );
         settings.setAudioRenderer(null);
+        System.out.println( "Set audio renderer" );
         sceneManager.setSettings(settings);
+        System.out.println( "Set scene manager settings" );
         sceneManager.setShowSettings(false);
+        System.out.println( "set show settings" );
         sceneManager.setPauseOnLostFocus(false);
+        System.out.println( "Set pause on lost focus" );
 
         CommandExecutor executor = new CommandExecutor(sceneManager);
+        System.out.println( "Executor" );
         executor.loadTemplates();
+        System.out.println( "Load templates" );
 
         // Attach the ImGui overlay state before start() so it initialises
         // when the GL context comes up.
         sceneManager.getStateManager().attach(new ImGuiAppState(executor));
+        System.out.println( "Attached" );
 
         // start(Display, true) runs jME3's render+poll loop on the calling
         // thread. With -XstartOnFirstThread, the caller is the JVM main
@@ -82,5 +97,6 @@ public class CadetteImGuiSpike {
         System.err.println("[spike] main() calling start(Display, true) on thread="
                 + Thread.currentThread().getName());
         sceneManager.start(com.jme3.system.JmeContext.Type.Display, true);
+        System.out.println( "Started" );
     }
 }
