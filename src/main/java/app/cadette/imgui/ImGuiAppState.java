@@ -37,10 +37,12 @@ import imgui.type.ImInt;
 import imgui.type.ImString;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWCharCallback;
+import org.lwjgl.glfw.GLFWCursorEnterCallback;
 import org.lwjgl.glfw.GLFWCursorPosCallback;
 import org.lwjgl.glfw.GLFWKeyCallback;
 import org.lwjgl.glfw.GLFWMouseButtonCallback;
 import org.lwjgl.glfw.GLFWScrollCallback;
+import org.lwjgl.glfw.GLFWWindowFocusCallback;
 
 import java.nio.DoubleBuffer;
 import java.nio.file.Files;
@@ -83,6 +85,8 @@ public class ImGuiAppState extends BaseAppState {
     private GLFWScrollCallback      scrollCb;
     private GLFWKeyCallback         keyCb;
     private GLFWCharCallback        charCb;
+    private GLFWWindowFocusCallback windowFocusCb;
+    private GLFWCursorEnterCallback cursorEnterCb;
 
     // Command panel state.
     private final ImString commandInput = new ImString(512);
@@ -259,11 +263,28 @@ public class ImGuiAppState extends BaseAppState {
             }
         };
 
+        // Window focus and cursor enter are critical on macOS — without
+        // these forwarded, ImGui treats the window as unfocused and
+        // refuses to dispatch mouse/keyboard input.
+        windowFocusCb = new GLFWWindowFocusCallback() {
+            @Override public void invoke(long window, boolean focused) {
+                imGuiGlfw.windowFocusCallback(window, focused);
+            }
+        };
+
+        cursorEnterCb = new GLFWCursorEnterCallback() {
+            @Override public void invoke(long window, boolean entered) {
+                imGuiGlfw.cursorEnterCallback(window, entered);
+            }
+        };
+
         GLFW.glfwSetMouseButtonCallback(handle, mouseButtonCb);
         GLFW.glfwSetCursorPosCallback(handle, cursorPosCb);
         GLFW.glfwSetScrollCallback(handle, scrollCb);
         GLFW.glfwSetKeyCallback(handle, keyCb);
         GLFW.glfwSetCharCallback(handle, charCb);
+        GLFW.glfwSetWindowFocusCallback(handle, windowFocusCb);
+        GLFW.glfwSetCursorEnterCallback(handle, cursorEnterCb);
     }
 
     @Override
