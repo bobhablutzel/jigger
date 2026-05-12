@@ -606,19 +606,17 @@ public class ImGuiAppState extends BaseAppState {
 
     /**
      * Diff the current {@link #selected} set against {@link #highlightGeoms}
-     * and attach/detach yellow wireframe boxes accordingly. Highlights
-     * follow the part's rotation: each box is attached as a child of the
-     * part's wrapper node, so it inherits the wrapper's transform and
-     * always traces the part's actual oriented shape (rather than its
-     * loose axis-aligned bounding box, which would balloon for diagonals
-     * like a fence-gate brace).
+     * and attach/detach yellow wireframe overlays accordingly. The overlay
+     * is a second Geometry that <em>shares the part's actual mesh</em>
+     * (post-cut, post-keep, post-miter), drawn in wireframe with depth-test
+     * off so it reads on top of the part. Sharing the mesh means cuts,
+     * miters, and rebuilds are reflected for free.
      */
     private void syncSelectionHighlights() {
         SceneManager scene = (SceneManager) getApplication();
 
-        // Compute the set of part names that should have a highlight right
-        // now. Assemblies expand to all their member parts so each part
-        // gets its own oriented box.
+        // Selected assemblies expand to all their member parts so each
+        // part's mesh gets its own highlight.
         java.util.Set<String> targetParts = new LinkedHashSet<>();
         for (String name : selected) {
             app.cadette.model.Assembly asm = scene.getAssembly(name);
@@ -643,46 +641,44 @@ public class ImGuiAppState extends BaseAppState {
 
         // Build / refresh highlights for everything that should be highlighted.
         for (String partName : targetParts) {
-            app.cadette.model.Part part = scene.getPart(partName);
-            if (part == null) continue;
             com.jme3.scene.Spatial wrapperSpatial =
                     scene.getObjectsNode().getChild("node_" + partName);
             if (!(wrapperSpatial instanceof com.jme3.scene.Node wrapper)) continue;
 
-            float halfX = part.getCutWidthMm()  * 0.5f;
-            float halfY = part.getCutHeightMm() * 0.5f;
-            float halfZ = part.getThicknessMm() * 0.5f;
-            // Tiny inflation so the wireframe doesn't z-fight with the
-            // part's surface.
-            float pad = 0.5f;
+            // Find the part's actual Geometry inside the wrapper (skipping
+            // any prior highlight). SceneManager names the part geom after
+            // the part itself.
+            com.jme3.scene.Geometry partGeom = null;
+            for (com.jme3.scene.Spatial s : wrapper.getChildren()) {
+                if (s instanceof com.jme3.scene.Geometry g
+                        && partName.equals(g.getName())) {
+                    partGeom = g;
+                    break;
+                }
+            }
+            if (partGeom == null) continue;
 
             com.jme3.scene.Geometry existing = highlightGeoms.get(partName);
-            if (existing == null) {
-                com.jme3.scene.debug.WireBox wb = new com.jme3.scene.debug.WireBox(
-                        halfX + pad, halfY + pad, halfZ + pad);
-                com.jme3.scene.Geometry g = new com.jme3.scene.Geometry("highlight_" + partName, wb);
+            // (Re)build when the highlight is new, the part's mesh was
+            // rebuilt under us (cut/resize/etc.), or the wrapper changed.
+            boolean meshChanged = existing != null && existing.getMesh() != partGeom.getMesh();
+            boolean wrapperChanged = existing != null && existing.getParent() != wrapper;
+            if (existing == null || meshChanged || wrapperChanged) {
+                if (existing != null) existing.removeFromParent();
                 com.jme3.material.Material mat = new com.jme3.material.Material(
                         scene.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
                 mat.setColor("Color", com.jme3.math.ColorRGBA.Yellow);
-                mat.getAdditionalRenderState().setDepthTest(false);
-                g.setMaterial(mat);
-                // The wrapper is anchored at the part's min-corner in world
-                // space; the part's geometry is offset by halfSize so its
-                // centre lands at wrapper origin + halfSize. Match that
-                // offset so the highlight box wraps the part exactly.
-                g.setLocalTranslation(halfX, halfY, halfZ);
-                wrapper.attachChild(g);
-                highlightGeoms.put(partName, g);
+                mat.getAdditionalRenderState().setWireframe(true);
+                mat.getAdditionalRenderState().setDepthTest(false);  // draw on top
+                com.jme3.scene.Geometry hl = new com.jme3.scene.Geometry(
+                        "highlight_" + partName, partGeom.getMesh());
+                hl.setMaterial(mat);
+                hl.setLocalTranslation(partGeom.getLocalTranslation());
+                wrapper.attachChild(hl);
+                highlightGeoms.put(partName, hl);
             } else {
-                com.jme3.scene.debug.WireBox wb = (com.jme3.scene.debug.WireBox) existing.getMesh();
-                wb.updatePositions(halfX + pad, halfY + pad, halfZ + pad);
-                existing.setLocalTranslation(halfX, halfY, halfZ);
-                // Re-attach in case the wrapper was rebuilt (mesh rebuild
-                // after `cut` / `resize`).
-                if (existing.getParent() != wrapper) {
-                    existing.removeFromParent();
-                    wrapper.attachChild(existing);
-                }
+                // Mesh unchanged — just track translation in case it shifted.
+                existing.setLocalTranslation(partGeom.getLocalTranslation());
             }
         }
     }
