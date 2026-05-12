@@ -42,8 +42,9 @@ import static org.lwjgl.glfw.GLFW.*;
  */
 public class ViewportInputHandler {
 
-    /** Click event: screen coords + the GLFW mods active at click time. */
-    public record ClickEvent(double x, double y, int mods) {}
+    /** Click event: screen coords + GLFW mods + whether this is a
+     *  double-click (within ~400ms and ~5px of the previous click). */
+    public record ClickEvent(double x, double y, int mods, boolean isDouble) {}
 
     private final OrbitCamera camera;
     /** Invoked when the user presses "R". Caller decides whether that means
@@ -53,6 +54,8 @@ public class ViewportInputHandler {
     /** Invoked when LMB is released without a meaningful drag (a click).
      *  Screen coords are in window pixels; caller does the raycast. */
     private final java.util.function.Consumer<ClickEvent> onClick;
+    /** Invoked when Esc is pressed. Used for "close open assembly" etc. */
+    private final Runnable onEscape;
 
     /** -1 when no gesture is active; otherwise the GLFW button that started it. */
     private int activeButton = -1;
@@ -67,12 +70,21 @@ public class ViewportInputHandler {
     private double pressMotionAccum;
     private static final double CLICK_MOTION_TOLERANCE_PX = 5.0;
 
+    // Double-click detection: timestamp + position of the most recent
+    // single click. A click within these thresholds counts as a double.
+    private double lastClickTime = -1;
+    private double lastClickX, lastClickY;
+    private static final double DOUBLE_CLICK_WINDOW_S = 0.40;
+    private static final double DOUBLE_CLICK_DIST_PX = 5.0;
+
     public ViewportInputHandler(OrbitCamera camera,
                                  Runnable onReset,
-                                 java.util.function.Consumer<ClickEvent> onClick) {
+                                 java.util.function.Consumer<ClickEvent> onClick,
+                                 Runnable onEscape) {
         this.camera = camera;
         this.onReset = onReset;
         this.onClick = onClick;
+        this.onEscape = onEscape;
     }
 
     // Called only for events the viewport owns (ImGui didn't want them).
@@ -93,7 +105,16 @@ public class ViewportInputHandler {
             // (currently unbound; reserved for box-select).
             if (button == GLFW_MOUSE_BUTTON_LEFT
                     && pressMotionAccum < CLICK_MOTION_TOLERANCE_PX) {
-                onClick.accept(new ClickEvent(cursorX, cursorY, activeMods));
+                double now = org.lwjgl.glfw.GLFW.glfwGetTime();
+                boolean isDouble = lastClickTime > 0
+                        && (now - lastClickTime) < DOUBLE_CLICK_WINDOW_S
+                        && Math.abs(cursorX - lastClickX) < DOUBLE_CLICK_DIST_PX
+                        && Math.abs(cursorY - lastClickY) < DOUBLE_CLICK_DIST_PX;
+                // Reset on double so a third click doesn't fire as double again.
+                lastClickTime = isDouble ? -1 : now;
+                lastClickX = cursorX;
+                lastClickY = cursorY;
+                onClick.accept(new ClickEvent(cursorX, cursorY, activeMods, isDouble));
             }
             activeButton = -1;
             activeMods = 0;
@@ -134,6 +155,7 @@ public class ViewportInputHandler {
             case GLFW_KEY_S -> camera.viewSide();
             case GLFW_KEY_I -> camera.viewIso();
             case GLFW_KEY_R -> onReset.run();
+            case GLFW_KEY_ESCAPE -> onEscape.run();
             case GLFW_KEY_EQUAL, GLFW_KEY_KP_ADD       -> camera.zoom(+1f);
             case GLFW_KEY_MINUS, GLFW_KEY_KP_SUBTRACT  -> camera.zoom(-1f);
             default -> { /* not bound */ }

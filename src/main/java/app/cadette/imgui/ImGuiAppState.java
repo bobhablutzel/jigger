@@ -46,8 +46,10 @@ import java.nio.DoubleBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -89,19 +91,36 @@ public class ImGuiAppState extends BaseAppState {
     private boolean logScrollPending = false;
     private boolean focusCommandInput = true;
 
+    // Command history (up/down arrow recall). Position points into the
+    // history list; -1 means "currently editing fresh input." A saved
+    // pre-recall snapshot lets down-arrow restore work-in-progress.
+    private final List<String> commandHistory = new ArrayList<>();
+    private int historyPos = -1;
+    private String preRecallBuffer = "";
+
     // Default-layout flag — true on first run (no imgui.ini exists yet).
     private boolean buildDefaultLayout;
 
     // Selection state. Insertion-ordered so the UI can display in click order.
     private final Set<String> selected = new LinkedHashSet<>();
+    /** When non-null, clicks select parts within this assembly (drilled in).
+     *  When null, clicks on a part-in-an-assembly select the whole assembly. */
+    private String openAssembly = null;
+    /** Per-selection 3D wireframe highlights. Keyed by the same names that
+     *  appear in {@link #selected}; rebuilt each frame so moves/resizes
+     *  keep the highlight in place. */
+    private final Map<String, com.jme3.scene.Geometry> highlightGeoms = new HashMap<>();
 
     public ImGuiAppState(CommandExecutor executor) {
         this.executor = executor;
         appendCommand("*** CADette ImGui SPIKE — engine-UI + docking ***");
         appendCommand("");
         appendCommand("Viewport bindings:");
-        appendCommand("  LMB click ......... select part (shift = add, Cmd/Ctrl = toggle)");
-        appendCommand("  click empty ....... deselect all");
+        appendCommand("  LMB click ......... select assembly (or part if drilled in)");
+        appendCommand("  LMB double-click .. drill into assembly to pick parts");
+        appendCommand("    shift = add, Cmd/Ctrl = toggle");
+        appendCommand("  Esc ............... exit assembly / deselect");
+        appendCommand("  click empty ....... deselect all (and exit assembly)");
         appendCommand("  RMB drag .......... orbit");
         appendCommand("  Shift + RMB drag .. pan");
         appendCommand("  Scroll ............ zoom (mouse wheel / trackpad two-finger)");
@@ -145,9 +164,11 @@ public class ImGuiAppState extends BaseAppState {
         }
 
         // Camera and viewport input. R reframes the whole scene if parts
-        // exist; LMB-click raycasts against the scene to update selection.
+        // exist; LMB-click raycasts against the scene to update selection;
+        // Esc exits the currently-open assembly (or clears selection).
         orbitCamera = new OrbitCamera(app.getCamera());
-        viewportInput = new ViewportInputHandler(orbitCamera, this::resetView, this::handleViewportClick);
+        viewportInput = new ViewportInputHandler(
+                orbitCamera, this::resetView, this::handleViewportClick, this::handleEscape);
 
         // ---- ImGui setup ------------------------------------------------
         ImGui.createContext();
@@ -250,6 +271,10 @@ public class ImGuiAppState extends BaseAppState {
 
     @Override
     public void postRender() {
+        // Refresh selection highlights each frame so they follow parts that
+        // get moved/resized via commands. Cheap when selection is empty.
+        syncSelectionHighlights();
+
         imGuiGl3.newFrame();
         imGuiGlfw.newFrame();
         ImGui.newFrame();
@@ -325,13 +350,17 @@ public class ImGuiAppState extends BaseAppState {
         }
         ImGui.pushItemWidth(-1);
         int flags = ImGuiInputTextFlags.EnterReturnsTrue
-                  | ImGuiInputTextFlags.CallbackResize;
-        if (ImGui.inputText("##command", commandInput, flags)) {
+                  | ImGuiInputTextFlags.CallbackResize
+                  | ImGuiInputTextFlags.CallbackHistory;
+        if (ImGui.inputText("##command", commandInput, flags, historyCallback)) {
             String typed = commandInput.get().trim();
             if (!typed.isEmpty()) {
+                pushHistory(typed);
                 runCommand(typed);
             }
             commandInput.set("");
+            historyPos = -1;
+            preRecallBuffer = "";
             focusCommandInput = true;
         }
         ImGui.popItemWidth();
@@ -352,6 +381,55 @@ public class ImGuiAppState extends BaseAppState {
             appendCommand("Error: " + t.getMessage());
         }
     }
+
+    /** Append a freshly-submitted command to history, dropping a duplicate
+     *  consecutive entry so press-up after Enter doesn't recall the same
+     *  thing you just ran. */
+    private void pushHistory(String command) {
+        if (!commandHistory.isEmpty()
+                && commandHistory.get(commandHistory.size() - 1).equals(command)) {
+            return;
+        }
+        commandHistory.add(command);
+        if (commandHistory.size() > 200) {
+            commandHistory.subList(0, commandHistory.size() - 200).clear();
+        }
+    }
+
+    /**
+     * History-recall callback. ImGui fires this on up/down arrow when the
+     * input has focus and the flag is enabled. We swap the buffer text to
+     * the recalled history entry; down-arrow past the newest entry restores
+     * the user's in-progress input (saved on first up-press).
+     */
+    private final imgui.callback.ImGuiInputTextCallback historyCallback =
+            new imgui.callback.ImGuiInputTextCallback() {
+        @Override
+        public void accept(imgui.ImGuiInputTextCallbackData data) {
+            if (!data.hasEventFlag(ImGuiInputTextFlags.CallbackHistory)) return;
+            int prevPos = historyPos;
+            if (data.getEventKey() == imgui.flag.ImGuiKey.UpArrow) {
+                if (historyPos == -1) {
+                    preRecallBuffer = data.getBuf();  // save fresh input
+                    historyPos = commandHistory.size() - 1;
+                } else if (historyPos > 0) {
+                    historyPos--;
+                }
+            } else if (data.getEventKey() == imgui.flag.ImGuiKey.DownArrow) {
+                if (historyPos != -1) {
+                    historyPos++;
+                    if (historyPos >= commandHistory.size()) historyPos = -1;
+                }
+            }
+            if (prevPos != historyPos) {
+                String text = (historyPos >= 0)
+                        ? commandHistory.get(historyPos)
+                        : preRecallBuffer;
+                data.deleteChars(0, data.getBufTextLen());
+                data.insertChars(0, text);
+            }
+        }
+    };
 
     // ---- Log panel -------------------------------------------------------
 
@@ -378,6 +456,11 @@ public class ImGuiAppState extends BaseAppState {
         var parts = scene.getAllParts();
         ImGui.text(parts.size() + " part" + (parts.size() == 1 ? "" : "s")
                 + (selected.isEmpty() ? "" : ", " + selected.size() + " selected"));
+        if (openAssembly != null) {
+            ImGui.pushStyleColor(ImGuiCol.Text, 0.6f, 0.85f, 1f, 1f);  // light blue
+            ImGui.text("inside assembly: " + openAssembly + "  (Esc to exit)");
+            ImGui.popStyleColor();
+        }
         ImGui.separator();
         for (var entry : parts.entrySet()) {
             var part = entry.getValue();
@@ -430,18 +513,125 @@ public class ImGuiAppState extends BaseAppState {
             }
         }
 
+        // Resolve the hit to either an assembly or a part, depending on
+        // hierarchical state. Convention: parts created inside a template
+        // are named "<assembly>/<part>" — the prefix is the assembly.
+        String resolved = null;
+        if (hit != null) {
+            int slash = hit.indexOf('/');
+            String hitAssembly = (slash >= 0) ? hit.substring(0, slash) : null;
+            if (click.isDouble() && hitAssembly != null) {
+                // Double-click: drill into the assembly and select the part.
+                openAssembly = hitAssembly;
+                resolved = hit;
+            } else if (hitAssembly != null && hitAssembly.equals(openAssembly)) {
+                // Click inside the currently-open assembly → select part.
+                resolved = hit;
+            } else if (hitAssembly != null) {
+                // Click on a part in an assembly we haven't entered → select
+                // the assembly as a whole.
+                resolved = hitAssembly;
+            } else {
+                // Standalone part (no assembly prefix). Always selects itself.
+                resolved = hit;
+            }
+        }
+
         boolean shift  = (click.mods() & GLFW.GLFW_MOD_SHIFT) != 0;
         boolean toggle = (click.mods() & (GLFW.GLFW_MOD_CONTROL | GLFW.GLFW_MOD_SUPER)) != 0;
-        if (hit == null) {
-            if (!shift && !toggle) selected.clear();
+        if (resolved == null) {
+            // Click on empty space.
+            if (!shift && !toggle) {
+                selected.clear();
+                openAssembly = null;  // also exits any open assembly
+            }
         } else if (toggle) {
-            if (!selected.add(hit)) selected.remove(hit);
+            if (!selected.add(resolved)) selected.remove(resolved);
         } else if (shift) {
-            selected.add(hit);
+            selected.add(resolved);
         } else {
             selected.clear();
-            selected.add(hit);
+            selected.add(resolved);
         }
+    }
+
+    /** Esc: if an assembly is open, close it (and clear selection); else
+     *  just clear selection. Standard hierarchical-pop pattern. */
+    private void handleEscape() {
+        if (openAssembly != null) {
+            openAssembly = null;
+        }
+        selected.clear();
+    }
+
+    /**
+     * Diff the current {@link #selected} set against {@link #highlightGeoms}
+     * and attach/detach yellow wireframe boxes accordingly. Re-runs each
+     * frame so moves/resizes keep the highlight on the part. Cheap when
+     * selection is empty (no-op).
+     */
+    private void syncSelectionHighlights() {
+        SceneManager scene = (SceneManager) getApplication();
+
+        // Drop highlights for items no longer selected.
+        var iter = highlightGeoms.entrySet().iterator();
+        while (iter.hasNext()) {
+            var e = iter.next();
+            if (!selected.contains(e.getKey())) {
+                e.getValue().removeFromParent();
+                iter.remove();
+            }
+        }
+
+        // Build / refresh highlights for everything currently selected.
+        for (String name : selected) {
+            com.jme3.math.Vector3f[] aabb = aabbFor(scene, name);
+            if (aabb == null) continue;
+            com.jme3.math.Vector3f center = aabb[0].add(aabb[1]).multLocal(0.5f);
+            com.jme3.math.Vector3f half = aabb[1].subtract(aabb[0]).multLocal(0.5f)
+                    .addLocal(2f, 2f, 2f);  // small inflation so we don't z-fight
+
+            com.jme3.scene.Geometry existing = highlightGeoms.get(name);
+            if (existing == null) {
+                com.jme3.scene.debug.WireBox wb = new com.jme3.scene.debug.WireBox(half.x, half.y, half.z);
+                com.jme3.scene.Geometry g = new com.jme3.scene.Geometry("highlight_" + name, wb);
+                com.jme3.material.Material mat = new com.jme3.material.Material(
+                        scene.getAssetManager(), "Common/MatDefs/Misc/Unshaded.j3md");
+                mat.setColor("Color", com.jme3.math.ColorRGBA.Yellow);
+                mat.getAdditionalRenderState().setDepthTest(false);  // draw on top
+                g.setMaterial(mat);
+                g.setLocalTranslation(center);
+                scene.getRootNode().attachChild(g);
+                highlightGeoms.put(name, g);
+            } else {
+                // Already present — just update position/extents to track moves.
+                com.jme3.scene.debug.WireBox wb = (com.jme3.scene.debug.WireBox) existing.getMesh();
+                wb.updatePositions(half.x, half.y, half.z);
+                existing.setLocalTranslation(center);
+            }
+        }
+    }
+
+    /** Resolve a selection name (part or assembly) to its world AABB. */
+    private static com.jme3.math.Vector3f[] aabbFor(SceneManager scene, String name) {
+        com.jme3.math.Vector3f[] partAabb = scene.computeObjectAABB(name);
+        if (partAabb != null) return partAabb;
+        app.cadette.model.Assembly asm = scene.getAssembly(name);
+        if (asm == null) return null;
+
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, minZ = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE, maxZ = -Float.MAX_VALUE;
+        for (app.cadette.model.Part p : asm.getParts()) {
+            com.jme3.math.Vector3f[] a = scene.computeObjectAABB(p.getName());
+            if (a == null) continue;
+            minX = Math.min(minX, a[0].x);  minY = Math.min(minY, a[0].y);  minZ = Math.min(minZ, a[0].z);
+            maxX = Math.max(maxX, a[1].x);  maxY = Math.max(maxY, a[1].y);  maxZ = Math.max(maxZ, a[1].z);
+        }
+        if (minX == Float.MAX_VALUE) return null;
+        return new com.jme3.math.Vector3f[] {
+                new com.jme3.math.Vector3f(minX, minY, minZ),
+                new com.jme3.math.Vector3f(maxX, maxY, maxZ)
+        };
     }
 
     /**
