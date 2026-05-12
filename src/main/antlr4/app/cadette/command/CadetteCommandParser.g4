@@ -66,10 +66,13 @@ command
     | alignCommand
     | resizeCommand
     | rotateCommand
+    | orientCommand
     | joinCommand
     | cutCommand
     | keepCommand
     | filletCommand
+    | messageCommand
+    | letCommand
     | displayCommand
     | hideCommand
     | listCommand
@@ -110,6 +113,8 @@ createPartCommand
 partArg
     : MATERIAL materialName
     | SIZE partSize
+    | LENGTH expression       // dimensional-lumber form: width defaulted from material
+    | ORIENT orientation      // named initial orientation (lumber only)
     | atPlacement
     | GRAIN grainReq
     ;
@@ -183,12 +188,36 @@ resizeCommand
     : RESIZE objectName sizeSpec
     ;
 
+// `rotate <obj> X, Y, Z` composes the rotation onto the object's current
+// orientation (relative). `rotate <obj> by X, Y, Z` is the explicit form of
+// the same. `rotate <obj> to X, Y, Z` is absolute — replaces the current
+// rotation entirely. The relative-default matches how people iterate on
+// orientation: "ok, now another quarter turn."
 rotateCommand
-    : ROTATE objectName rotation
+    : ROTATE objectName rotationMode? rotation
+    ;
+
+rotationMode
+    : BY          # rotateByMode
+    | TO          # rotateToMode
     ;
 
 rotation
     : expression COMMA expression COMMA expression
+    ;
+
+// `orient <obj> flat | on-edge | on-end` — named orientation shortcut for
+// dimensional lumber. Composes a rotation that lays the board in the given
+// shop-talk stance, replacing the current rotation (since "orient flat" is
+// a goal state, not a delta).
+orientCommand
+    : ORIENT objectName orientation
+    ;
+
+orientation
+    : FLAT        # orientFlat
+    | ON_EDGE     # orientOnEdge
+    | ON_END      # orientOnEnd
     ;
 
 // Object and material names must also accept keyword tokens that happen to have
@@ -210,7 +239,7 @@ materialName
 // object `cm` or a part `M` still works despite the unit-literal grammar.
 nameLike
     : ID
-    | WIDTH | HEIGHT | DEPTH | SIZE | COLOR | MATERIAL | GRAIN | PART | KERF
+    | WIDTH | HEIGHT | DEPTH | LENGTH | SIZE | COLOR | MATERIAL | GRAIN | PART | KERF
     | MM | CM | M | IN | FT | YD
     | FRONT | BACK
     ;
@@ -244,6 +273,23 @@ keepCommand
     : KEEP objectName cutShape
     ;
 
+// `print|warn|error "message"` — emit a string (with optional ${var}
+// interpolation) to the command output. None terminate the script in v1;
+// they only differ in the prefix on the rendered line.
+messageCommand
+    : PRINT STRING     # printCommand
+    | WARN STRING      # warnCommand
+    | ERROR_KW STRING  # errorCommand
+    ;
+
+// `let $name = expr` — bind a name to an expression result in the innermost
+// active variable scope. Top-level uses the always-on global scope; inside a
+// template or for-loop body, binds in that scope (and is gone when the scope
+// pops). Mutable — last assignment wins, same name can be rebound.
+letCommand
+    : LET VAR_REF ASSIGN expression
+    ;
+
 // `fillet <part> at x, y radius r facing <NE|NW|SE|SW> [depth d]` —
 // rounds an outer 2D corner with a quarter-arc tangent to the two edges.
 // Sugar over a polygon cut of the small wedge between the L-shape corner
@@ -271,6 +317,7 @@ cutShape
     | SPLINE vertexPair (COMMA vertexPair)* shapeArg*         # splineCutShape
     | CURVE vertexPair (COMMA vertexPair)* shapeArg*          # curveCutShape
     | SHAPE objectName shapeArg+                              # namedShapeCutShape
+    | MITER FACING nameLike ANGLE expression shapeArg*        # miterCutShape
     ;
 
 // Order-independent argument clauses. The visitor enforces which clauses are
@@ -455,7 +502,7 @@ paramDecl
 // grammar gained unit literals.
 paramName
     : ID
-    | WIDTH | HEIGHT | DEPTH | SIZE | COLOR | MATERIAL | GRAIN | PART | KERF
+    | WIDTH | HEIGHT | DEPTH | LENGTH | SIZE | COLOR | MATERIAL | GRAIN | PART | KERF
     | MM | CM | M | IN | FT | YD
     ;
 
@@ -472,6 +519,12 @@ shape
 expression
     : LPAREN expression RPAREN                                              # parenExpr
     | (MIN | MAX) LPAREN expression (COMMA expression)+ RPAREN              # funcCallExpr
+    // Generic single/multi-arg math function call. Recognised names: sin,
+    // cos, tan, asin, acos, atan, atan2, sqrt, hypot, abs, pow, floor,
+    // ceil, round, log, exp. Trig takes degrees (consistent with rotate/
+    // orient); use `radians(d)` if you have a radian value. Unknown names
+    // are a runtime error so we don't need a token per function.
+    | ID LPAREN expression (COMMA expression)* RPAREN                       # idFuncCallExpr
     // Dimensional literal with explicit unit — `100mm`, `5cm`, `2.5in`.
     // Evaluates to "this many <unit>s expressed in the current units," so
     // it's self-describing and portable across `set units` calls. Binds

@@ -60,6 +60,11 @@ public class CutListGenerator {
         private final float totalAreaMm2;  // total area of all parts in this material
         private final Integer sheetCount;  // null if not a sheet good
         private final Float offcutPercent;  // null if not a sheet good
+        // Actual stock dimensions used (from the packer), not the catalog
+        // defaults. For lumber this is the picked stock length, which may
+        // differ from material.sheetHeightMm if a shorter length fit better.
+        // Null when no layouts were produced.
+        private final Float actualSheetHeightMm;
     }
 
     @Data
@@ -171,7 +176,8 @@ public class CutListGenerator {
                         .average()
                         .orElse(0)
                 : null;
-        return new BomEntry(mat, materialParts.size(), totalArea, sheetCount, offcutPercent);
+        Float actualHeight = haveLayouts ? matLayouts.get(0).getSheetHeightMm() : null;
+        return new BomEntry(mat, materialParts.size(), totalArea, sheetCount, offcutPercent, actualHeight);
     }
 
     /**

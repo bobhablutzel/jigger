@@ -23,6 +23,10 @@ import com.jme3.math.ColorRGBA;
 import java.util.*;
 import java.util.stream.Stream;
 
+/* Dimensional lumber sizing. Nominal naming (e.g. "2x4") refers to a board
+ * dressed to ~38 × 89 mm. Both nominal and actual appear in displayName so
+ * imperial users recognise it; the model uses actual mm throughout. */
+
 /**
  * Registry of available materials. Pre-loaded with common woodworking materials
  * in both imperial and metric naming conventions.
@@ -88,6 +92,33 @@ public class MaterialCatalog {
 
     private static String normalize(String slug) {
         return slug.toLowerCase().replace('_', '-').replace(' ', '-');
+    }
+
+    /**
+     * Register a dimensional-lumber material. SHEET_GOOD kind so the existing
+     * guillotine packer handles it; cross-section width becomes the sheet
+     * width, longest standard length becomes the sheet height. Grain runs
+     * along length, as it always does for lumber.
+     */
+    private void registerLumber(String slug, String displayName, MaterialType type,
+                                 float widthMm, float thicknessMm,
+                                 List<Float> standardLengthsMm,
+                                 MeasurementSystem system, ColorRGBA color) {
+        float longest = (float) standardLengthsMm.stream().mapToDouble(Float::doubleValue).max().orElseThrow();
+        register(Material.builder()
+                .name(slug)
+                .displayName(displayName)
+                .type(type)
+                .kind(MaterialKind.SHEET_GOOD)
+                .thicknessMm(thicknessMm)
+                .sheetWidthMm(widthMm)
+                .sheetHeightMm(longest)
+                .widthMm(widthMm)
+                .standardLengthsMm(standardLengthsMm)
+                .grainDirection(GrainDirection.ALONG_LENGTH)
+                .measurementSystem(system)
+                .displayColor(color)
+                .build());
     }
 
     private void loadDefaults() {
@@ -200,6 +231,31 @@ public class MaterialCatalog {
                 .measurementSystem(MeasurementSystem.IMPERIAL)
                 .displayColor(new ColorRGBA(0.90f, 0.82f, 0.62f, 1f))
                 .build());
+
+        // -- Dimensional lumber (Imperial-named) -----------------------------
+        // Cross-sections are S4S/dressed dimensions (the actual mm). Stock
+        // lengths are the standard 8'/10'/12'/14'/16' set; the packer uses
+        // the longest entry for v1, so leave that one last in the list.
+        registerLumber("lumber-2x4-spf", "2x4 SPF (38 × 89mm)",
+                MaterialType.SOFTWOOD, 38f, 89f,
+                /*lengths*/ List.of(2438f, 3048f, 3658f, 4267f, 4877f),
+                MeasurementSystem.IMPERIAL, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+        registerLumber("lumber-2x6-spf", "2x6 SPF (38 × 140mm)",
+                MaterialType.SOFTWOOD, 38f, 140f,
+                List.of(2438f, 3048f, 3658f, 4267f, 4877f),
+                MeasurementSystem.IMPERIAL, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+        registerLumber("lumber-2x8-spf", "2x8 SPF (38 × 184mm)",
+                MaterialType.SOFTWOOD, 38f, 184f,
+                List.of(2438f, 3048f, 3658f, 4267f, 4877f),
+                MeasurementSystem.IMPERIAL, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+        registerLumber("lumber-4x4-spf", "4x4 SPF (89 × 89mm)",
+                MaterialType.SOFTWOOD, 89f, 89f,
+                List.of(2438f, 3048f, 3658f),
+                MeasurementSystem.IMPERIAL, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+        registerLumber("lumber-1x4-pine", "1x4 Pine (19 × 89mm)",
+                MaterialType.SOFTWOOD, 19f, 89f,
+                List.of(1830f, 2438f, 3048f, 3658f),
+                MeasurementSystem.IMPERIAL, new ColorRGBA(0.96f, 0.90f, 0.74f, 1f));
 
         // -- Metal (Imperial) --
         register(Material.builder()
@@ -369,6 +425,26 @@ public class MaterialCatalog {
                 .measurementSystem(MeasurementSystem.METRIC)
                 .displayColor(new ColorRGBA(0.90f, 0.82f, 0.62f, 1f))
                 .build());
+
+        // -- Dimensional lumber (Metric-named) -------------------------------
+        // Common European-market metric softwood sections. Stock lengths from
+        // 2.4 m up; longest used by the packer for v1.
+        registerLumber("lumber-38x89-spf", "38 × 89mm SPF (2x4 equiv.)",
+                MaterialType.SOFTWOOD, 38f, 89f,
+                List.of(2400f, 3000f, 3600f, 4200f, 4800f),
+                MeasurementSystem.METRIC, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+        registerLumber("lumber-38x140-spf", "38 × 140mm SPF (2x6 equiv.)",
+                MaterialType.SOFTWOOD, 38f, 140f,
+                List.of(2400f, 3000f, 3600f, 4200f, 4800f),
+                MeasurementSystem.METRIC, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+        registerLumber("lumber-89x89-spf", "89 × 89mm SPF (4x4 equiv.)",
+                MaterialType.SOFTWOOD, 89f, 89f,
+                List.of(2400f, 3000f, 3600f),
+                MeasurementSystem.METRIC, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+        registerLumber("lumber-19x89-pine", "19 × 89mm Pine (1x4 equiv.)",
+                MaterialType.SOFTWOOD, 19f, 89f,
+                List.of(1800f, 2400f, 3000f, 3600f),
+                MeasurementSystem.METRIC, new ColorRGBA(0.96f, 0.90f, 0.74f, 1f));
 
         // -- Metal (Metric) --
         register(Material.builder()

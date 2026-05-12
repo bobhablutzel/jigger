@@ -20,11 +20,15 @@ package app.cadette;
 
 import app.cadette.model.Cutout;
 import app.cadette.model.GrainRequirement;
+import app.cadette.model.PartMeshBuilder;
 import app.cadette.model.SheetLayout;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
 
 import java.awt.*;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
+import java.awt.geom.Path2D;
 import java.awt.geom.Rectangle2D;
 import java.util.List;
 import java.util.Map;
@@ -53,6 +57,15 @@ public class CutSheetRenderer {
     static final Stroke CUTOUT_STROKE = new BasicStroke(
             1.0f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
             10f, new float[]{4f, 3f}, 0f);
+    // Final-profile outline — solid heavier stroke. This is the "saw along
+    // here" boundary; the dashed cutouts are the machining instructions that
+    // produce it.
+    static final Color PROFILE_COLOR = new Color(140, 30, 25);
+    static final Stroke PROFILE_STROKE = new BasicStroke(1.6f);
+    // Skip the discard-region X for components below this size in either
+    // dimension — a sliver like a dado wall (~1-3 px wide at sheet zoom)
+    // gives an X that's clipped to invisibility anyway.
+    static final float MIN_X_MARKER_PX = 8f;
 
     /** Screen rectangle for a rendered part, used for click hit-testing. */
     public record PartRect(String partName, Rectangle2D.Float rect) {}
@@ -285,40 +298,114 @@ public class CutSheetRenderer {
         Shape originalClip = g2.getClip();
         Rectangle2D.Float partRect = new Rectangle2D.Float(px, py, pw, ph);
 
-        // ---- Dashed outlines (cuts + keeps share the same dash; the X marker
-        //      below disambiguates which side is discarded). ----
+        // ---- Per-operation dashed outlines (machining instructions).
+        //      Solid final-profile outline (saw boundary) is drawn separately
+        //      below. ----
         g2.clip(partRect);
         g2.setColor(CUTOUT_COLOR);
         g2.setStroke(CUTOUT_STROKE);
         for (Cutout c : cutouts) drawCutoutShape(g2, c, part, px, py, scale);
         for (Cutout k : keeps)   drawCutoutShape(g2, k, part, px, py, scale);
 
-        // ---- X marker on the discarded portion. The discarded region is
-        //      the union of (cut shapes) + (part - keep shape) for each keep.
-        //      A single big X clipped to that region mimics shop-floor chalk. ----
-        java.awt.geom.Area discarded = new java.awt.geom.Area();
-        for (Cutout c : cutouts) {
-            Shape s = cutoutToSheetShape(c, part, px, py, scale);
-            if (s != null) discarded.add(new java.awt.geom.Area(s));
-        }
-        for (Cutout k : keeps) {
-            Shape s = cutoutToSheetShape(k, part, px, py, scale);
-            if (s == null) continue;
-            java.awt.geom.Area complement = new java.awt.geom.Area(partRect);
-            complement.subtract(new java.awt.geom.Area(s));
-            discarded.add(complement);
-        }
-        if (!discarded.isEmpty()) {
+        // ---- Final profile: compute via JTS (apply keeps, subtract through-
+        //      cuts; pockets don't change the outline). Render as a solid
+        //      heavier stroke — the "saw along here" boundary. ----
+        Geometry profile = PartMeshBuilder.computeFinalProfile(
+                /* widthMm */ partLocalSize(part)[0],
+                /* heightMm */ partLocalSize(part)[1],
+                cutouts, keeps);
+        Path2D.Float profilePath = jtsToSheetPath(profile, part, px, py, scale);
+
+        g2.setStroke(PROFILE_STROKE);
+        g2.setColor(PROFILE_COLOR);
+        g2.draw(profilePath);
+
+        // ---- X marker per discarded component. Walk the JTS discard
+        //      (Polygon or MultiPolygon) and draw a separate X clipped to
+        //      each connected waste region, sized to that region's bbox.
+        //      Skip components below MIN_X_MARKER_PX so dado walls and
+        //      kerf-thin slivers don't get invisible-clipped X's. Pockets
+        //      stay un-X'd since their material is partial-depth, not gone. ----
+        Geometry discard = PartMeshBuilder.computeDiscard(
+                partLocalSize(part)[0], partLocalSize(part)[1], profile);
+        g2.setStroke(new BasicStroke(1f));
+        g2.setColor(CUTOUT_COLOR);
+        for (int i = 0; i < discard.getNumGeometries(); i++) {
+            Geometry component = discard.getGeometryN(i);
+            if (!(component instanceof org.locationtech.jts.geom.Polygon)) continue;
+            Path2D.Float componentPath = jtsToSheetPath(component, part, px, py, scale);
+            Rectangle2D bbox = componentPath.getBounds2D();
+            if (bbox.getWidth() < MIN_X_MARKER_PX || bbox.getHeight() < MIN_X_MARKER_PX) continue;
+            float bx = (float) bbox.getMinX(), by = (float) bbox.getMinY();
+            float bw = (float) bbox.getWidth(), bh = (float) bbox.getHeight();
             g2.setClip(originalClip);
-            g2.clip(discarded);
-            g2.setStroke(new BasicStroke(1f));
-            g2.draw(new Line2D.Float(px, py, px + pw, py + ph));
-            g2.draw(new Line2D.Float(px, py + ph, px + pw, py));
+            g2.clip(componentPath);
+            g2.draw(new Line2D.Float(bx, by, bx + bw, by + bh));
+            g2.draw(new Line2D.Float(bx, by + bh, bx + bw, by));
         }
 
         g2.setClip(originalClip);
         g2.setStroke(originalStroke);
         g2.setColor(originalColor);
+    }
+
+    /** Part dimensions in part-local mm, regardless of sheet rotation. */
+    private static float[] partLocalSize(SheetLayout.PlacedPart part) {
+        // The placement's widthOnSheet / heightOnSheet are mm dimensions
+        // already; rotation only affects how they map to sheet x/y.
+        if (part.isRotated()) {
+            return new float[] { part.getHeightOnSheet(), part.getWidthOnSheet() };
+        }
+        return new float[] { part.getWidthOnSheet(), part.getHeightOnSheet() };
+    }
+
+    /** Convert a JTS geometry (in part-local mm) into a Java2D Path2D in
+     *  sheet pixel space, applying the placed-part's rotation if any.
+     *  Handles Polygon, MultiPolygon, and GeometryCollection. */
+    private static Path2D.Float jtsToSheetPath(Geometry g, SheetLayout.PlacedPart part,
+                                               float px, float py, float scale) {
+        Path2D.Float path = new Path2D.Float();
+        if (g.isEmpty()) return path;
+        addGeometry(path, g, part, px, py, scale);
+        return path;
+    }
+
+    private static void addGeometry(Path2D.Float path, Geometry g, SheetLayout.PlacedPart part,
+                                    float px, float py, float scale) {
+        if (g instanceof org.locationtech.jts.geom.Polygon p) {
+            addRing(path, p.getExteriorRing().getCoordinates(), part, px, py, scale);
+            for (int i = 0; i < p.getNumInteriorRing(); i++) {
+                addRing(path, p.getInteriorRingN(i).getCoordinates(), part, px, py, scale);
+            }
+        } else {
+            for (int i = 0; i < g.getNumGeometries(); i++) {
+                addGeometry(path, g.getGeometryN(i), part, px, py, scale);
+            }
+        }
+    }
+
+    private static void addRing(Path2D.Float path, Coordinate[] coords,
+                                SheetLayout.PlacedPart part, float px, float py, float scale) {
+        if (coords.length == 0) return;
+        float[] first = partLocalToSheet(coords[0].x, coords[0].y, part, px, py, scale);
+        path.moveTo(first[0], first[1]);
+        for (int i = 1; i < coords.length; i++) {
+            float[] pt = partLocalToSheet(coords[i].x, coords[i].y, part, px, py, scale);
+            path.lineTo(pt[0], pt[1]);
+        }
+        path.closePath();
+    }
+
+    /** Transform a part-local (x, y) coord to sheet pixel space, accounting
+     *  for the placed-part's rotation. Same transform that
+     *  {@link #cutoutToSheetRect} applies for the rect-overlay case. */
+    private static float[] partLocalToSheet(double localX, double localY,
+                                            SheetLayout.PlacedPart part,
+                                            float px, float py, float scale) {
+        if (part.isRotated()) {
+            return new float[] { px + (float) localY * scale, py + (float) localX * scale };
+        }
+        return new float[] { px + (float) localX * scale, py + (float) localY * scale };
     }
 
     /** Draw the dashed outline for one cutout shape. Used for both cuts and

@@ -82,13 +82,11 @@ public class CommandExecutor {
     }
 
     /**
-     * Stack of variable scopes active during template instantiation (and, in
-     * Phase B, inside for-loops). Innermost scope is at the top. VAR_REF
-     * expressions evaluate by walking the stack inner-to-outer.
-     *
-     * Empty at top-level REPL: any VAR_REF evaluated there throws a runtime
-     * error, which is the right behavior — users only have variables inside
-     * a template body.
+     * Stack of variable scopes. Innermost scope is at the top; VAR_REF
+     * lookups walk the stack inner-to-outer. The bottom-most scope is the
+     * always-on global scope (pushed in the constructor) that holds
+     * top-level `let` bindings; templates and for-loops push their own
+     * scopes on top, which auto-pop when the block ends.
      */
     private final Deque<Map<String, Double>> varScopes = new ArrayDeque<>();
 
@@ -175,6 +173,11 @@ public class CommandExecutor {
 
     public CommandExecutor(SceneManager scene) {
         this.scene = scene;
+        // Always-on global scope so top-level `let $x = ...` has somewhere to
+        // bind. Template/for-loop scopes push on top of this; lookups walk
+        // outward to the global as a fallback (matches how shells handle
+        // env vars vs locals).
+        this.varScopes.push(new LinkedHashMap<>());
     }
 
     /**

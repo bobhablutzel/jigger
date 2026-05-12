@@ -29,15 +29,31 @@ public class RotateAction implements UndoableAction {
     private final String name;
     private final Vector3f oldDegrees;
     private final Vector3f newDegrees;
+    // Position before/after, captured because rotate now auto-translates to
+    // keep AABB min stable (visible part doesn't fly off when rotated).
+    // Null-tolerant for callers that don't move the part (assembly internal
+    // rotate, in-progress drag preview, etc.).
+    private final Vector3f oldPosition;
+    private final Vector3f newPosition;
+
+    public RotateAction(SceneManager scene, String name, Vector3f oldDegrees, Vector3f newDegrees) {
+        this(scene, name, oldDegrees, newDegrees, null, null);
+    }
 
     @Override
     public void undo() {
         scene.rotateObject(name, oldDegrees);
+        if (oldPosition != null) {
+            scene.moveObject(name, oldPosition);
+        }
     }
 
     @Override
     public void redo() {
         scene.rotateObject(name, newDegrees);
+        if (newPosition != null) {
+            scene.moveObject(name, newPosition);
+        }
     }
 
     @Override

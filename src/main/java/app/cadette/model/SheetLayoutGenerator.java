@@ -64,10 +64,56 @@ public class SheetLayoutGenerator {
                             p.getGrainRequirement()))
                     .toList();
 
-            allLayouts.addAll(GuillotinePacker.pack(mat, packingParts, kerfMm));
+            if (mat.isDimensionalLumber()) {
+                allLayouts.addAll(packLumber(mat, packingParts, kerfMm));
+            } else {
+                allLayouts.addAll(GuillotinePacker.pack(mat, packingParts, kerfMm));
+            }
         }
 
         return allLayouts;
+    }
+
+    /**
+     * Pack lumber by trying each standard stock length and picking the choice
+     * that minimizes total linear stock purchased ({@code boards × L}). Ties
+     * favor the shorter L (cheaper, easier to transport). Stock lengths
+     * shorter than the longest part are skipped — they can't fit it. If no
+     * stock length is long enough for some part, falls back to the longest
+     * standard length and accepts the part-too-large-for-sheet outcome.
+     */
+    private static List<SheetLayout> packLumber(Material mat,
+                                                List<GuillotinePacker.PackingPart> parts,
+                                                float kerfMm) {
+        List<Float> stockLengths = mat.getStandardLengthsMm();
+        if (stockLengths == null || stockLengths.isEmpty()) {
+            // No catalog — fall back to whatever sheetHeightMm carries.
+            return GuillotinePacker.pack(mat, parts, kerfMm);
+        }
+        float longestPart = (float) parts.stream()
+                .mapToDouble(GuillotinePacker.PackingPart::getHeightMm)
+                .max().orElse(0);
+        float binW = mat.getWidthMm();
+
+        // Sorted ascending; shortest viable length wins on ties.
+        List<Float> sorted = stockLengths.stream().sorted().toList();
+        List<SheetLayout> bestLayouts = null;
+        float bestTotal = Float.POSITIVE_INFINITY;
+        for (float L : sorted) {
+            if (L < longestPart) continue;
+            var layouts = GuillotinePacker.pack(mat, parts, kerfMm, binW, L);
+            if (layouts.isEmpty()) continue;
+            float totalLength = layouts.size() * L;
+            if (totalLength < bestTotal - 0.5f) {
+                bestTotal = totalLength;
+                bestLayouts = layouts;
+            }
+        }
+        if (bestLayouts != null) return bestLayouts;
+        // Some part is longer than every stock length — pack on the longest
+        // and let the per-part skip happen there.
+        float L = sorted.get(sorted.size() - 1);
+        return GuillotinePacker.pack(mat, parts, kerfMm, binW, L);
     }
 
     public static List<SheetLayout> generateLayouts(Map<String, Part> parts) {

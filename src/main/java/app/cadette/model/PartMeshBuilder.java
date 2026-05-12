@@ -248,6 +248,54 @@ public final class PartMeshBuilder {
     // ---- Public command-time validation ---------------------------------
 
     /**
+     * Compute the part's 2D outline after all keeps are intersected and all
+     * through-cuts are subtracted. Partial-depth cutouts are <em>not</em>
+     * applied — they're pockets that don't change the silhouette. The
+     * result is the JTS geometry the cut sheet should render as a solid
+     * "saw along here" boundary.
+     *
+     * <p>Returns a {@code Polygon} or {@code MultiPolygon} (possibly with
+     * interior rings = holes from through-cuts). Empty geometry if all
+     * material was removed.
+     */
+    public static Geometry computeFinalProfile(float widthMm, float heightMm,
+                                               List<Cutout> cutouts, List<Cutout> keeps) {
+        Geometry hasMaterial = rectPolygon(0, 0, widthMm, heightMm);
+        for (Cutout k : keeps) {
+            Polygon shape = polygonize(k);
+            if (shape == null) continue;
+            hasMaterial = robustIntersection(hasMaterial, shape);
+            if (hasMaterial.isEmpty()) break;
+        }
+        for (Cutout c : cutouts) {
+            if (c.depthMm() != null) continue;       // pocket — silhouette unchanged
+            Polygon hole = polygonize(c);
+            if (hole == null) continue;
+            hasMaterial = robustDifference(hasMaterial, hole);
+            if (hasMaterial.isEmpty()) break;
+        }
+        hasMaterial.normalize();
+        return hasMaterial;
+    }
+
+    /**
+     * The discarded region — the part rect minus the final profile. May be
+     * a Polygon (single contiguous waste), a MultiPolygon (multiple disjoint
+     * waste pieces, e.g. two strips on either side of a handle), or empty
+     * (nothing discarded). Returns geometry in part-local mm.
+     *
+     * <p>Cut-sheet renderers iterate the components to place X markers
+     * per-waste-piece, with a minimum-size threshold to skip slivers
+     * (dado walls, kerf-thin strips) where an X would be invisible.
+     */
+    public static org.locationtech.jts.geom.Geometry computeDiscard(
+            float widthMm, float heightMm, org.locationtech.jts.geom.Geometry profile) {
+        org.locationtech.jts.geom.Geometry partRectGeom = rectPolygon(0, 0, widthMm, heightMm);
+        if (profile.isEmpty()) return partRectGeom;
+        return robustDifference(partRectGeom, profile);
+    }
+
+    /**
      * Returns true iff the cutout's actual shape (not just its bbox) overlaps
      * the panel face. Replaces a coarse bbox check that let polygons and
      * splines slip through when their bbox crossed the panel but the shape

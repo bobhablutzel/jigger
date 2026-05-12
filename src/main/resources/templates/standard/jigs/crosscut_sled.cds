@@ -8,6 +8,17 @@
 
 define standard/jigs/crosscut_sled params width(w), length(l), fence_height(fh), stop_block_left(sbl) = 0, stop_block_right(sbr) = 1, handle_thickness = 2
 
+  # Check the width - should be at least 80cm
+  if ($width < 80cm) then
+    warn "Width of the sled may not be enough to accomodate safe handle"
+  end if
+
+  # Check the fence height - should be at least 12cm to safely allow the
+  # blade to travel through without completely separating the jib
+  if ($fence_height < 12cm) then 
+    warn "Height of fence might not be enough for blade clearance"
+  end if
+
   # Create a base that rests on the table saw from baltic birch plywood
   create part "base" size $width, $length at 0, 0, 0 material "baltic-birch-18mm"
   rotate "base" 90, 0, 0
@@ -121,9 +132,9 @@ define standard/jigs/crosscut_sled params width(w), length(l), fence_height(fh),
     # pieces have a slot wide enough for the shaft of the screw, plus 
     # larger hole at the end of the slot to accomodate the introduction
     # of the head and washer into the handle.
-    cut "handle1" rectangle at 3cm, 3.75cm size 38.25cm, 25mm depth 8mm face back
+    cut "handle1" rectangle at 3cm, 3.75cm size ($width-48.5cm), 25mm depth 8mm face back
     for $i = 2 to $handle_thickness
-      cut "handle$i" rectangle at 3cm, 3.75cm size 38.25cm, 8.5mm
+      cut "handle$i" rectangle at 3cm, 3.75cm size  ($width-48.5cm), 8.5mm
       cut "handle$i" circle at 3cm, 3.75cm radius 13mm
     end for
 

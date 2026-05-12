@@ -61,22 +61,37 @@ public class GuillotinePacker {
     private final List<SheetLayout> sheets = new ArrayList<>();
     private final List<List<FreeRect>> sheetFreeRects = new ArrayList<>();
     private final Material material;
+    private final float binWidthMm;
+    private final float binHeightMm;
     private final float kerfMm;
 
     /**
      * Pack parts onto sheets of the given material, respecting grain and kerf.
      *
-     * @param material the sheet material (provides sheet dimensions and grain direction)
+     * @param material the sheet material (provides grain direction)
      * @param parts    the parts to pack
      * @param kerfMm   saw blade kerf width in mm
      * @return list of sheet layouts, one per sheet needed
      */
     public static List<SheetLayout> pack(Material material, List<PackingPart> parts, float kerfMm) {
+        return pack(material, parts, kerfMm,
+                material.getSheetWidthMm() != null ? material.getSheetWidthMm() : 0f,
+                material.getSheetHeightMm() != null ? material.getSheetHeightMm() : 0f);
+    }
+
+    /**
+     * Pack with explicit bin dimensions. Useful when the caller wants to try
+     * several stock lengths (e.g. lumber multi-length pick) without faking
+     * Materials. The Material is still used for grain direction and for
+     * tagging the resulting SheetLayouts.
+     */
+    public static List<SheetLayout> pack(Material material, List<PackingPart> parts,
+                                          float kerfMm, float binWidthMm, float binHeightMm) {
         if (material.getKind() != MaterialKind.SHEET_GOOD) {
             return List.of();
         }
 
-        GuillotinePacker packer = new GuillotinePacker(material, kerfMm);
+        GuillotinePacker packer = new GuillotinePacker(material, binWidthMm, binHeightMm, kerfMm);
 
         // Sort largest area first for better packing
         List<PackingPart> sorted = new ArrayList<>(parts);
@@ -111,13 +126,10 @@ public class GuillotinePacker {
             Candidate c = best.get();
             doPlace(c.sheet(), c.rect(), part, c.rotated());
         } else {
-            // New sheet
-            float sheetW = material.getSheetWidthMm();
-            float sheetH = material.getSheetHeightMm();
-            SheetLayout newSheet = new SheetLayout(material, sheetW, sheetH);
+            SheetLayout newSheet = new SheetLayout(material, binWidthMm, binHeightMm);
             sheets.add(newSheet);
             List<FreeRect> newFree = new ArrayList<>();
-            newFree.add(new FreeRect(0, 0, sheetW, sheetH));
+            newFree.add(new FreeRect(0, 0, binWidthMm, binHeightMm));
             sheetFreeRects.add(newFree);
 
             int s = sheets.size() - 1;

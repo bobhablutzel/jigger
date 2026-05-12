@@ -42,7 +42,10 @@
       "Bash(mvn -q test -Dtest=PartMeshBuilderTest)",
       "Bash(tee /tmp/cadette-test.log)",
       "Bash(mvn -q -DfailIfNoTests=false -Dtest=JointCutoutInferenceTest test)",
-      "Bash(mvn -DfailIfNoTests=false -Dtest=JointCutoutInferenceTest test)"
+      "Bash(mvn -DfailIfNoTests=false -Dtest=JointCutoutInferenceTest test)",
+      "Bash(mvn test-compile *)",
+      "Bash(mvn -DskipITs test -Dtest='PartMeshBuilderTest')",
+      "Bash(mvn -q clean test)"
     ]
   }
 }

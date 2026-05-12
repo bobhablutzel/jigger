@@ -22,9 +22,19 @@ import com.jme3.math.ColorRGBA;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * A material that parts can be made from.
  * Thickness is always stored in mm. Sheet dimensions are null for non-sheet goods.
+ *
+ * <p>Dimensional lumber (2x4, 2x6, etc.) is modeled as SHEET_GOOD with a fixed
+ * cross-section: {@code widthMm} captures the actual cross-section width
+ * (e.g. 38mm for a "2x4"), and {@code standardLengthsMm} lists the stock
+ * lengths the lumber comes in. The packer treats one of those lengths as the
+ * sheet, and parts whose width matches naturally lay end-to-end.
+ * For plywood and other 2D-cut sheet goods, {@code widthMm} stays null —
+ * users specify both dimensions explicitly via {@code size W, L}.
  */
 @Data
 @Builder
@@ -36,7 +46,20 @@ public class Material {
     private final float thicknessMm;
     private final Float sheetWidthMm;   // populated for SHEET_GOOD; null otherwise
     private final Float sheetHeightMm;  // populated for SHEET_GOOD; null otherwise
+    // Cross-section width for dimensional lumber — non-null signals "fixed
+    // cross-section, defaulted in part creation." Null for plywood (user
+    // specifies width via `size`) and for hardware/slab/per-piece materials.
+    private final Float widthMm;
+    // Stock lengths the lumber is sold in (mm). Empty/null for non-lumber.
+    // For v1 the packer uses the longest entry as the sheet height — multi-
+    // length optimization is a follow-up.
+    private final List<Float> standardLengthsMm;
     private final GrainDirection grainDirection;
     private final MeasurementSystem measurementSystem;
     private final ColorRGBA displayColor;
+
+    /** True iff this is dimensional lumber (fixed cross-section, 1D-packed). */
+    public boolean isDimensionalLumber() {
+        return widthMm != null;
+    }
 }

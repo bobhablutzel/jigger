@@ -28,6 +28,7 @@ import java.util.List;
 
 import static app.cadette.MeshInvariants.*;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -539,6 +540,72 @@ class PartMeshBuilderTest {
                 new Cutout.Curve(p, null, Cutout.Face.FRONT)));
         assertExtent(m, 600, 900, 18);
         assertVolume(m, 600f * 900 * 18, V_TOL);
+    }
+
+    // ---- computeFinalProfile (cut-sheet outline) ------------------
+
+    @Test
+    void finalProfileForRectanglePartIsThePartRect() {
+        // No cuts, no keeps → final profile is the full panel area.
+        var profile = PartMeshBuilder.computeFinalProfile(600, 900, List.of(), List.of());
+        assertFalse(profile.isEmpty());
+        assertEquals(600f * 900, profile.getArea(), 0.1);
+    }
+
+    @Test
+    void finalProfileAppliesThroughCutsButNotPockets() {
+        // Through-cut shrinks the profile area.
+        var withThrough = PartMeshBuilder.computeFinalProfile(600, 900,
+                List.of(new Cutout.Rect(100, 100, 100, 100, null, Cutout.Face.FRONT)),
+                List.of());
+        assertEquals(600f * 900 - 100 * 100, withThrough.getArea(), 0.1);
+
+        // Pocket (partial-depth) leaves the profile unchanged — the outline
+        // is what the saw cuts, and a pocket doesn't change the silhouette.
+        var withPocket = PartMeshBuilder.computeFinalProfile(600, 900,
+                List.of(new Cutout.Rect(100, 100, 100, 100, 5f, Cutout.Face.FRONT)),
+                List.of());
+        assertEquals(600f * 900, withPocket.getArea(), 0.1);
+    }
+
+    @Test
+    void finalProfileAppliesKeepsAsIntersection() {
+        // Keep region shrinks the profile to its boundary.
+        var profile = PartMeshBuilder.computeFinalProfile(600, 900, List.of(),
+                List.of(new Cutout.Rect(100, 100, 200, 200, null, Cutout.Face.FRONT)));
+        assertEquals(200f * 200, profile.getArea(), 0.1);
+    }
+
+    // ---- computeDiscard (per-component waste regions) -------------
+
+    @Test
+    void discardOfEmptyProfileIsThePartRect() {
+        // A through-cut spanning the whole panel leaves an empty profile;
+        // every mm² is discarded.
+        var profile = PartMeshBuilder.computeFinalProfile(600, 900,
+                List.of(new Cutout.Rect(0, 0, 600, 900, null, Cutout.Face.FRONT)),
+                List.of());
+        var discard = PartMeshBuilder.computeDiscard(600, 900, profile);
+        assertEquals(600f * 900, discard.getArea(), 0.1);
+    }
+
+    @Test
+    void discardSplitsIntoComponentsForFlankedHandle() {
+        // Cross-cut sled handle case: a keep region narrower than the panel
+        // leaves two disjoint waste strips on the left and right.
+        var profile = PartMeshBuilder.computeFinalProfile(600, 900, List.of(),
+                List.of(new Cutout.Rect(200, 0, 200, 900, null, Cutout.Face.FRONT)));
+        var discard = PartMeshBuilder.computeDiscard(600, 900, profile);
+        // Two polygons, each 200 × 900.
+        assertEquals(2, discard.getNumGeometries());
+        assertEquals(2 * 200f * 900, discard.getArea(), 0.1);
+    }
+
+    @Test
+    void discardIsEmptyWhenProfileMatchesPart() {
+        var profile = PartMeshBuilder.computeFinalProfile(600, 900, List.of(), List.of());
+        var discard = PartMeshBuilder.computeDiscard(600, 900, profile);
+        assertEquals(0.0, discard.getArea(), 0.1);
     }
 
     // ---- Keep operations ------------------------------------------

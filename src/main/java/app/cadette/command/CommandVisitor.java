@@ -146,6 +146,8 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
 
         app.cadette.model.Material material = executor.getDefaultMaterial();
         CadetteCommandParser.PartSizeContext partSizeCtx = null;
+        CadetteCommandParser.ExpressionContext lengthExpr = null;
+        CadetteCommandParser.OrientationContext orientCtx = null;
         Vector3f position = Vector3f.ZERO;
         GrainRequirement grain = GrainRequirement.ANY;
 
@@ -159,6 +161,10 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 }
             } else if (arg.partSize() != null) {
                 partSizeCtx = arg.partSize();
+            } else if (arg.LENGTH() != null) {
+                lengthExpr = arg.expression();
+            } else if (arg.orientation() != null) {
+                orientCtx = arg.orientation();
             } else if (arg.atPlacement() != null) {
                 position = parsePosition(arg.atPlacement().position());
             } else if (arg.grainReq() != null) {
@@ -166,13 +172,39 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 else if (arg.grainReq().HORIZONTAL() != null) grain = GrainRequirement.HORIZONTAL;
             }
         }
-
-        if (partSizeCtx == null) {
-            return "Missing 'size' for part '" + name + "'.";
+        if (orientCtx != null && !material.isDimensionalLumber()) {
+            return "Part '" + name + "': 'orient' applies to dimensional lumber only. "
+                    + "Use 'rotate' for general rotation on " + material.getDisplayName() + ".";
         }
-        var exprs = partSizeCtx.expression();
-        float cutWidth = toMm(evalFloat(exprs.get(0)));
-        float cutHeight = toMm(evalFloat(exprs.get(1)));
+
+        if (partSizeCtx != null && lengthExpr != null) {
+            return "Part '" + name + "': use either 'size W, L' or 'length L', not both.";
+        }
+        float cutWidth;
+        float cutHeight;
+        if (lengthExpr != null) {
+            if (!material.isDimensionalLumber()) {
+                return "Part '" + name + "': 'length' requires a dimensional-lumber material "
+                        + "(e.g. lumber-2x4-spf). Use 'size W, L' for "
+                        + material.getDisplayName() + ".";
+            }
+            cutWidth = material.getWidthMm();
+            cutHeight = toMm(evalFloat(lengthExpr));
+        } else if (partSizeCtx != null) {
+            var exprs = partSizeCtx.expression();
+            cutWidth = toMm(evalFloat(exprs.get(0)));
+            cutHeight = toMm(evalFloat(exprs.get(1)));
+            if (material.isDimensionalLumber()
+                    && Math.abs(cutWidth - material.getWidthMm()) > 0.1f) {
+                return String.format("Part '%s': width %.1f %s doesn't match %s cross-section (%.1f %s). "
+                                + "Use 'length L' to default the width from the material.",
+                        name, fromMm(cutWidth), executor.getUnits().getAbbreviation(),
+                        material.getDisplayName(),
+                        fromMm(material.getWidthMm()), executor.getUnits().getAbbreviation());
+            }
+        } else {
+            return "Missing 'size' or 'length' for part '" + name + "'.";
+        }
 
         Part part = Part.builder()
                 .name(name)
@@ -187,12 +219,17 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         executor.pushAction(new CreatePartAction(scene, part));
         executor.setLastCreatedPartName(name);
 
+        if (orientCtx != null) {
+            applyRotationKeepingAabbMinStable(name, orientationToEuler(orientCtx));
+        }
+
         String abbr = executor.getUnits().getAbbreviation();
-        return String.format("Created part '%s' — %s, %.2f x %.2f %s (%.2f %s thick) at (%.2f, %.2f, %.2f)",
+        return String.format("Created part '%s' — %s, %.2f x %.2f %s (%.2f %s thick) at (%.2f, %.2f, %.2f)%s",
                 name, material.getDisplayName(),
                 fromMm(cutWidth), fromMm(cutHeight), abbr,
                 fromMm(material.getThicknessMm()), abbr,
-                fromMm(position.x), fromMm(position.y), fromMm(position.z));
+                fromMm(position.x), fromMm(position.y), fromMm(position.z),
+                orientCtx != null ? " oriented " + orientationLabel(orientCtx) : "");
     }
 
     @Override
@@ -421,26 +458,153 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     public String visitRotateCommand(CadetteCommandParser.RotateCommandContext ctx) {
         String name = extractName(ctx.objectName());
         var exprs = ctx.rotation().expression();
-        Vector3f newDegrees = new Vector3f(
+        Vector3f delta = new Vector3f(
                 evalFloat(exprs.get(0)),
                 evalFloat(exprs.get(1)),
                 evalFloat(exprs.get(2)));
+        boolean absolute = ctx.rotationMode() != null
+                && ctx.rotationMode() instanceof CadetteCommandParser.RotateToModeContext;
 
         // Check assembly first
         Assembly assembly = scene.getAssembly(name);
         if (assembly != null) {
-            return rotateAssembly(assembly, newDegrees);
+            // Assemblies always compose (their semantics already meant
+            // "rotate the whole thing by this delta"); `to` rotates from
+            // the identity, i.e. resets each part's rotation first.
+            if (absolute) {
+                for (Part p : assembly.getParts()) {
+                    scene.rotateObject(p.getName(), Vector3f.ZERO);
+                }
+            }
+            return rotateAssembly(assembly, delta);
         }
 
         SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
         if (rec == null) {
             return "Object or assembly '" + name + "' not found.";
         }
-        Vector3f oldDegrees = scene.getRotation(name);
+        Vector3f oldDegrees = scene.getRotation(name).clone();
+        Vector3f newDegrees = absolute ? delta : composeRotation(oldDegrees, delta);
+        // `rotate` pivots around the part's local origin (existing semantics).
+        // Templates depend on this; `orient` is the AABB-stable alternative.
         scene.rotateObject(name, newDegrees);
         executor.pushAction(new RotateAction(scene, name, oldDegrees, newDegrees));
-        return String.format("Rotated '%s' to (%.1f, %.1f, %.1f) degrees",
-                name, newDegrees.x, newDegrees.y, newDegrees.z);
+        return String.format("Rotated '%s' %s (%.1f, %.1f, %.1f) → (%.1f, %.1f, %.1f) degrees",
+                name, absolute ? "to" : "by",
+                delta.x, delta.y, delta.z,
+                newDegrees.x, newDegrees.y, newDegrees.z);
+    }
+
+    /**
+     * Rotate a part and translate it so the AABB min corner stays where it
+     * was before the rotation — the visible box doesn't fly off when you
+     * change orientation. Returns the new position.
+     */
+    private Vector3f applyRotationKeepingAabbMinStable(String name, Vector3f newDegrees) {
+        com.jme3.math.Vector3f[] oldAabb = scene.computeObjectAABB(name);
+        scene.rotateObject(name, newDegrees);
+        com.jme3.math.Vector3f[] newAabb = scene.computeObjectAABB(name);
+        if (oldAabb == null || newAabb == null) {
+            return scene.getObjectRecord(name).position().clone();
+        }
+        Vector3f delta = oldAabb[0].subtract(newAabb[0]);
+        Vector3f current = scene.getObjectRecord(name).position();
+        Vector3f target = current.add(delta);
+        scene.moveObject(name, target);
+        return target;
+    }
+
+    /** Compose two Euler-angle rotations as quaternion multiplication (delta
+     *  applied after current). Returns the combined rotation as XYZ Euler. */
+    private static Vector3f composeRotation(Vector3f currentDegrees, Vector3f deltaDegrees) {
+        com.jme3.math.Quaternion current = eulerToQuat(currentDegrees);
+        com.jme3.math.Quaternion delta = eulerToQuat(deltaDegrees);
+        com.jme3.math.Quaternion combined = delta.mult(current);
+        float[] angles = combined.toAngles(null);
+        return new Vector3f(
+                angles[0] * com.jme3.math.FastMath.RAD_TO_DEG,
+                angles[1] * com.jme3.math.FastMath.RAD_TO_DEG,
+                angles[2] * com.jme3.math.FastMath.RAD_TO_DEG);
+    }
+
+    private static com.jme3.math.Quaternion eulerToQuat(Vector3f degrees) {
+        return new com.jme3.math.Quaternion().fromAngles(
+                degrees.x * com.jme3.math.FastMath.DEG_TO_RAD,
+                degrees.y * com.jme3.math.FastMath.DEG_TO_RAD,
+                degrees.z * com.jme3.math.FastMath.DEG_TO_RAD);
+    }
+
+    @Override
+    public String visitOrientCommand(CadetteCommandParser.OrientCommandContext ctx) {
+        String name = extractName(ctx.objectName());
+        SceneManager.ObjectRecord rec = scene.getObjectRecord(name);
+        if (rec == null) {
+            return "Object '" + name + "' not found.";
+        }
+        Part part = scene.getPart(name);
+        if (part == null || !part.getMaterial().isDimensionalLumber()) {
+            return "Orient '" + name + "': named orientations apply to dimensional lumber parts only. "
+                    + "Use 'rotate' for general rotation.";
+        }
+        Vector3f target = orientationToEuler(ctx.orientation());
+        Vector3f oldDegrees = scene.getRotation(name).clone();
+        Vector3f oldPosition = rec.position().clone();
+        Vector3f newPosition = applyRotationKeepingAabbMinStable(name, target);
+        executor.pushAction(new RotateAction(scene, name, oldDegrees, target, oldPosition, newPosition));
+        return String.format("Oriented '%s' %s — (%.1f, %.1f, %.1f) degrees",
+                name, orientationLabel(ctx.orientation()),
+                target.x, target.y, target.z);
+    }
+
+    /** Map an orientation keyword to its target Euler angles (XYZ degrees).
+     *  Carpentry conventions: a board's "wide face" is the broader of its
+     *  two long faces; the "narrow edge" is the other.
+     *
+     *  <p>For lumber with default part-local axes X = cross-section width,
+     *  Y = length, Z = thickness (wide dimension):
+     *  <ul>
+     *    <li>{@code flat}: length horizontal (along X), wide face up/down
+     *        (faces ±Y) — laid flat on a workbench, low profile from the side
+     *    <li>{@code on-edge}: length horizontal (along X), narrow edge up
+     *        (faces ±Y), wide face vertical (faces ±Z) — joist or gate-rail
+     *        stance, full 89mm visible to a front viewer
+     *    <li>{@code on-end}: length vertical (along Y), wide face toward +Z
+     *        — fence post, vertical gate stile
+     *  </ul>
+     */
+    private static Vector3f orientationToEuler(CadetteCommandParser.OrientationContext ctx) {
+        com.jme3.math.Quaternion q;
+        if (ctx instanceof CadetteCommandParser.OrientFlatContext) {
+            // Single 90° around Z: length swings from local Y to world X.
+            // Wide-face normal swings from local X to world Y (up).
+            q = axisAngle(0, 0, 1, 90);
+        } else if (ctx instanceof CadetteCommandParser.OrientOnEdgeContext) {
+            // First lay flat (90° around Z), then tip onto narrow edge by
+            // rotating 90° around the (now horizontal) length axis = world X.
+            // Wide face swings from up to facing the viewer.
+            q = axisAngle(1, 0, 0, 90).mult(axisAngle(0, 0, 1, 90));
+        } else /* OrientOnEndContext */ {
+            // Length stays vertical (local Y). Just rotate 90° around Y so
+            // the wide-face normal (local X) swings to world Z, facing viewer.
+            q = axisAngle(0, 1, 0, 90);
+        }
+        float[] angles = q.toAngles(null);
+        return new Vector3f(
+                angles[0] * com.jme3.math.FastMath.RAD_TO_DEG,
+                angles[1] * com.jme3.math.FastMath.RAD_TO_DEG,
+                angles[2] * com.jme3.math.FastMath.RAD_TO_DEG);
+    }
+
+    private static com.jme3.math.Quaternion axisAngle(float ax, float ay, float az, float degrees) {
+        return new com.jme3.math.Quaternion().fromAngleAxis(
+                degrees * com.jme3.math.FastMath.DEG_TO_RAD,
+                new Vector3f(ax, ay, az));
+    }
+
+    private static String orientationLabel(CadetteCommandParser.OrientationContext ctx) {
+        if (ctx instanceof CadetteCommandParser.OrientFlatContext) return "flat";
+        if (ctx instanceof CadetteCommandParser.OrientOnEdgeContext) return "on-edge";
+        return "on-end";
     }
 
     private String rotateAssembly(Assembly assembly, Vector3f newDegrees) {
@@ -657,13 +821,54 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     }
 
     @Override
+    public String visitPrintCommand(CadetteCommandParser.PrintCommandContext ctx) {
+        return messageBody(ctx.STRING().getText());
+    }
+
+    @Override
+    public String visitWarnCommand(CadetteCommandParser.WarnCommandContext ctx) {
+        return "Warning: " + messageBody(ctx.STRING().getText());
+    }
+
+    @Override
+    public String visitErrorCommand(CadetteCommandParser.ErrorCommandContext ctx) {
+        // v1: error doesn't terminate the script — same emit mechanism as
+        // print/warn with a stronger prefix. Script-termination via a
+        // separate `fail` command is backlogged.
+        return "Error: " + messageBody(ctx.STRING().getText());
+    }
+
+    /** Strip the surrounding quotes and run ${var} interpolation against the
+     *  active scope. Shared helper for print/warn/error. */
+    private String messageBody(String quoted) {
+        return interpolateString(stripStringQuotes(quoted));
+    }
+
+    @Override
+    public String visitLetCommand(CadetteCommandParser.LetCommandContext ctx) {
+        String name = ctx.VAR_REF().getText().substring(1);  // strip $
+        double value = evaluateExpression(ctx.expression());
+        executor.setInCurrentScope(name, value);
+        return String.format("$%s = %s", name, formatNumber(value));
+    }
+
+    /** Drop trailing .0 on whole numbers; otherwise show enough precision to
+     *  round-trip the value sensibly. Keeps `let` echo readable. */
+    private static String formatNumber(double v) {
+        if (v == Math.floor(v) && !Double.isInfinite(v)) {
+            return Long.toString((long) v);
+        }
+        return String.format("%.4g", v);
+    }
+
+    @Override
     public String visitCutCommand(CadetteCommandParser.CutCommandContext ctx) {
         String partName = extractName(ctx.objectName());
         Part part = scene.getPart(partName);
         if (part == null) {
             return "Part '" + partName + "' not found.";
         }
-        Cutout cutout = buildCutout(ctx.cutShape());
+        Cutout cutout = buildCutout(ctx.cutShape(), part);
         String abbr = executor.getUnits().getAbbreviation();
         // PartMeshBuilder silently drops cutouts that clip to nothing —
         // catch that here so the user gets feedback at command time. The
@@ -730,6 +935,44 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 fromMm(radius), abbr, facingName, depthStr);
     }
 
+    /**
+     * Triangle vertices for a miter wedge at the named corner. The cut line
+     * runs across the part's width (W) starting at the corner, tilted by
+     * {@code angleDeg} from the end edge. The wedge removed has the corner
+     * itself as one vertex, the adjacent end-edge corner as another, and a
+     * point on the side edge as the third — depth W·tan(angle) along the
+     * length axis.
+     *
+     * <p>For a brace installed at angle α from horizontal, the miter at
+     * each end uses angle = α: the cut surface ends up parallel to the
+     * surface the brace lands on. Same number drives both rotate and miter.
+     *
+     * <p>Returns null for unrecognised facing names.
+     */
+    private static List<Point2D> miterWedgeVertices(String facing, float angleDeg,
+                                                     float widthMm, float heightMm) {
+        double depth = widthMm * Math.tan(Math.toRadians(angleDeg));
+        return switch (facing) {
+            case "SE" -> List.of(  // bottom-right wedge: cut from (0,0) up to (W, depth)
+                    new Point2D(0, 0),
+                    new Point2D(widthMm, 0),
+                    new Point2D(widthMm, (float) depth));
+            case "SW" -> List.of(  // bottom-left wedge: cut from (W,0) up to (0, depth)
+                    new Point2D(widthMm, 0),
+                    new Point2D(0, 0),
+                    new Point2D(0, (float) depth));
+            case "NE" -> List.of(  // top-right wedge: cut from (0,h) down to (W, h-depth)
+                    new Point2D(0, heightMm),
+                    new Point2D(widthMm, heightMm),
+                    new Point2D(widthMm, heightMm - (float) depth));
+            case "NW" -> List.of(  // top-left wedge: cut from (W,h) down to (0, h-depth)
+                    new Point2D(widthMm, heightMm),
+                    new Point2D(0, heightMm),
+                    new Point2D(0, heightMm - (float) depth));
+            default -> null;
+        };
+    }
+
     /** Cardinal facing → degrees. {@code null} for unrecognised names. */
     private static Float parseFacingCardinal(String name) {
         return switch (name) {
@@ -791,7 +1034,7 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         if (part == null) {
             return "Part '" + partName + "' not found.";
         }
-        Cutout keep = buildCutout(ctx.cutShape());
+        Cutout keep = buildCutout(ctx.cutShape(), part);
         String abbr = executor.getUnits().getAbbreviation();
         // A keep region with no overlap with the panel would erase the panel
         // entirely. Reject as a probable user error rather than silently
@@ -826,7 +1069,7 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     }
 
     /** Dispatch on the cutShape alternative to build the appropriate Cutout variant. */
-    private Cutout buildCutout(CadetteCommandParser.CutShapeContext ctx) {
+    private Cutout buildCutout(CadetteCommandParser.CutShapeContext ctx, Part part) {
         if (ctx instanceof CadetteCommandParser.RectCutShapeContext r) {
             // Args (AT/SIZE/DEPTH/FACE) in any order; visitor enforces required set.
             ShapeArgs args = parseShapeArgs(r.shapeArg());
@@ -881,6 +1124,28 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             ShapeArgs args = parseShapeArgs(cv.shapeArg());
             rejectVertexShapeMismatches("curve", args);
             return new Cutout.Curve(controls, args.depth, args.face);
+        }
+        if (ctx instanceof CadetteCommandParser.MiterCutShapeContext m) {
+            // miter facing <NE|NW|SE|SW> angle <θ> — triangular wedge at the
+            // named corner of the part. θ is measured from the end edge.
+            // Reusable for diagonal braces, picture-frame miters, hip rafters.
+            String facingName = m.nameLike().getText().toUpperCase();
+            float angleDeg = evalFloat(m.expression());
+            ShapeArgs args = parseShapeArgs(m.shapeArg());
+            if (args.at != null) throw new IllegalArgumentException(
+                    "miter cut does not take `at` — position is the named corner");
+            if (args.size != null) throw new IllegalArgumentException(
+                    "miter cut does not take `size`");
+            if (args.radius != null) throw new IllegalArgumentException(
+                    "miter cut does not take `radius`");
+            List<Point2D> verts = miterWedgeVertices(
+                    facingName, angleDeg,
+                    part.getCutWidthMm(), part.getCutHeightMm());
+            if (verts == null) {
+                throw new IllegalArgumentException(
+                        "Unknown miter facing '" + facingName + "'. Valid: NE, NW, SE, SW.");
+            }
+            return new Cutout.Polygon(verts, args.depth, args.face);
         }
         if (ctx instanceof CadetteCommandParser.NamedShapeCutShapeContext n) {
             // SHAPE <name> with AT/DEPTH args in any order.
@@ -2014,15 +2279,47 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 entry.getMaterial().getDisplayName(),
                 fromMm(entry.getMaterial().getThicknessMm()), abbr));
         if (entry.getSheetCount() != null) {
-            sb.append(String.format("  %d sheet%s (%.0f x %.0f %s, %.1f%% offcut)",
-                    entry.getSheetCount(),
-                    entry.getSheetCount() == 1 ? "" : "s",
-                    fromMm(entry.getMaterial().getSheetWidthMm()),
-                    fromMm(entry.getMaterial().getSheetHeightMm()),
-                    abbr,
-                    entry.getOffcutPercent()));
+            if (entry.getMaterial().isDimensionalLumber()) {
+                // Lumber displays in the trade unit (ft for imperial, m for
+                // metric), regardless of the user's `set units` choice —
+                // matches how lumber is actually sold and labeled.
+                float lengthMm = entry.getActualSheetHeightMm() != null
+                        ? entry.getActualSheetHeightMm()
+                        : entry.getMaterial().getSheetHeightMm();
+                sb.append(String.format("  %d board%s (%s long, %.1f%% offcut)",
+                        entry.getSheetCount(),
+                        entry.getSheetCount() == 1 ? "" : "s",
+                        formatLumberLength(lengthMm, entry.getMaterial().getMeasurementSystem()),
+                        entry.getOffcutPercent()));
+            } else {
+                sb.append(String.format("  %d sheet%s (%.0f x %.0f %s, %.1f%% offcut)",
+                        entry.getSheetCount(),
+                        entry.getSheetCount() == 1 ? "" : "s",
+                        fromMm(entry.getMaterial().getSheetWidthMm()),
+                        fromMm(entry.getMaterial().getSheetHeightMm()),
+                        abbr,
+                        entry.getOffcutPercent()));
+            }
         }
         return sb.toString();
+    }
+
+    /** Format lumber length in trade units: feet for imperial, meters for
+     *  metric. Independent of the user's current display units. */
+    private static String formatLumberLength(float mm, app.cadette.model.MeasurementSystem system) {
+        if (system == app.cadette.model.MeasurementSystem.IMPERIAL) {
+            float ft = mm / 304.8f;
+            // 8.00 ft → "8 ft"; 9.5 ft → "9.5 ft". Avoid spurious decimals.
+            if (Math.abs(ft - Math.round(ft)) < 0.05f) {
+                return String.format("%d ft", Math.round(ft));
+            }
+            return String.format("%.1f ft", ft);
+        }
+        float m = mm / 1000f;
+        if (Math.abs(m - Math.round(m)) < 0.05f) {
+            return String.format("%d m", Math.round(m));
+        }
+        return String.format("%.1f m", m);
     }
 
     private String showLayout() {
@@ -2291,6 +2588,51 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
      * return 1.0 / 0.0 under numeric truthiness. Throws a clear error on an
      * unresolved VAR_REF or divide-by-zero.
      */
+    /** Math function dispatch for IdFuncCallExpr. Trig takes degrees so it
+     *  composes cleanly with rotate/orient (which also use degrees). */
+    private static double callMathFunction(String name, double[] args) {
+        return switch (name) {
+            case "sin"     -> requireArity(name, args, 1, () -> Math.sin(Math.toRadians(args[0])));
+            case "cos"     -> requireArity(name, args, 1, () -> Math.cos(Math.toRadians(args[0])));
+            case "tan"     -> requireArity(name, args, 1, () -> Math.tan(Math.toRadians(args[0])));
+            case "asin"    -> requireArity(name, args, 1, () -> Math.toDegrees(Math.asin(args[0])));
+            case "acos"    -> requireArity(name, args, 1, () -> Math.toDegrees(Math.acos(args[0])));
+            case "atan"    -> requireArity(name, args, 1, () -> Math.toDegrees(Math.atan(args[0])));
+            case "atan2"   -> requireArity(name, args, 2, () -> Math.toDegrees(Math.atan2(args[0], args[1])));
+            case "sqrt"    -> requireArity(name, args, 1, () -> Math.sqrt(args[0]));
+            case "hypot"   -> requireArity(name, args, 2, () -> Math.hypot(args[0], args[1]));
+            case "abs"     -> requireArity(name, args, 1, () -> Math.abs(args[0]));
+            case "pow"     -> requireArity(name, args, 2, () -> Math.pow(args[0], args[1]));
+            case "floor"   -> requireArity(name, args, 1, () -> Math.floor(args[0]));
+            case "ceil"    -> requireArity(name, args, 1, () -> Math.ceil(args[0]));
+            case "round"   -> requireArity(name, args, 1, () -> (double) Math.round(args[0]));
+            case "log"     -> requireArity(name, args, 1, () -> Math.log(args[0]));
+            case "exp"     -> requireArity(name, args, 1, () -> Math.exp(args[0]));
+            case "radians" -> requireArity(name, args, 1, () -> Math.toRadians(args[0]));
+            case "degrees" -> requireArity(name, args, 1, () -> Math.toDegrees(args[0]));
+            default -> throw new RuntimeException("Unknown function '" + name + "'");
+        };
+    }
+
+    private static double requireArity(String name, double[] args, int expected,
+                                        java.util.function.DoubleSupplier compute) {
+        if (args.length != expected) {
+            throw new RuntimeException(name + "() takes " + expected
+                    + " argument" + (expected == 1 ? "" : "s") + ", got " + args.length);
+        }
+        return compute.getAsDouble();
+    }
+
+    /** Math constants resolvable as bare identifiers: pi, e. Returns null for
+     *  anything else so the caller falls back to scope lookup. */
+    private static Double mathConstant(String name) {
+        return switch (name.toLowerCase()) {
+            case "pi" -> Math.PI;
+            case "e"  -> Math.E;
+            default   -> null;
+        };
+    }
+
     double evaluateExpression(CadetteCommandParser.ExpressionContext ctx) {
         return switch (ctx) {
             case CadetteCommandParser.ParenExprContext c ->
@@ -2302,6 +2644,13 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 yield c.MIN() != null
                         ? java.util.Arrays.stream(args).min().orElseThrow()
                         : java.util.Arrays.stream(args).max().orElseThrow();
+            }
+            case CadetteCommandParser.IdFuncCallExprContext c -> {
+                String fname = c.ID().getText().toLowerCase();
+                double[] args = c.expression().stream()
+                        .mapToDouble(this::evaluateExpression)
+                        .toArray();
+                yield callMathFunction(fname, args);
             }
             case CadetteCommandParser.NegExprContext c ->
                     -evaluateExpression(c.expression());
@@ -2369,13 +2718,15 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                 // Bare identifier: same resolution as $-prefixed VAR_REF.
                 // Reached when the user writes `${i - 1}` (no $) and in
                 // other expression contexts where an unprefixed name
-                // happens to lex as ID rather than a keyword.
+                // happens to lex as ID rather than a keyword. Falls back
+                // to math constants (pi, e) if no variable binds the name —
+                // so user vars shadow constants, not the other way around.
                 String name = c.ID().getText();
                 Double v = executor.resolveVar(name);
-                if (v == null) {
-                    throw new RuntimeException("Undefined variable " + name);
-                }
-                yield v;
+                if (v != null) yield v;
+                Double constant = mathConstant(name);
+                if (constant != null) yield constant;
+                throw new RuntimeException("Undefined variable " + name);
             }
             default -> throw new AssertionError(
                     "Unhandled expression node: " + ctx.getClass().getSimpleName());

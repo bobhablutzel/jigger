@@ -19,7 +19,10 @@
 package app.cadette;
 
 import app.cadette.model.GrainRequirement;
+import app.cadette.model.PartMeshBuilder;
 import app.cadette.model.SheetLayout;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
 
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
@@ -279,7 +282,8 @@ public class CutSheetExporter {
                                               List<app.cadette.model.Cutout> keeps)
             throws IOException {
         if (cutouts.isEmpty() && keeps.isEmpty()) return;
-        // Clip to the part's rect for the dashed outlines.
+
+        // ---- Per-operation dashed outlines (machining instructions). ----
         cs.saveGraphicsState();
         cs.addRect(px, py, pw, ph);
         cs.clip();
@@ -291,16 +295,104 @@ public class CutSheetExporter {
         cs.setLineDashPattern(new float[]{}, 0);
         cs.restoreGraphicsState();
 
-        // X marker over discarded regions. For each cut shape: clip to the
-        // shape, draw two diagonals across the shape's bbox. For each keep
-        // shape: clip to (part − shape) using PDF even-odd fill rule (outer
-        // CW + inner CCW path), draw two diagonals across the part's bbox.
-        for (app.cadette.model.Cutout c : cutouts) {
-            drawPdfXOnCutShape(cs, c, part, px, py, pw, ph, scale);
+        // ---- Solid final-profile outline (the saw boundary). ----
+        float[] localSize = pdfPartLocalSize(part);
+        Geometry profile = PartMeshBuilder.computeFinalProfile(
+                localSize[0], localSize[1], cutouts, keeps);
+        if (!profile.isEmpty()) {
+            cs.saveGraphicsState();
+            setStrokeColor(cs, CutSheetRenderer.PROFILE_COLOR);
+            cs.setLineWidth(1.0f);
+            emitPdfGeometryPath(cs, profile, part, px, py, ph, scale);
+            cs.stroke();
+            cs.restoreGraphicsState();
         }
-        for (app.cadette.model.Cutout k : keeps) {
-            drawPdfXOnKeepComplement(cs, k, part, px, py, pw, ph, scale);
+
+        // ---- X marker per discarded component. Walk the JTS discard
+        //      (Polygon or MultiPolygon); each Polygon is one connected
+        //      waste piece. Draw an X sized to its bbox, clipped to its
+        //      outline so diagonals stay inside the waste. Skip components
+        //      below MIN_X_MARKER_PX to suppress kerf-thin slivers. ----
+        Geometry discard = PartMeshBuilder.computeDiscard(localSize[0], localSize[1], profile);
+        for (int i = 0; i < discard.getNumGeometries(); i++) {
+            Geometry component = discard.getGeometryN(i);
+            if (!(component instanceof org.locationtech.jts.geom.Polygon)) continue;
+            org.locationtech.jts.geom.Envelope env = component.getEnvelopeInternal();
+            float[] cornerA = partLocalToPdf(env.getMinX(), env.getMinY(), part, px, py, ph, scale);
+            float[] cornerB = partLocalToPdf(env.getMaxX(), env.getMaxY(), part, px, py, ph, scale);
+            float bx = Math.min(cornerA[0], cornerB[0]);
+            float by = Math.min(cornerA[1], cornerB[1]);
+            float ex = Math.max(cornerA[0], cornerB[0]);
+            float ey = Math.max(cornerA[1], cornerB[1]);
+            if ((ex - bx) < CutSheetRenderer.MIN_X_MARKER_PX
+                    || (ey - by) < CutSheetRenderer.MIN_X_MARKER_PX) continue;
+
+            cs.saveGraphicsState();
+            emitPdfGeometryPath(cs, component, part, px, py, ph, scale);
+            cs.clip();
+            setStrokeColor(cs, CutSheetRenderer.CUTOUT_COLOR);
+            cs.setLineWidth(0.5f);
+            cs.moveTo(bx, by); cs.lineTo(ex, ey); cs.stroke();
+            cs.moveTo(bx, ey); cs.lineTo(ex, by); cs.stroke();
+            cs.restoreGraphicsState();
         }
+    }
+
+    /** Part dimensions in part-local mm, regardless of sheet rotation. */
+    private static float[] pdfPartLocalSize(SheetLayout.PlacedPart part) {
+        if (part.isRotated()) {
+            return new float[] { part.getHeightOnSheet(), part.getWidthOnSheet() };
+        }
+        return new float[] { part.getWidthOnSheet(), part.getHeightOnSheet() };
+    }
+
+    /** Emit a JTS geometry as a PDF path (move/line/close) without stroking
+     *  or filling. Caller decides what to do with it (stroke, clip, etc.). */
+    private static void emitPdfGeometryPath(PDPageContentStream cs, Geometry g,
+                                            SheetLayout.PlacedPart part,
+                                            float px, float py, float ph, float scale)
+            throws IOException {
+        if (g.isEmpty()) return;
+        if (g instanceof org.locationtech.jts.geom.Polygon p) {
+            emitPdfRing(cs, p.getExteriorRing().getCoordinates(), part, px, py, ph, scale);
+            for (int i = 0; i < p.getNumInteriorRing(); i++) {
+                emitPdfRing(cs, p.getInteriorRingN(i).getCoordinates(), part, px, py, ph, scale);
+            }
+        } else {
+            for (int i = 0; i < g.getNumGeometries(); i++) {
+                emitPdfGeometryPath(cs, g.getGeometryN(i), part, px, py, ph, scale);
+            }
+        }
+    }
+
+    private static void emitPdfRing(PDPageContentStream cs, Coordinate[] coords,
+                                    SheetLayout.PlacedPart part,
+                                    float px, float py, float ph, float scale) throws IOException {
+        if (coords.length == 0) return;
+        float[] first = partLocalToPdf(coords[0].x, coords[0].y, part, px, py, ph, scale);
+        cs.moveTo(first[0], first[1]);
+        for (int i = 1; i < coords.length; i++) {
+            float[] pt = partLocalToPdf(coords[i].x, coords[i].y, part, px, py, ph, scale);
+            cs.lineTo(pt[0], pt[1]);
+        }
+        cs.closePath();
+    }
+
+    /** Part-local (x, y) → PDF pixel space, applying rotation and Y inversion
+     *  (PDF Y is bottom-up). Matches the transform in {@link #pdfRectXY}. */
+    private static float[] partLocalToPdf(double localX, double localY,
+                                          SheetLayout.PlacedPart part,
+                                          float px, float py, float ph, float scale) {
+        if (part.isRotated()) {
+            return new float[] {
+                    px + (float) localY * scale,
+                    py + ph - (float) localX * scale
+            };
+        }
+        return new float[] {
+                px + (float) localX * scale,
+                py + ph - (float) localY * scale
+        };
     }
 
     /** Dashed outline for one cutout shape (rect / circle today). */
@@ -357,83 +449,6 @@ public class CutSheetExporter {
                 px + ci.cxMm() * scale,
                 py + ph - ci.cyMm() * scale
         };
-    }
-
-    /** X across the cut shape's bbox, clipped to the shape. */
-    private static void drawPdfXOnCutShape(PDPageContentStream cs,
-                                           app.cadette.model.Cutout c,
-                                           SheetLayout.PlacedPart part,
-                                           float px, float py, float pw, float ph, float scale)
-            throws IOException {
-        if (c instanceof app.cadette.model.Cutout.Rect r) {
-            float[] xy = pdfRectXY(r, part, px, py, ph, scale);
-            if (xy[2] < 0.5f || xy[3] < 0.5f) return;
-            cs.saveGraphicsState();
-            cs.addRect(xy[0], xy[1], xy[2], xy[3]);
-            cs.clip();
-            cs.setLineWidth(0.5f);
-            cs.moveTo(xy[0], xy[1]);  cs.lineTo(xy[0] + xy[2], xy[1] + xy[3]);  cs.stroke();
-            cs.moveTo(xy[0], xy[1] + xy[3]);  cs.lineTo(xy[0] + xy[2], xy[1]);  cs.stroke();
-            cs.restoreGraphicsState();
-        } else if (c instanceof app.cadette.model.Cutout.Circle ci) {
-            float radius = ci.radiusMm() * scale;
-            if (radius < 0.5f) return;
-            float[] cxcy = pdfCircleCenter(ci, part, px, py, ph, scale);
-            cs.saveGraphicsState();
-            // Use the same kappa-Bezier circle as drawPdfCircle to define
-            // the clip path. addCircle-like sequence ending in clipEvenOdd.
-            float k = 0.5522847498f * radius;
-            cs.moveTo(cxcy[0] + radius, cxcy[1]);
-            cs.curveTo(cxcy[0] + radius, cxcy[1] + k,  cxcy[0] + k, cxcy[1] + radius,  cxcy[0], cxcy[1] + radius);
-            cs.curveTo(cxcy[0] - k, cxcy[1] + radius,  cxcy[0] - radius, cxcy[1] + k,  cxcy[0] - radius, cxcy[1]);
-            cs.curveTo(cxcy[0] - radius, cxcy[1] - k,  cxcy[0] - k, cxcy[1] - radius,  cxcy[0], cxcy[1] - radius);
-            cs.curveTo(cxcy[0] + k, cxcy[1] - radius,  cxcy[0] + radius, cxcy[1] - k,  cxcy[0] + radius, cxcy[1]);
-            cs.closePath();
-            cs.clip();
-            cs.setLineWidth(0.5f);
-            cs.moveTo(cxcy[0] - radius, cxcy[1] - radius);
-            cs.lineTo(cxcy[0] + radius, cxcy[1] + radius);
-            cs.stroke();
-            cs.moveTo(cxcy[0] - radius, cxcy[1] + radius);
-            cs.lineTo(cxcy[0] + radius, cxcy[1] - radius);
-            cs.stroke();
-            cs.restoreGraphicsState();
-        }
-    }
-
-    /** X across the part rect, clipped to (part − keep shape) via even-odd. */
-    private static void drawPdfXOnKeepComplement(PDPageContentStream cs,
-                                                 app.cadette.model.Cutout k,
-                                                 SheetLayout.PlacedPart part,
-                                                 float px, float py, float pw, float ph, float scale)
-            throws IOException {
-        cs.saveGraphicsState();
-        // Outer path: part rect.
-        cs.addRect(px, py, pw, ph);
-        // Inner path (the "hole"): the keep shape. Even-odd fill rule on
-        // both paths gives us the part-minus-shape region.
-        if (k instanceof app.cadette.model.Cutout.Rect r) {
-            float[] xy = pdfRectXY(r, part, px, py, ph, scale);
-            cs.addRect(xy[0], xy[1], xy[2], xy[3]);
-        } else if (k instanceof app.cadette.model.Cutout.Circle ci) {
-            float radius = ci.radiusMm() * scale;
-            float[] cxcy = pdfCircleCenter(ci, part, px, py, ph, scale);
-            float kappa = 0.5522847498f * radius;
-            cs.moveTo(cxcy[0] + radius, cxcy[1]);
-            cs.curveTo(cxcy[0] + radius, cxcy[1] + kappa,  cxcy[0] + kappa, cxcy[1] + radius,  cxcy[0], cxcy[1] + radius);
-            cs.curveTo(cxcy[0] - kappa, cxcy[1] + radius,  cxcy[0] - radius, cxcy[1] + kappa,  cxcy[0] - radius, cxcy[1]);
-            cs.curveTo(cxcy[0] - radius, cxcy[1] - kappa,  cxcy[0] - kappa, cxcy[1] - radius,  cxcy[0], cxcy[1] - radius);
-            cs.curveTo(cxcy[0] + kappa, cxcy[1] - radius,  cxcy[0] + radius, cxcy[1] - kappa,  cxcy[0] + radius, cxcy[1]);
-            cs.closePath();
-        } else {
-            cs.restoreGraphicsState();
-            return;  // Polygon/Spline/Curve: skip
-        }
-        cs.clipEvenOdd();
-        cs.setLineWidth(0.5f);
-        cs.moveTo(px, py);  cs.lineTo(px + pw, py + ph);  cs.stroke();
-        cs.moveTo(px, py + ph);  cs.lineTo(px + pw, py);  cs.stroke();
-        cs.restoreGraphicsState();
     }
 
     /**
