@@ -55,7 +55,21 @@
       "Bash(timeout 8 mvn -q exec:java -Dexec.mainClass=app.cadette.imgui.CadetteImGuiSpike)",
       "Read(//tmp/**)",
       "Bash(timeout 4 mvn -q exec:java -Dexec.mainClass=app.cadette.imgui.CadetteImGuiSpike)",
-      "Bash(timeout 5 mvn -q -Pspike exec:java)"
+      "Bash(timeout 5 mvn -q -Pspike exec:java)",
+      "Bash(timeout 4 mvn -q -Pspike exec:exec)",
+      "Bash(curl -s 'https://search.maven.org/solrsearch/select?q=g:io.github.spair+AND+a:imgui-java*&rows=30&core=gav')",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('\\\\n'.join\\(sorted\\(set\\(f'{x[\\\\\"a\\\\\"]} @ {x[\\\\\"v\\\\\"]}' for x in d['response']['docs']\\)\\)\\)\\)\")",
+      "Bash(javap -classpath ~/.m2/repository/io/github/spair/imgui-java-binding/1.89.0/imgui-java-binding-1.89.0.jar imgui.flag.ImGuiConfigFlags)",
+      "Bash(javap -classpath ~/.m2/repository/io/github/spair/imgui-java-binding/1.89.0/imgui-java-binding-1.89.0.jar imgui.ImGui)",
+      "Bash(timeout 5 mvn -q -Pspike exec:exec)",
+      "Bash(javap -classpath ~/.m2/repository/io/github/spair/imgui-java-binding/1.89.0/imgui-java-binding-1.89.0.jar imgui.internal.ImGui)",
+      "Bash(javap -classpath ~/.m2/repository/io/github/spair/imgui-java-binding/1.89.0/imgui-java-binding-1.89.0.jar imgui.ImGuiIO)",
+      "Bash(unzip -l ~/.m2/repository/io/github/spair/imgui-java-binding/1.89.0/imgui-java-binding-1.89.0.jar)",
+      "Bash(javap -classpath ~/.m2/repository/io/github/spair/imgui-java-binding/1.89.0/imgui-java-binding-1.89.0.jar imgui.flag.ImGuiDockNodeFlags imgui.internal.flag.ImGuiDockNodeFlags)",
+      "Bash(timeout 15 mvn -q -Pspike exec:exec)",
+      "Bash(javap -classpath ~/.m2/repository/io/github/spair/imgui-java-binding/1.89.0/imgui-java-binding-1.89.0.jar imgui.callback.ImGuiInputTextCallback imgui.ImGuiInputTextCallbackData)",
+      "Bash(javap -classpath ~/.m2/repository/io/github/spair/imgui-java-binding/1.89.0/imgui-java-binding-1.89.0.jar imgui.flag.ImGuiKey)",
+      "Bash(xargs unzip *)"
     ]
   }
 }
