@@ -14,60 +14,68 @@
  * limitations under the License.
  *
  * Source: https://github.com/bobhablutzel/cadette
-21 */
+ */
 
 package app.cadette.imgui;
 
-import imgui.ImGui;
-import imgui.flag.ImGuiKey;
-import imgui.flag.ImGuiMouseButton;
+import static org.lwjgl.glfw.GLFW.*;
 
 /**
- * Drives the orbit camera + click selection by polling ImGui's IO each
- * frame. Compared to the earlier callback-based version, this lets
- * imgui-java install its own GLFW callbacks (the standard,
- * macOS-friendly path) and we just read ImGui's interpreted state.
+ * Single-owner-per-gesture input handler for the 3D viewport. Receives raw
+ * GLFW events that have been filtered against ImGui's WantCapture state by
+ * the caller, so by the time onMouseButton/onScroll fire here the mouse is
+ * known to belong to the viewport (not a panel).
  *
- * <p>Gesture ownership is locked at button-down: a viewport drag that
- * starts in the 3D area keeps feeding the camera even if the cursor
- * wanders through a panel.
+ * <p>Gesture ownership is locked at button-down: once a viewport drag
+ * begins, subsequent move events feed the gesture regardless of where the
+ * cursor wanders. That's what stops the camera from skipping when the
+ * cursor briefly crosses a panel mid-drag.
  *
- * <p>Bindings:
+ * <p>Bindings (no MMB, trackpad-friendly):
  * <ul>
- *   <li>LMB click → onClick callback (caller raycasts)</li>
  *   <li>RMB drag → orbit</li>
  *   <li>Shift + RMB drag → pan</li>
  *   <li>Scroll → zoom</li>
- *   <li>F / T / S / I / R → preset views + reset</li>
- *   <li>Esc → onEscape callback</li>
+ *   <li>F / T / S / I / R → front / top / side / iso / reset views</li>
  * </ul>
+ * LMB-click selection comes later; for now LMB is a no-op in the viewport.
  */
 public class ViewportInputHandler {
 
-    /** Click event: screen coords + the GLFW mods active at click time. */
+    /** Click event: screen coords + GLFW mods + whether this is a
+     *  double-click (within ~400ms and ~5px of the previous click). */
     public record ClickEvent(double x, double y, int mods, boolean isDouble) {}
 
     private final OrbitCamera camera;
+    /** Invoked when the user presses "R". Caller decides whether that means
+     *  "frame all parts" or "reset to defaults" — typically frame-all when
+     *  the scene has parts, defaults when it's empty. */
     private final Runnable onReset;
+    /** Invoked when LMB is released without a meaningful drag (a click).
+     *  Screen coords are in window pixels; caller does the raycast. */
     private final java.util.function.Consumer<ClickEvent> onClick;
+    /** Invoked when Esc is pressed. Used for "close open assembly" etc. */
     private final Runnable onEscape;
 
-    // Per-gesture state. Tracked across frames since we poll.
-    private boolean rmbActive = false;
-    private int rmbMods = 0;
+    /** -1 when no gesture is active; otherwise the GLFW button that started it. */
+    private int activeButton = -1;
+    /** Mods snapshot from button-down — frozen for the gesture's duration so
+     *  the user can release Shift mid-drag without flipping orbit↔pan. */
+    private int activeMods = 0;
+    private double lastX, lastY;
 
-    // LMB click detection: snapshot press position; accumulate motion; if
-    // small at release time, fire a click.
-    private boolean lmbActive = false;
-    private float lmbPressX, lmbPressY;
-    private float lmbMotionAccum;
-    private static final float CLICK_MOTION_TOLERANCE_PX = 5f;
+    // LMB click detection: where + when the press happened, plus how far
+    // the cursor has wandered since. A release with small motion → click.
+    private double pressX, pressY;
+    private double pressMotionAccum;
+    private static final double CLICK_MOTION_TOLERANCE_PX = 5.0;
 
-    // Double-click detection.
+    // Double-click detection: timestamp + position of the most recent
+    // single click. A click within these thresholds counts as a double.
     private double lastClickTime = -1;
-    private float lastClickX, lastClickY;
+    private double lastClickX, lastClickY;
     private static final double DOUBLE_CLICK_WINDOW_S = 0.40;
-    private static final float DOUBLE_CLICK_DIST_PX = 5f;
+    private static final double DOUBLE_CLICK_DIST_PX = 5.0;
 
     public ViewportInputHandler(OrbitCamera camera,
                                  Runnable onReset,
@@ -79,94 +87,84 @@ public class ViewportInputHandler {
         this.onEscape = onEscape;
     }
 
-    /**
-     * Poll ImGui's IO and drive camera + selection. Called from the
-     * AppState's update each frame; ImGui's WantCapture flags gate
-     * everything so panel interactions don't bleed into the viewport.
-     */
-    public void poll() {
-        var io = ImGui.getIO();
-        boolean mouseCaptured = io.getWantCaptureMouse();
-        boolean keyCaptured = io.getWantCaptureKeyboard();
-
-        boolean rmbDown = ImGui.isMouseDown(ImGuiMouseButton.Right);
-        boolean lmbDown = ImGui.isMouseDown(ImGuiMouseButton.Left);
-        float mx = io.getMousePosX();
-        float my = io.getMousePosY();
-        float dx = io.getMouseDeltaX();
-        float dy = io.getMouseDeltaY();
-
-        // ---- RMB drag → orbit / pan -----------------------------------
-        if (rmbDown && !rmbActive && !mouseCaptured) {
-            rmbActive = true;
-            rmbMods = computeModMask(io);
-        } else if (!rmbDown && rmbActive) {
-            rmbActive = false;
-        }
-        if (rmbActive && (dx != 0 || dy != 0)) {
-            boolean shift = (rmbMods & MOD_SHIFT) != 0;
-            if (shift) camera.pan(dx, dy);
-            else       camera.orbit(dx, dy);
-        }
-
-        // ---- LMB click (no-drag release) → select ---------------------
-        if (lmbDown && !lmbActive && !mouseCaptured) {
-            lmbActive = true;
-            lmbPressX = mx;
-            lmbPressY = my;
-            lmbMotionAccum = 0;
-        } else if (lmbDown && lmbActive) {
-            lmbMotionAccum += Math.abs(dx) + Math.abs(dy);
-        } else if (!lmbDown && lmbActive) {
-            // Release. Fire click if motion was small.
-            if (lmbMotionAccum < CLICK_MOTION_TOLERANCE_PX) {
+    // Called only for events the viewport owns (ImGui didn't want them).
+    public void onMouseButton(int button, int action, int mods, double cursorX, double cursorY) {
+        if (action == GLFW_PRESS && activeButton == -1) {
+            activeButton = button;
+            activeMods = mods;
+            lastX = cursorX;
+            lastY = cursorY;
+            // LMB-down: snapshot for click detection.
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                pressX = cursorX;
+                pressY = cursorY;
+                pressMotionAccum = 0;
+            }
+        } else if (action == GLFW_RELEASE && button == activeButton) {
+            // LMB-up with negligible motion → click. Larger motion → drag
+            // (currently unbound; reserved for box-select).
+            if (button == GLFW_MOUSE_BUTTON_LEFT
+                    && pressMotionAccum < CLICK_MOTION_TOLERANCE_PX) {
                 double now = org.lwjgl.glfw.GLFW.glfwGetTime();
                 boolean isDouble = lastClickTime > 0
                         && (now - lastClickTime) < DOUBLE_CLICK_WINDOW_S
-                        && Math.abs(mx - lastClickX) < DOUBLE_CLICK_DIST_PX
-                        && Math.abs(my - lastClickY) < DOUBLE_CLICK_DIST_PX;
+                        && Math.abs(cursorX - lastClickX) < DOUBLE_CLICK_DIST_PX
+                        && Math.abs(cursorY - lastClickY) < DOUBLE_CLICK_DIST_PX;
+                // Reset on double so a third click doesn't fire as double again.
                 lastClickTime = isDouble ? -1 : now;
-                lastClickX = mx;
-                lastClickY = my;
-                onClick.accept(new ClickEvent(mx, my, computeModMask(io), isDouble));
+                lastClickX = cursorX;
+                lastClickY = cursorY;
+                onClick.accept(new ClickEvent(cursorX, cursorY, activeMods, isDouble));
             }
-            lmbActive = false;
-        }
-
-        // ---- Scroll → zoom --------------------------------------------
-        float wheel = io.getMouseWheel();
-        if (wheel != 0 && !mouseCaptured) {
-            camera.zoom(wheel);
-        }
-
-        // ---- Keyboard ------------------------------------------------
-        if (!keyCaptured) {
-            if (ImGui.isKeyPressed(ImGuiKey.F)) camera.viewFront();
-            if (ImGui.isKeyPressed(ImGuiKey.T)) camera.viewTop();
-            if (ImGui.isKeyPressed(ImGuiKey.S)) camera.viewSide();
-            if (ImGui.isKeyPressed(ImGuiKey.I)) camera.viewIso();
-            if (ImGui.isKeyPressed(ImGuiKey.R)) onReset.run();
-            if (ImGui.isKeyPressed(ImGuiKey.Escape)) onEscape.run();
-            if (ImGui.isKeyPressed(ImGuiKey.Equal) || ImGui.isKeyPressed(ImGuiKey.KeypadAdd))
-                camera.zoom(+1f);
-            if (ImGui.isKeyPressed(ImGuiKey.Minus) || ImGui.isKeyPressed(ImGuiKey.KeypadSubtract))
-                camera.zoom(-1f);
+            activeButton = -1;
+            activeMods = 0;
         }
     }
 
-    // GLFW modifier bits — mirror org.lwjgl.glfw.GLFW.GLFW_MOD_* so the
-    // caller (which interprets ClickEvent.mods) keeps working unchanged.
-    private static final int MOD_SHIFT = 0x0001;
-    private static final int MOD_CONTROL = 0x0002;
-    private static final int MOD_ALT = 0x0004;
-    private static final int MOD_SUPER = 0x0008;
+    // Called for every cursor move (gesture tracking needs to see them all).
+    public void onCursorPos(double x, double y) {
+        if (activeButton == -1) return;
+        double dx = x - lastX;
+        double dy = y - lastY;
+        lastX = x;
+        lastY = y;
+        if (activeButton == GLFW_MOUSE_BUTTON_LEFT) {
+            // Accumulate motion to distinguish click from drag.
+            pressMotionAccum += Math.abs(dx) + Math.abs(dy);
+        } else if (activeButton == GLFW_MOUSE_BUTTON_RIGHT) {
+            boolean shift = (activeMods & GLFW_MOD_SHIFT) != 0;
+            if (shift) {
+                camera.pan((float) dx, (float) dy);
+            } else {
+                camera.orbit((float) dx, (float) dy);
+            }
+        }
+    }
 
-    private static int computeModMask(imgui.ImGuiIO io) {
-        int mask = 0;
-        if (io.getKeyShift()) mask |= MOD_SHIFT;
-        if (io.getKeyCtrl())  mask |= MOD_CONTROL;
-        if (io.getKeyAlt())   mask |= MOD_ALT;
-        if (io.getKeySuper()) mask |= MOD_SUPER;
-        return mask;
+    public void onScroll(double dxOffset, double dyOffset) {
+        // GLFW dy: positive = scroll up = zoom in. Trackpad two-finger
+        // scroll also flows through this callback with smaller magnitudes.
+        camera.zoom((float) dyOffset);
+    }
+
+    public void onKey(int key, int action, int mods) {
+        if (action != GLFW_PRESS) return;
+        switch (key) {
+            case GLFW_KEY_F -> camera.viewFront();
+            case GLFW_KEY_T -> camera.viewTop();
+            case GLFW_KEY_S -> camera.viewSide();
+            case GLFW_KEY_I -> camera.viewIso();
+            case GLFW_KEY_R -> onReset.run();
+            case GLFW_KEY_ESCAPE -> onEscape.run();
+            case GLFW_KEY_EQUAL, GLFW_KEY_KP_ADD       -> camera.zoom(+1f);
+            case GLFW_KEY_MINUS, GLFW_KEY_KP_SUBTRACT  -> camera.zoom(-1f);
+            default -> { /* not bound */ }
+        }
+    }
+
+    /** True when a viewport drag is in progress. UI can read this to suppress
+     *  hover effects on parts, show a status indicator, etc. */
+    public boolean isDragging() {
+        return activeButton != -1;
     }
 }

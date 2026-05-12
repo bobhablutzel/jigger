@@ -36,7 +36,15 @@ import imgui.glfw.ImGuiImplGlfw;
 import imgui.type.ImInt;
 import imgui.type.ImString;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.glfw.GLFWCharCallback;
+import org.lwjgl.glfw.GLFWCursorEnterCallback;
+import org.lwjgl.glfw.GLFWCursorPosCallback;
+import org.lwjgl.glfw.GLFWKeyCallback;
+import org.lwjgl.glfw.GLFWMouseButtonCallback;
+import org.lwjgl.glfw.GLFWScrollCallback;
+import org.lwjgl.glfw.GLFWWindowFocusCallback;
 
+import java.nio.DoubleBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -71,6 +79,14 @@ public class ImGuiAppState extends BaseAppState {
     private ViewportInputHandler viewportInput;
     private ImGuiCutSheetPanel cutSheetPanel;
 
+    // GLFW callback references — held to prevent GC.
+    private GLFWMouseButtonCallback mouseButtonCb;
+    private GLFWCursorPosCallback   cursorPosCb;
+    private GLFWScrollCallback      scrollCb;
+    private GLFWKeyCallback         keyCb;
+    private GLFWCharCallback        charCb;
+    private GLFWWindowFocusCallback windowFocusCb;
+    private GLFWCursorEnterCallback cursorEnterCb;
 
     // Command panel state.
     private final ImString commandInput = new ImString(512);
@@ -185,14 +201,90 @@ public class ImGuiAppState extends BaseAppState {
         ImGui.getIO().setIniFilename(iniPath.toAbsolutePath().toString());
 
         ImGui.styleColorsDark();
-        // Pass true — let imgui-java install its own GLFW callbacks,
-        // chaining onto whatever jME3 had registered. This is the
-        // documented happy path and works correctly on macOS where
-        // hand-rolled callback installation runs into thread-of-doom
-        // issues. We drive our viewport input by polling ImGui's IO
-        // state from update() each frame instead.
-        imGuiGlfw.init(handle, true);
+        // Pass false: we install GLFW callbacks ourselves below so we can
+        // route to the viewport input handler in the same callback.
+        imGuiGlfw.init(handle, false);
         imGuiGl3.init("#version 150");
+
+        installCallbacks(handle);
+    }
+
+    /**
+     * Single set of master GLFW callbacks. Each one calls ImGui's handler
+     * first (so ImGui's hover state stays current and panels respond), then
+     * dispatches to the viewport handler if ImGui doesn't want the event.
+     *
+     * <p>Note we don't chain to jME3's previous callbacks — replacing them
+     * is intentional; the whole point is to take input ownership.
+     */
+    private void installCallbacks(long handle) {
+        DoubleBuffer cx = org.lwjgl.BufferUtils.createDoubleBuffer(1);
+        DoubleBuffer cy = org.lwjgl.BufferUtils.createDoubleBuffer(1);
+
+        mouseButtonCb = new GLFWMouseButtonCallback() {
+            @Override public void invoke(long window, int button, int action, int mods) {
+                imGuiGlfw.mouseButtonCallback(window, button, action, mods);
+                if (action == GLFW.GLFW_PRESS && ImGui.getIO().getWantCaptureMouse()) {
+                    return;  // panel owns this gesture
+                }
+                GLFW.glfwGetCursorPos(window, cx, cy);
+                viewportInput.onMouseButton(button, action, mods, cx.get(0), cy.get(0));
+            }
+        };
+
+        cursorPosCb = new GLFWCursorPosCallback() {
+            @Override public void invoke(long window, double x, double y) {
+                imGuiGlfw.cursorPosCallback(window, x, y);
+                // Always forward — viewport handler ignores when no drag
+                // is active. This keeps drags that wander over panels alive.
+                viewportInput.onCursorPos(x, y);
+            }
+        };
+
+        scrollCb = new GLFWScrollCallback() {
+            @Override public void invoke(long window, double dx, double dy) {
+                imGuiGlfw.scrollCallback(window, dx, dy);
+                if (ImGui.getIO().getWantCaptureMouse()) return;
+                viewportInput.onScroll(dx, dy);
+            }
+        };
+
+        keyCb = new GLFWKeyCallback() {
+            @Override public void invoke(long window, int key, int scancode, int action, int mods) {
+                imGuiGlfw.keyCallback(window, key, scancode, action, mods);
+                if (ImGui.getIO().getWantCaptureKeyboard()) return;
+                viewportInput.onKey(key, action, mods);
+            }
+        };
+
+        charCb = new GLFWCharCallback() {
+            @Override public void invoke(long window, int codepoint) {
+                imGuiGlfw.charCallback(window, codepoint);
+            }
+        };
+
+        // Window focus and cursor enter are critical on macOS — without
+        // these forwarded, ImGui treats the window as unfocused and
+        // refuses to dispatch mouse/keyboard input.
+        windowFocusCb = new GLFWWindowFocusCallback() {
+            @Override public void invoke(long window, boolean focused) {
+                imGuiGlfw.windowFocusCallback(window, focused);
+            }
+        };
+
+        cursorEnterCb = new GLFWCursorEnterCallback() {
+            @Override public void invoke(long window, boolean entered) {
+                imGuiGlfw.cursorEnterCallback(window, entered);
+            }
+        };
+
+        GLFW.glfwSetMouseButtonCallback(handle, mouseButtonCb);
+        GLFW.glfwSetCursorPosCallback(handle, cursorPosCb);
+        GLFW.glfwSetScrollCallback(handle, scrollCb);
+        GLFW.glfwSetKeyCallback(handle, keyCb);
+        GLFW.glfwSetCharCallback(handle, charCb);
+        GLFW.glfwSetWindowFocusCallback(handle, windowFocusCb);
+        GLFW.glfwSetCursorEnterCallback(handle, cursorEnterCb);
     }
 
     @Override
@@ -211,15 +303,6 @@ public class ImGuiAppState extends BaseAppState {
 
     @Override
     protected void onDisable() { }
-
-    @Override
-    public void update(float tpf) {
-        // Drive viewport camera/selection by polling ImGui's IO state.
-        // ImGui has already processed this frame's input on the GL thread
-        // via its installed callbacks; we just read interpreted state and
-        // gate on WantCapture flags.
-        viewportInput.poll();
-    }
 
     @Override
     public void postRender() {
