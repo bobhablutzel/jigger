@@ -19,7 +19,7 @@
         <jme3.version>3.9.0-stable</jme3.version>
         <antlr4.version>4.13.1</antlr4.version>
         <lombok.version>1.18.38</lombok.version>
-        <imgui.version>1.89.0</imgui.version>
+        <imgui.version>1.88.0</imgui.version>
         <!-- JVM arg for the spike's exec:exec launch. Default is a harmless
              system-property no-op; the mac-thread profile overrides this
              to -XstartOnFirstThread when running on macOS, where GLFW

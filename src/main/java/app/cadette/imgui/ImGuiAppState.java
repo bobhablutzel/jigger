@@ -159,12 +159,15 @@ public class ImGuiAppState extends BaseAppState {
 
     @Override
     protected void initialize(Application app) {
+        System.err.println("[spike] AppState.initialize() entered on thread="
+                + Thread.currentThread().getName());
         if (!(app.getContext() instanceof LwjglWindow window)) {
             throw new IllegalStateException(
                     "ImGui spike requires LWJGL3 Display mode (got "
                             + app.getContext().getClass().getName() + ")");
         }
         long handle = window.getWindowHandle();
+        System.err.println("[spike] GLFW window handle = " + Long.toHexString(handle));
 
         // Disable jME3's default flyCam — we're owning input from scratch.
         // The flyCam is still attached after simpleInitApp ran; pull its
@@ -207,6 +210,7 @@ public class ImGuiAppState extends BaseAppState {
         imGuiGl3.init("#version 150");
 
         installCallbacks(handle);
+        System.err.println("[spike] GLFW callbacks installed; initialize() complete");
     }
 
     /**
@@ -223,6 +227,8 @@ public class ImGuiAppState extends BaseAppState {
 
         mouseButtonCb = new GLFWMouseButtonCallback() {
             @Override public void invoke(long window, int button, int action, int mods) {
+                System.err.println("[spike] mouseButton callback: btn=" + button
+                        + " action=" + action + " thread=" + Thread.currentThread().getName());
                 imGuiGlfw.mouseButtonCallback(window, button, action, mods);
                 if (action == GLFW.GLFW_PRESS && ImGui.getIO().getWantCaptureMouse()) {
                     return;  // panel owns this gesture
@@ -304,8 +310,15 @@ public class ImGuiAppState extends BaseAppState {
     @Override
     protected void onDisable() { }
 
+    private int frameCount = 0;
+
     @Override
     public void postRender() {
+        if (frameCount < 3) {
+            System.err.println("[spike] postRender #" + frameCount
+                    + " thread=" + Thread.currentThread().getName());
+            frameCount++;
+        }
         // Refresh selection highlights each frame so they follow parts that
         // get moved/resized via commands. Cheap when selection is empty.
         syncSelectionHighlights();
