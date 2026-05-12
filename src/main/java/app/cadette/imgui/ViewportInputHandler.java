@@ -42,11 +42,17 @@ import static org.lwjgl.glfw.GLFW.*;
  */
 public class ViewportInputHandler {
 
+    /** Click event: screen coords + the GLFW mods active at click time. */
+    public record ClickEvent(double x, double y, int mods) {}
+
     private final OrbitCamera camera;
     /** Invoked when the user presses "R". Caller decides whether that means
      *  "frame all parts" or "reset to defaults" — typically frame-all when
      *  the scene has parts, defaults when it's empty. */
     private final Runnable onReset;
+    /** Invoked when LMB is released without a meaningful drag (a click).
+     *  Screen coords are in window pixels; caller does the raycast. */
+    private final java.util.function.Consumer<ClickEvent> onClick;
 
     /** -1 when no gesture is active; otherwise the GLFW button that started it. */
     private int activeButton = -1;
@@ -55,9 +61,18 @@ public class ViewportInputHandler {
     private int activeMods = 0;
     private double lastX, lastY;
 
-    public ViewportInputHandler(OrbitCamera camera, Runnable onReset) {
+    // LMB click detection: where + when the press happened, plus how far
+    // the cursor has wandered since. A release with small motion → click.
+    private double pressX, pressY;
+    private double pressMotionAccum;
+    private static final double CLICK_MOTION_TOLERANCE_PX = 5.0;
+
+    public ViewportInputHandler(OrbitCamera camera,
+                                 Runnable onReset,
+                                 java.util.function.Consumer<ClickEvent> onClick) {
         this.camera = camera;
         this.onReset = onReset;
+        this.onClick = onClick;
     }
 
     // Called only for events the viewport owns (ImGui didn't want them).
@@ -67,7 +82,19 @@ public class ViewportInputHandler {
             activeMods = mods;
             lastX = cursorX;
             lastY = cursorY;
+            // LMB-down: snapshot for click detection.
+            if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                pressX = cursorX;
+                pressY = cursorY;
+                pressMotionAccum = 0;
+            }
         } else if (action == GLFW_RELEASE && button == activeButton) {
+            // LMB-up with negligible motion → click. Larger motion → drag
+            // (currently unbound; reserved for box-select).
+            if (button == GLFW_MOUSE_BUTTON_LEFT
+                    && pressMotionAccum < CLICK_MOTION_TOLERANCE_PX) {
+                onClick.accept(new ClickEvent(cursorX, cursorY, activeMods));
+            }
             activeButton = -1;
             activeMods = 0;
         }
@@ -80,7 +107,10 @@ public class ViewportInputHandler {
         double dy = y - lastY;
         lastX = x;
         lastY = y;
-        if (activeButton == GLFW_MOUSE_BUTTON_RIGHT) {
+        if (activeButton == GLFW_MOUSE_BUTTON_LEFT) {
+            // Accumulate motion to distinguish click from drag.
+            pressMotionAccum += Math.abs(dx) + Math.abs(dy);
+        } else if (activeButton == GLFW_MOUSE_BUTTON_RIGHT) {
             boolean shift = (activeMods & GLFW_MOD_SHIFT) != 0;
             if (shift) {
                 camera.pan((float) dx, (float) dy);

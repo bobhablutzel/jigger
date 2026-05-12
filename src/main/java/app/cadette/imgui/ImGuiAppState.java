@@ -46,7 +46,9 @@ import java.nio.DoubleBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Draws the ImGui overlay each frame and owns input dispatch for the
@@ -90,11 +92,16 @@ public class ImGuiAppState extends BaseAppState {
     // Default-layout flag — true on first run (no imgui.ini exists yet).
     private boolean buildDefaultLayout;
 
+    // Selection state. Insertion-ordered so the UI can display in click order.
+    private final Set<String> selected = new LinkedHashSet<>();
+
     public ImGuiAppState(CommandExecutor executor) {
         this.executor = executor;
         appendCommand("*** CADette ImGui SPIKE — engine-UI + docking ***");
         appendCommand("");
         appendCommand("Viewport bindings:");
+        appendCommand("  LMB click ......... select part (shift = add, Cmd/Ctrl = toggle)");
+        appendCommand("  click empty ....... deselect all");
         appendCommand("  RMB drag .......... orbit");
         appendCommand("  Shift + RMB drag .. pan");
         appendCommand("  Scroll ............ zoom (mouse wheel / trackpad two-finger)");
@@ -138,9 +145,9 @@ public class ImGuiAppState extends BaseAppState {
         }
 
         // Camera and viewport input. R reframes the whole scene if parts
-        // exist; falls back to defaults for an empty scene.
+        // exist; LMB-click raycasts against the scene to update selection.
         orbitCamera = new OrbitCamera(app.getCamera());
-        viewportInput = new ViewportInputHandler(orbitCamera, this::resetView);
+        viewportInput = new ViewportInputHandler(orbitCamera, this::resetView, this::handleViewportClick);
 
         // ---- ImGui setup ------------------------------------------------
         ImGui.createContext();
@@ -257,7 +264,7 @@ public class ImGuiAppState extends BaseAppState {
 
         drawCommandPanel();
         drawLogPanel();
-        drawScenePanel();
+        drawPartsPanel();
 
         ImGui.render();
         imGuiGl3.renderDrawData(ImGui.getDrawData());
@@ -285,7 +292,7 @@ public class ImGuiAppState extends BaseAppState {
 
         imgui.internal.ImGui.dockBuilderDockWindow("Command", bottomId.get());
         imgui.internal.ImGui.dockBuilderDockWindow("Log",     bottomId.get());
-        imgui.internal.ImGui.dockBuilderDockWindow("Scene",   rightId.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("Parts",   rightId.get());
 
         imgui.internal.ImGui.dockBuilderFinish(dockId);
     }
@@ -363,20 +370,78 @@ public class ImGuiAppState extends BaseAppState {
         ImGui.end();
     }
 
-    // ---- Scene panel -----------------------------------------------------
+    // ---- Parts panel -----------------------------------------------------
 
-    private void drawScenePanel() {
-        ImGui.begin("Scene", ImGuiWindowFlags.NoCollapse);
+    private void drawPartsPanel() {
+        ImGui.begin("Parts", ImGuiWindowFlags.NoCollapse);
         SceneManager scene = (SceneManager) getApplication();
         var parts = scene.getAllParts();
-        ImGui.text(parts.size() + " part" + (parts.size() == 1 ? "" : "s"));
+        ImGui.text(parts.size() + " part" + (parts.size() == 1 ? "" : "s")
+                + (selected.isEmpty() ? "" : ", " + selected.size() + " selected"));
         ImGui.separator();
         for (var entry : parts.entrySet()) {
             var part = entry.getValue();
-            ImGui.text(String.format("%s — %.1f × %.1f mm",
+            boolean isSelected = selected.contains(part.getName());
+            if (isSelected) {
+                ImGui.pushStyleColor(ImGuiCol.Text, 1f, 0.85f, 0.2f, 1f);  // yellow
+            }
+            ImGui.text(String.format("%s%s — %.1f × %.1f mm",
+                    isSelected ? "● " : "  ",
                     part.getName(), part.getCutWidthMm(), part.getCutHeightMm()));
+            if (isSelected) {
+                ImGui.popStyleColor();
+            }
         }
         ImGui.end();
+    }
+
+    /**
+     * Raycast from the camera through the cursor position, find the
+     * closest part the ray hits, and update {@link #selected} according to
+     * the modifier keys: shift = add, Cmd/Ctrl = toggle, plain = replace.
+     * Click on empty space with no modifier = deselect all.
+     */
+    private void handleViewportClick(ViewportInputHandler.ClickEvent click) {
+        SceneManager scene = (SceneManager) getApplication();
+        com.jme3.renderer.Camera cam = scene.getCamera();
+
+        // GLFW cursor coords have origin top-left; jME3 screen coords have
+        // origin bottom-left. Flip Y when handing to getWorldCoordinates.
+        float sx = (float) click.x();
+        float sy = cam.getHeight() - (float) click.y();
+        com.jme3.math.Vector2f screen = new com.jme3.math.Vector2f(sx, sy);
+        com.jme3.math.Vector3f near = cam.getWorldCoordinates(screen, 0f);
+        com.jme3.math.Vector3f far  = cam.getWorldCoordinates(screen, 1f);
+        com.jme3.math.Ray ray = new com.jme3.math.Ray(near, far.subtractLocal(near).normalizeLocal());
+
+        com.jme3.collision.CollisionResults results = new com.jme3.collision.CollisionResults();
+        scene.getObjectsNode().collideWith(ray, results);
+
+        String hit = null;
+        if (results.size() > 0) {
+            com.jme3.scene.Spatial s = results.getClosestCollision().getGeometry();
+            while (s != null) {
+                String name = s.getName();
+                if (name != null && name.startsWith("node_")) {
+                    hit = name.substring("node_".length());
+                    break;
+                }
+                s = s.getParent();
+            }
+        }
+
+        boolean shift  = (click.mods() & GLFW.GLFW_MOD_SHIFT) != 0;
+        boolean toggle = (click.mods() & (GLFW.GLFW_MOD_CONTROL | GLFW.GLFW_MOD_SUPER)) != 0;
+        if (hit == null) {
+            if (!shift && !toggle) selected.clear();
+        } else if (toggle) {
+            if (!selected.add(hit)) selected.remove(hit);
+        } else if (shift) {
+            selected.add(hit);
+        } else {
+            selected.clear();
+            selected.add(hit);
+        }
     }
 
     /**
