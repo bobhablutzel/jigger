@@ -74,6 +74,13 @@ public class CadetteImGuiSpike {
         // when the GL context comes up.
         sceneManager.getStateManager().attach(new ImGuiAppState(executor));
 
-        sceneManager.start();
+        // start(Display, true) runs jME3's render+poll loop on the calling
+        // thread. With -XstartOnFirstThread, the caller is the JVM main
+        // thread = OS thread 0. macOS GLFW polling and Cocoa run-loop
+        // dispatch only work on thread 0; default start() spawns a worker
+        // and gets stuck.
+        System.err.println("[spike] main() calling start(Display, true) on thread="
+                + Thread.currentThread().getName());
+        sceneManager.start(com.jme3.system.JmeContext.Type.Display, true);
     }
 }
