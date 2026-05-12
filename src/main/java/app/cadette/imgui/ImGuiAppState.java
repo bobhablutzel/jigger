@@ -29,10 +29,14 @@ import imgui.flag.ImGuiConfigFlags;
 import imgui.flag.ImGuiDockNodeFlags;
 import imgui.flag.ImGuiInputTextFlags;
 import imgui.flag.ImGuiWindowFlags;
+import imgui.flag.ImGuiDir;
 import imgui.gl3.ImGuiImplGl3;
 import imgui.glfw.ImGuiImplGlfw;
+import imgui.type.ImInt;
 import imgui.type.ImString;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -63,6 +67,11 @@ public class ImGuiAppState extends BaseAppState {
     private boolean commandScrollPending = false;
     private boolean logScrollPending = false;
     private boolean focusCommandInput = true;  // grab focus on first frame
+
+    // Default-layout setup: true on first launch (no imgui.ini yet), so we
+    // build a sensible dock layout via DockBuilder. After that the user's
+    // saved layout is restored.
+    private boolean buildDefaultLayout;
 
     public ImGuiAppState(CommandExecutor executor) {
         this.executor = executor;
@@ -108,6 +117,21 @@ public class ImGuiAppState extends BaseAppState {
         // and saves layout to imgui.ini.
         ImGui.getIO().setConfigFlags(
                 ImGuiConfigFlags.NavEnableKeyboard | ImGuiConfigFlags.DockingEnable);
+
+        // Persist panel layout under ~/.cadette/ instead of the project root.
+        // Must be set before any ImGui.newFrame() call — that's when ImGui
+        // loads the ini. Track whether the file existed pre-init: if not,
+        // we'll build a sensible default layout on the first frame so the
+        // user doesn't see floating panels covering the 3D viewport.
+        Path iniPath = Path.of(System.getProperty("user.home"), ".cadette", "imgui.ini");
+        try {
+            Files.createDirectories(iniPath.getParent());
+        } catch (Exception e) {
+            // Non-fatal — fall back to in-project imgui.ini.
+        }
+        buildDefaultLayout = !Files.exists(iniPath);
+        ImGui.getIO().setIniFilename(iniPath.toAbsolutePath().toString());
+
         ImGui.styleColorsDark();
         imGuiGlfw.init(handle, true);
         imGuiGl3.init("#version 150");
@@ -138,8 +162,13 @@ public class ImGuiAppState extends BaseAppState {
         // start floating can be docked onto this; "PassthruCentralNode"
         // makes the empty centre of the dock space transparent so the 3D
         // viewport remains visible behind it.
-        ImGui.dockSpaceOverViewport(ImGui.getMainViewport(),
+        int dockId = ImGui.dockSpaceOverViewport(ImGui.getMainViewport(),
                 ImGuiDockNodeFlags.PassthruCentralNode);
+
+        if (buildDefaultLayout) {
+            buildDefaultLayout(dockId);
+            buildDefaultLayout = false;
+        }
 
         drawCommandPanel();
         drawLogPanel();
@@ -147,6 +176,43 @@ public class ImGuiAppState extends BaseAppState {
 
         ImGui.render();
         imGuiGl3.renderDrawData(ImGui.getDrawData());
+    }
+
+    /**
+     * First-launch dock layout. Splits the host dockspace so the central
+     * area remains transparent (3D viewport shows through), with Scene
+     * docked right and Command + Log tabbed along the bottom.
+     *
+     * <p>DockBuilder lives in {@code imgui.internal.ImGui} — fully-qualified
+     * to disambiguate from the public {@code imgui.ImGui}.
+     */
+    private static void buildDefaultLayout(int dockId) {
+        // Wipe any prior layout (handles "first frame ever" and
+        // "user deleted the ini" the same way).
+        imgui.internal.ImGui.dockBuilderRemoveNode(dockId);
+        // DockSpace flag is in the internal namespace, not the public one.
+        imgui.internal.ImGui.dockBuilderAddNode(dockId,
+                imgui.internal.flag.ImGuiDockNodeFlags.DockSpace);
+        imgui.internal.ImGui.dockBuilderSetNodeSize(dockId,
+                ImGui.getMainViewport().getSizeX(), ImGui.getMainViewport().getSizeY());
+
+        // Split bottom 30% off the dockspace for Command/Log; the remaining
+        // upper portion is split again to peel off a right-side strip for
+        // Scene. What's left in the middle is the passthru central node
+        // where the 3D viewport stays visible.
+        ImInt bottomId = new ImInt();
+        ImInt topId = new ImInt();
+        imgui.internal.ImGui.dockBuilderSplitNode(dockId, ImGuiDir.Down, 0.30f, bottomId, topId);
+
+        ImInt rightId = new ImInt();
+        ImInt centerId = new ImInt();
+        imgui.internal.ImGui.dockBuilderSplitNode(topId.get(), ImGuiDir.Right, 0.25f, rightId, centerId);
+
+        imgui.internal.ImGui.dockBuilderDockWindow("Command", bottomId.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("Log",     bottomId.get());  // tabbed with Command
+        imgui.internal.ImGui.dockBuilderDockWindow("Scene",   rightId.get());
+
+        imgui.internal.ImGui.dockBuilderFinish(dockId);
     }
 
     // ---- Command panel ---------------------------------------------------
