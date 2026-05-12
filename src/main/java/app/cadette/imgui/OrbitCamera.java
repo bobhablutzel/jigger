@@ -104,6 +104,28 @@ public class OrbitCamera {
         applyToCamera();
     }
 
+    /**
+     * Frame a world-space axis-aligned box: focal point at its centre,
+     * distance set so the box fills roughly two-thirds of the view at the
+     * camera's current FOV. Preserves the current orbit orientation.
+     *
+     * <p>Used by the "R" key to fit the whole scene; calling code computes
+     * the union of all visible parts' AABBs.
+     */
+    public void frameBox(Vector3f min, Vector3f max) {
+        focalPoint.set(min).addLocal(max).multLocal(0.5f);
+        // Max-extent fit: the larger of the box's three half-spans, padded.
+        float halfX = (max.x - min.x) * 0.5f;
+        float halfY = (max.y - min.y) * 0.5f;
+        float halfZ = (max.z - min.z) * 0.5f;
+        float maxHalf = Math.max(halfX, Math.max(halfY, halfZ));
+        // tan(FOV/2) ≈ tan(22.5°) ≈ 0.414 for jME3's default 45° FOV.
+        // Padding factor 1.5 leaves room around the box instead of clipping.
+        float fit = (maxHalf / 0.414f) * 1.5f;
+        distance = clamp(fit, MIN_DISTANCE, MAX_DISTANCE);
+        applyToCamera();
+    }
+
     // ---- Apply state to jME3 camera ---------------------------------------
 
     private void applyToCamera() {

@@ -99,7 +99,7 @@ public class ImGuiAppState extends BaseAppState {
         appendCommand("  Shift + RMB drag .. pan");
         appendCommand("  Scroll ............ zoom (mouse wheel / trackpad two-finger)");
         appendCommand("  F / T / S / I ..... front / top / side / iso view");
-        appendCommand("  R ................. reset view");
+        appendCommand("  R ................. frame all parts (reset if empty)");
         appendCommand("");
         appendCommand("Try: create part \"p\" length 600 material \"lumber-2x4-spf\"");
         appendCommand("");
@@ -137,9 +137,10 @@ public class ImGuiAppState extends BaseAppState {
                     new com.jme3.math.ColorRGBA(0.10f, 0.18f, 0.22f, 1f));  // dark teal
         }
 
-        // Camera and viewport input.
+        // Camera and viewport input. R reframes the whole scene if parts
+        // exist; falls back to defaults for an empty scene.
         orbitCamera = new OrbitCamera(app.getCamera());
-        viewportInput = new ViewportInputHandler(orbitCamera);
+        viewportInput = new ViewportInputHandler(orbitCamera, this::resetView);
 
         // ---- ImGui setup ------------------------------------------------
         ImGui.createContext();
@@ -376,6 +377,36 @@ public class ImGuiAppState extends BaseAppState {
                     part.getName(), part.getCutWidthMm(), part.getCutHeightMm()));
         }
         ImGui.end();
+    }
+
+    /**
+     * "R" handler: frame all parts in the scene if any exist; otherwise
+     * fall back to the camera's default reset.
+     */
+    private void resetView() {
+        SceneManager scene = (SceneManager) getApplication();
+        com.jme3.math.Vector3f min = null;
+        com.jme3.math.Vector3f max = null;
+        for (String name : scene.getAllParts().keySet()) {
+            com.jme3.math.Vector3f[] bb = scene.computeObjectAABB(name);
+            if (bb == null) continue;
+            if (min == null) {
+                min = bb[0].clone();
+                max = bb[1].clone();
+            } else {
+                min.x = Math.min(min.x, bb[0].x);
+                min.y = Math.min(min.y, bb[0].y);
+                min.z = Math.min(min.z, bb[0].z);
+                max.x = Math.max(max.x, bb[1].x);
+                max.y = Math.max(max.y, bb[1].y);
+                max.z = Math.max(max.z, bb[1].z);
+            }
+        }
+        if (min != null) {
+            orbitCamera.frameBox(min, max);
+        } else {
+            orbitCamera.reset();
+        }
     }
 
     // ---- Output buffers --------------------------------------------------

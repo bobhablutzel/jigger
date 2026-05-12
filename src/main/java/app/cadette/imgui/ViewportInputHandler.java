@@ -43,6 +43,10 @@ import static org.lwjgl.glfw.GLFW.*;
 public class ViewportInputHandler {
 
     private final OrbitCamera camera;
+    /** Invoked when the user presses "R". Caller decides whether that means
+     *  "frame all parts" or "reset to defaults" — typically frame-all when
+     *  the scene has parts, defaults when it's empty. */
+    private final Runnable onReset;
 
     /** -1 when no gesture is active; otherwise the GLFW button that started it. */
     private int activeButton = -1;
@@ -51,8 +55,9 @@ public class ViewportInputHandler {
     private int activeMods = 0;
     private double lastX, lastY;
 
-    public ViewportInputHandler(OrbitCamera camera) {
+    public ViewportInputHandler(OrbitCamera camera, Runnable onReset) {
         this.camera = camera;
+        this.onReset = onReset;
     }
 
     // Called only for events the viewport owns (ImGui didn't want them).
@@ -98,7 +103,7 @@ public class ViewportInputHandler {
             case GLFW_KEY_T -> camera.viewTop();
             case GLFW_KEY_S -> camera.viewSide();
             case GLFW_KEY_I -> camera.viewIso();
-            case GLFW_KEY_R -> camera.reset();
+            case GLFW_KEY_R -> onReset.run();
             case GLFW_KEY_EQUAL, GLFW_KEY_KP_ADD       -> camera.zoom(+1f);
             case GLFW_KEY_MINUS, GLFW_KEY_KP_SUBTRACT  -> camera.zoom(-1f);
             default -> { /* not bound */ }
