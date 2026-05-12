@@ -75,6 +75,7 @@ public class ImGuiAppState extends BaseAppState {
     // Camera + input. Created in initialize once we have the jME3 camera.
     private OrbitCamera orbitCamera;
     private ViewportInputHandler viewportInput;
+    private ImGuiCutSheetPanel cutSheetPanel;
 
     // GLFW callback references — held to prevent GC.
     private GLFWMouseButtonCallback mouseButtonCb;
@@ -176,6 +177,7 @@ public class ImGuiAppState extends BaseAppState {
         orbitCamera = new OrbitCamera(app.getCamera());
         viewportInput = new ViewportInputHandler(
                 orbitCamera, this::resetView, this::handleViewportClick, this::handleEscape);
+        cutSheetPanel = new ImGuiCutSheetPanel((SceneManager) app, executor::getUnits);
 
         // ---- ImGui setup ------------------------------------------------
         ImGui.createContext();
@@ -262,6 +264,7 @@ public class ImGuiAppState extends BaseAppState {
 
     @Override
     protected void cleanup(Application app) {
+        if (cutSheetPanel != null) cutSheetPanel.dispose();
         imGuiGl3.shutdown();
         imGuiGlfw.shutdown();
         ImGui.destroyContext();
@@ -297,6 +300,7 @@ public class ImGuiAppState extends BaseAppState {
         drawCommandPanel();
         drawLogPanel();
         drawPartsPanel();
+        cutSheetPanel.draw();
 
         ImGui.render();
         imGuiGl3.renderDrawData(ImGui.getDrawData());
@@ -322,9 +326,10 @@ public class ImGuiAppState extends BaseAppState {
         ImInt centerId = new ImInt();
         imgui.internal.ImGui.dockBuilderSplitNode(topId.get(), ImGuiDir.Right, 0.25f, rightId, centerId);
 
-        imgui.internal.ImGui.dockBuilderDockWindow("Command", bottomId.get());
-        imgui.internal.ImGui.dockBuilderDockWindow("Log",     bottomId.get());
-        imgui.internal.ImGui.dockBuilderDockWindow("Parts",   rightId.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("Command",   bottomId.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("Log",       bottomId.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("Parts",     rightId.get());
+        imgui.internal.ImGui.dockBuilderDockWindow("Cut Sheet", rightId.get());  // tabbed with Parts
 
         imgui.internal.ImGui.dockBuilderFinish(dockId);
     }
