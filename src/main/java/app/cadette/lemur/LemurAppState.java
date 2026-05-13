@@ -22,11 +22,10 @@ import app.cadette.command.CommandExecutor;
 import com.jme3.app.Application;
 import com.jme3.app.SimpleApplication;
 import com.jme3.app.state.BaseAppState;
+import com.jme3.input.InputManager;
 import com.jme3.input.KeyInput;
-import com.jme3.input.event.MouseButtonEvent;
-import com.jme3.input.event.MouseMotionEvent;
+import com.jme3.math.Vector2f;
 import com.jme3.math.Vector3f;
-import com.jme3.scene.Spatial;
 import com.jme3.system.AppSettings;
 import com.simsilica.lemur.Axis;
 import com.simsilica.lemur.Container;
@@ -35,11 +34,10 @@ import com.simsilica.lemur.Label;
 import com.simsilica.lemur.ListBox;
 import com.simsilica.lemur.TextField;
 import com.simsilica.lemur.component.SpringGridLayout;
+import com.simsilica.lemur.core.GuiControl;
 import com.simsilica.lemur.core.VersionedList;
 import com.simsilica.lemur.event.KeyAction;
 import com.simsilica.lemur.event.KeyActionListener;
-import com.simsilica.lemur.event.MouseEventControl;
-import com.simsilica.lemur.event.MouseListener;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
@@ -147,22 +145,38 @@ public class LemurAppState extends BaseAppState {
         // Right-anchor: panel's top-left at (winW - PANEL_W - pad, winH - pad).
         panel.setLocalTranslation(winW - PANEL_W - PANEL_PAD, winH - PANEL_PAD, 0);
 
-        // Track mouse-over-UI so the camera controller can gate scroll-zoom
-        // and click-orbit while the cursor is on a panel. enter/exit fire
-        // for the container as a whole, including motion across child widgets.
-        MouseEventControl.addListenersToSpatial(panel, new MouseListener() {
-            @Override
-            public void mouseEntered(MouseMotionEvent e, Spatial t, Spatial c) { mouseOverUi = true; }
-            @Override
-            public void mouseExited(MouseMotionEvent e, Spatial t, Spatial c)  { mouseOverUi = false; }
-            @Override
-            public void mouseMoved(MouseMotionEvent e, Spatial t, Spatial c)   { /* no-op */ }
-            @Override
-            public void mouseButtonEvent(MouseButtonEvent e, Spatial t, Spatial c) { /* no-op */ }
-        });
-
         GuiGlobals.getInstance().requestFocus(commandInput);
         return panel;
+    }
+
+    @Override
+    public void update(float tpf) {
+        super.update(tpf);
+        if (commandPanel == null) {
+            return;
+        }
+        // Poll cursor-vs-panel hit test each frame. The earlier
+        // MouseEventControl enter/exit approach didn't fire on the
+        // parent Container in practice, so do the bounds test directly
+        // — no Lemur event-dispatch assumptions, just geometry.
+        InputManager input = getApplication().getInputManager();
+        Vector2f cursor = input.getCursorPosition();
+        Vector3f loc = commandPanel.getLocalTranslation();
+        GuiControl gc = commandPanel.getControl(GuiControl.class);
+        if (gc == null || cursor == null) {
+            return;
+        }
+        Vector3f size = gc.getSize();
+        // Lemur Containers anchor by top-left in jME3 GUI coords (Y up):
+        // panel occupies [loc.x, loc.x + size.x] × [loc.y - size.y, loc.y].
+        boolean over = cursor.x >= loc.x
+                    && cursor.x <= loc.x + size.x
+                    && cursor.y >= loc.y - size.y
+                    && cursor.y <= loc.y;
+        if (over != mouseOverUi) {
+            mouseOverUi = over;
+            System.err.println("[lemur-app] mouseOverUi=" + over);
+        }
     }
 
     private void runCurrentInput() {
