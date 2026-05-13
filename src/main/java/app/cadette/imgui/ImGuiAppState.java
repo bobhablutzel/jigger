@@ -192,8 +192,8 @@ public class ImGuiAppState extends BaseAppState {
 
         // ---- ImGui setup ------------------------------------------------
         ImGui.createContext();
-        ImGui.getIO().setConfigFlags(
-                ImGuiConfigFlags.NavEnableKeyboard | ImGuiConfigFlags.DockingEnable);
+        ImGui.getIO().setConfigFlags(ImGuiConfigFlags.NavEnableKeyboard);
+        // DockingEnable disabled for hit-test diagnostic.
 
         // Persist layout under ~/.cadette/imgui.ini (set before any newFrame).
         Path iniPath = Path.of(System.getProperty("user.home"), ".cadette", "imgui.ini");
@@ -372,19 +372,11 @@ public class ImGuiAppState extends BaseAppState {
         }
         frameCount++;
 
-        int dockId = ImGui.dockSpaceOverViewport(ImGui.getMainViewport(),
-                ImGuiDockNodeFlags.PassthruCentralNode);
-
-        // DockBuilder programmatic layout is silently failing on macOS
-        // (panels end up in unrenderable dock nodes). Until that's
-        // understood, fall back to setNextWindowPos on each panel below
-        // with FirstUseEver — windows appear floating at sensible
-        // positions on first launch, and imgui.ini takes over on
-        // subsequent launches if the user docks them by hand.
-        // if (buildDefaultLayout) {
-        //     buildDefaultLayout(dockId);
-        //     buildDefaultLayout = false;
-        // }
+        // DIAGNOSTIC: dock space + docking flag disabled to rule out
+        // PassthruCentralNode eating input on macOS. Panels are pure
+        // floating windows in this build.
+        // int dockId = ImGui.dockSpaceOverViewport(ImGui.getMainViewport(),
+        //         ImGuiDockNodeFlags.PassthruCentralNode);
 
         // DIAGNOSTIC: ImGui's built-in demo window. If this renders on Mac,
         // ImGui works and our panel-layout code is the bug. If it doesn't,
