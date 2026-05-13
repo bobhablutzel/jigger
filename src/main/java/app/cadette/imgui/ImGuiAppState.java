@@ -207,7 +207,11 @@ public class ImGuiAppState extends BaseAppState {
         // Pass false: we install GLFW callbacks ourselves below so we can
         // route to the viewport input handler in the same callback.
         imGuiGlfw.init(handle, false);
-        imGuiGl3.init("#version 150");
+        // GLSL 330 instead of 150: Apple's GL 4.1 Core profile on Metal
+        // exposes GLSL 4.10 and seems to silently fail to compile the
+        // 1.50-versioned shaders ImGui ships. 330 is the most common
+        // compat value used by imgui-java examples and matches Core profile.
+        imGuiGl3.init("#version 330");
 
         installCallbacks(handle);
         System.err.println("[spike] GLFW callbacks installed; initialize() complete");
