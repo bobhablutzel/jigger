@@ -22,7 +22,6 @@ import app.cadette.CutListExporter;
 import app.cadette.CutSheetExporter;
 import app.cadette.SceneManager;
 import app.cadette.UnitSystem;
-import app.cadette.ViewLayoutMode;
 import app.cadette.model.*;
 import com.jme3.math.ColorRGBA;
 import com.jme3.math.Vector3f;
@@ -1446,12 +1445,6 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             scene.setKerfMm(value);
             String abbr = executor.getUnits().getAbbreviation();
             return String.format("Kerf set to %.1f %s (%.1f mm).", fromMm(value), abbr, value);
-        }
-        if (ctx.layoutMode() != null) {
-            ViewLayoutMode mode = ctx.layoutMode().TABS() != null
-                    ? ViewLayoutMode.TABBED : ViewLayoutMode.SPLIT_PANE;
-            executor.setLayoutMode(mode);
-            return "Layout set to " + (mode == ViewLayoutMode.TABBED ? "tabbed" : "split pane") + ".";
         }
         if (ctx.scriptPathSpec() != null) {
             var spec = ctx.scriptPathSpec();
@@ -2956,7 +2949,6 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                   set units <unit>                 — change display/input units
                   set material <mat>               — change default material
                   set kerf <value>                 — saw blade kerf width (default 3.2mm)
-                  set layout tabs|split           — switch between tabbed and split-pane view
                   set script_path "<dir>"[,...]   — script search prefix; 'none' clears
                                                      (defaults ~/.cadette/scripts/ and ./scripts/ always tried after)
                   export cutsheet pdf [file]      — export cut sheets to PDF (opens save dialog if no file)

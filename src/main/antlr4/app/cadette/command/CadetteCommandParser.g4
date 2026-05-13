@@ -395,7 +395,6 @@ setCommand
     : SET UNITS unitName
     | SET MATERIAL materialName
     | SET KERF expression
-    | SET LAYOUT layoutMode
     | SET SCRIPT_PATH scriptPathSpec
     ;
 
@@ -406,11 +405,6 @@ setCommand
 scriptPathSpec
     : NONE
     | STRING (COMMA STRING)*
-    ;
-
-layoutMode
-    : TABS
-    | SPLIT
     ;
 
 exportCommand

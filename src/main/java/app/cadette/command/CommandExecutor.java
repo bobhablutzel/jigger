@@ -20,7 +20,6 @@ package app.cadette.command;
 
 import app.cadette.SceneManager;
 import app.cadette.UnitSystem;
-import app.cadette.ViewLayoutMode;
 import app.cadette.model.*;
 import com.jme3.math.Vector3f;
 import lombok.AccessLevel;
@@ -56,8 +55,6 @@ public class CommandExecutor {
             UnitSystem.MILLIMETERS.getMeasurementSystem());
     private final List<Consumer<UnitSystem>> unitChangeListeners = new ArrayList<>();
     private final List<Consumer<Material>> materialChangeListeners = new ArrayList<>();
-    private final List<Consumer<ViewLayoutMode>> layoutChangeListeners = new ArrayList<>();
-    @Getter private ViewLayoutMode layoutMode = ViewLayoutMode.TABBED;
 
     private final Deque<UndoableAction> undoStack = new ArrayDeque<>();
     private final Deque<UndoableAction> redoStack = new ArrayDeque<>();
@@ -210,16 +207,6 @@ public class CommandExecutor {
 
     public void addMaterialChangeListener(Consumer<Material> listener) {
         materialChangeListeners.add(listener);
-    }
-
-    // Hand-coded: fires change listeners on write. @Setter can't express dispatch.
-    public void setLayoutMode(ViewLayoutMode mode) {
-        this.layoutMode = mode;
-        layoutChangeListeners.forEach(l -> l.accept(mode));
-    }
-
-    public void addLayoutChangeListener(Consumer<ViewLayoutMode> listener) {
-        layoutChangeListeners.add(listener);
     }
 
     /**

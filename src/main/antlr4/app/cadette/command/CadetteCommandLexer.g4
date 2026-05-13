@@ -66,8 +66,6 @@ JPEG       : 'jpeg' | 'jpg' ;
 CSV        : 'csv' ;
 LAYOUT     : 'layout' | 'layouts' ;
 KERF       : 'kerf' ;
-TABS       : 'tabs' | 'tabbed' ;
-SPLIT      : 'split' | 'split-pane' | 'side-by-side' ;
 ALIGN      : 'align' ;
 GAP        : 'gap' ;
 OF         : 'of' ;

@@ -398,82 +398,30 @@ public class CadetteApp {
     // View container (tab bar + split-pane layout toggle)
     // ---------------------------------------------------------------------
 
-    private static final Color TAB_BG = new Color(50, 50, 58);
-    private static final Color TAB_ACTIVE_FG = new Color(220, 220, 220);
-    private static final Color TAB_INACTIVE_FG = new Color(120, 120, 120);
-    private static final Font TAB_FONT = new Font(Font.SANS_SERIF, Font.BOLD, 11);
-
     /** The view container plus the Runnable that applies the initial layout. */
     private record ViewContainer(JPanel panel, Runnable applyLayout) {}
 
     /**
-     * Build the container around {@code hSplitPane} (viewport + cut sheet) with a
-     * tab bar for tabbed mode. The caller must invoke {@link ViewContainer#applyLayout()}
-     * after the frame is realized (proportional divider locations need a non-zero width).
+     * Build the container around {@code hSplitPane} (viewport + cut sheet).
+     * Always split-pane mode now — the tabbed alternative + grammar were
+     * retired 2026-05-13 in favour of the Lemur app's draggable splitter
+     * tree. The caller must invoke {@link ViewContainer#applyLayout()}
+     * after the frame is realized (proportional divider locations need
+     * a non-zero width).
      */
     private static ViewContainer buildViewContainer(JSplitPane hSplitPane,
                                                      CutSheetPanel cutSheetPanel,
                                                      CommandExecutor executor,
                                                      JFrame frame) {
-        JButton viewportTab = tabButton("3D Viewport");
-        JButton cutSheetTab = tabButton("Cut Sheets");
-
-        JPanel tabBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
-        tabBar.setBackground(TAB_BG);
-        tabBar.add(viewportTab);
-        tabBar.add(cutSheetTab);
-
-        final boolean[] showingViewport = {true};
-        Runnable updateTabColors = () -> {
-            viewportTab.setForeground(showingViewport[0] ? TAB_ACTIVE_FG : TAB_INACTIVE_FG);
-            cutSheetTab.setForeground(showingViewport[0] ? TAB_INACTIVE_FG : TAB_ACTIVE_FG);
-        };
-
-        viewportTab.addActionListener(e -> {
-            showingViewport[0] = true;
-            hSplitPane.setResizeWeight(1.0);
-            hSplitPane.setDividerLocation(hSplitPane.getWidth() - hSplitPane.getDividerSize());
-            updateTabColors.run();
-        });
-        cutSheetTab.addActionListener(e -> {
-            showingViewport[0] = false;
-            hSplitPane.setResizeWeight(0.0);
-            hSplitPane.setDividerLocation(2);
-            cutSheetPanel.repaint();
-            updateTabColors.run();
-        });
-
         JPanel viewContainer = new JPanel(new BorderLayout());
         viewContainer.add(hSplitPane, BorderLayout.CENTER);
-        viewContainer.add(tabBar, BorderLayout.NORTH);
 
         Runnable applyLayout = () -> {
-            if (executor.getLayoutMode() == ViewLayoutMode.SPLIT_PANE) {
-                tabBar.setVisible(false);
-                hSplitPane.setResizeWeight(0.6);
-                hSplitPane.setDividerLocation((int) (frame.getWidth() * 0.6));
-            } else {
-                tabBar.setVisible(true);
-                showingViewport[0] = true;
-                hSplitPane.setResizeWeight(1.0);
-                hSplitPane.setDividerLocation(1.0);
-                updateTabColors.run();
-            }
+            hSplitPane.setResizeWeight(0.6);
+            hSplitPane.setDividerLocation((int) (frame.getWidth() * 0.6));
         };
-        executor.addLayoutChangeListener(mode -> SwingUtilities.invokeLater(applyLayout));
 
         return new ViewContainer(viewContainer, applyLayout);
-    }
-
-    private static JButton tabButton(String text) {
-        JButton btn = new JButton(text);
-        btn.setFont(TAB_FONT);
-        btn.setFocusable(false);
-        btn.setBorderPainted(false);
-        btn.setContentAreaFilled(false);
-        btn.setOpaque(true);
-        btn.setBackground(TAB_BG);
-        return btn;
     }
 
     // ---------------------------------------------------------------------
