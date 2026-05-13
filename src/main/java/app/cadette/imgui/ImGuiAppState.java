@@ -206,29 +206,18 @@ public class ImGuiAppState extends BaseAppState {
         ImGui.styleColorsDark();
         // Pass false: we install GLFW callbacks ourselves below so we can
         // route to the viewport input handler in the same callback.
-        imGuiGlfw.init(handle, false);
-        // GLSL 330 instead of 150: Apple's GL 4.1 Core profile on Metal
-        // exposes GLSL 4.10 and seems to silently fail to compile the
-        // 1.50-versioned shaders ImGui ships. 330 is the most common
-        // compat value used by imgui-java examples and matches Core profile.
+        // DIAGNOSTIC: let imgui-java install its own GLFW callbacks
+        // (init(handle, true) instead of false). This is the path users
+        // describe as "just works" with imgui-java; if our manual
+        // forwarding has some subtle bug on macOS, going through
+        // imgui-java's own install path will reveal it.
+        // Our master callbacks are disabled below — viewport camera
+        // input will be broken in this build, but that's fine for the
+        // hit-test diagnostic.
+        imGuiGlfw.init(handle, true);
         imGuiGl3.init("#version 330");
 
-        // Bootstrap ImGui's focus state. imgui-java's installCallbacks
-        // normally does this; we skip that path (init(handle, false)) so
-        // we can route through our own callbacks. Without an explicit
-        // focus event, ImGui treats the window as unfocused on macOS
-        // (where no follow-up GLFWfocus event fires for an already-
-        // focused window) and silently ignores all input.
-        ImGui.getIO().addFocusEvent(true);
-
-        // Also seed the current cursor position so ImGui's hover state
-        // starts in a meaningful place (otherwise it's 0,0 until the
-        // first cursor-move event).
-        double[] cxArr = new double[1], cyArr = new double[1];
-        GLFW.glfwGetCursorPos(handle, cxArr, cyArr);
-        ImGui.getIO().addMousePosEvent((float) cxArr[0], (float) cyArr[0]);
-
-        installCallbacks(handle);
+        // installCallbacks(handle);  // disabled for this test
         System.err.println("[spike] GLFW callbacks installed; initialize() complete");
     }
 
