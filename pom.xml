@@ -273,7 +273,15 @@
         <!-- Lemur spike profile. Same exec:exec subprocess pattern as the
              ImGui spike so macOS gets -XstartOnFirstThread via the
              auto-activated mac-thread profile. Launch:
-                 mvn -Plemur exec:exec -->
+                 mvn -Plemur exec:exec
+
+             java.awt.headless=true: -XstartOnFirstThread claims thread 0
+             for GLFW's event pump, but on macOS AWT's Toolkit also wants
+             thread 0 for its own init — instant deadlock the moment any
+             code touches a font or a Toolkit.getDefaultToolkit() path.
+             Headless mode keeps Java2D + BufferedImage fully functional
+             for off-screen rendering (which is what the cut sheet panel
+             does) and disables the bits that would deadlock. -->
         <profile>
             <id>lemur</id>
             <build>
@@ -285,6 +293,7 @@
                             <executable>java</executable>
                             <arguments>
                                 <argument>${spike.first-thread-flag}</argument>
+                                <argument>-Djava.awt.headless=true</argument>
                                 <argument>-classpath</argument>
                                 <classpath/>
                                 <argument>app.cadette.lemur.LemurSpike</argument>
