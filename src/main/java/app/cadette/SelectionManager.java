@@ -132,6 +132,24 @@ public class SelectionManager {
         fireEvent(null);
     }
 
+    /**
+     * Select an assembly directly — stored with isAssembly=true so
+     * {@link #getSelectedPartNames()} expands it to its child parts for
+     * highlighting purposes. Used by the Lemur parts tree when the user
+     * clicks an assembly's row; {@link #selectByPartName} can only reach
+     * this state through the "click a part of an unselected assembly"
+     * path, which doesn't fit the tree-row click semantics.
+     */
+    public void selectAssembly(String assemblyName, boolean shiftDown) {
+        if (assemblyName == null) return;
+        if (sceneManager.getAssembly(assemblyName) == null) return;
+        if (!shiftDown) {
+            selected.clear();
+        }
+        selected.put(assemblyName, true);
+        fireEvent(assemblyName);
+    }
+
     /** Get all selected names. */
     public List<String> getSelectedNames() {
         return List.copyOf(selected.keySet());

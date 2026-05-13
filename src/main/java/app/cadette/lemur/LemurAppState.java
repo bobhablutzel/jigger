@@ -21,7 +21,10 @@ package app.cadette.lemur;
 import app.cadette.CutSheetRenderer;
 import app.cadette.SceneManager;
 import app.cadette.SelectionManager;
+import app.cadette.UnitSystem;
 import app.cadette.command.CommandExecutor;
+import app.cadette.model.Assembly;
+import app.cadette.model.Part;
 import app.cadette.model.SheetLayout;
 import app.cadette.model.SheetLayoutGenerator;
 import com.jme3.app.Application;
@@ -37,7 +40,9 @@ import com.jme3.texture.Texture2D;
 import com.jme3.texture.plugins.AWTLoader;
 import com.simsilica.lemur.Axis;
 import com.simsilica.lemur.Container;
+import com.simsilica.lemur.FillMode;
 import com.simsilica.lemur.GuiGlobals;
+import com.simsilica.lemur.HAlignment;
 import com.simsilica.lemur.Label;
 import com.simsilica.lemur.ListBox;
 import com.simsilica.lemur.TextField;
@@ -45,22 +50,25 @@ import com.simsilica.lemur.component.QuadBackgroundComponent;
 import com.simsilica.lemur.component.SpringGridLayout;
 import com.simsilica.lemur.core.GuiControl;
 import com.simsilica.lemur.core.VersionedList;
-import com.simsilica.lemur.core.VersionedReference;
+import com.simsilica.lemur.event.CursorButtonEvent;
+import com.simsilica.lemur.event.CursorEventControl;
+import com.simsilica.lemur.event.DefaultCursorListener;
 import com.simsilica.lemur.event.KeyAction;
 import com.simsilica.lemur.event.KeyActionListener;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
-import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 /**
@@ -93,9 +101,10 @@ public class LemurAppState extends BaseAppState {
      *  user-saved layouts come in a later session — for now these are
      *  what every launch starts with (and what the user adjusts at runtime
      *  by dragging the dividers). */
-    private static final float ROOT_RATIO            = 0.72f; // upper : command
-    private static final float UPPER_PARTS_RATIO     = 0.20f; // parts : center
-    private static final float CENTER_VIEWPORT_RATIO = 0.62f; // 3D viewport : cut sheet
+    private static final float ROOT_RATIO             = 0.72f; // upper : command
+    private static final float UPPER_LEFT_RATIO       = 0.20f; // left column : center
+    private static final float LEFT_PARTS_RATIO       = 0.55f; // parts tree : properties
+    private static final float CENTER_VIEWPORT_RATIO  = 0.62f; // 3D viewport : cut sheet
 
     private final CommandExecutor executor;
     private final SelectionManager selectionManager;
@@ -113,13 +122,31 @@ public class LemurAppState extends BaseAppState {
     private ListBox<String> outputList;
 
     private Container partsPanel;
-    private VersionedList<String> partsModel;
-    private ListBox<String> partsList;
-    private VersionedReference<Integer> partsSelectionRef;
-    /** Suppresses our own selection-listener echo when we update the ListBox
-     *  in response to a SelectionManager change. Without this, list-click →
-     *  model update → listener → list-click loops via the polling code. */
-    private boolean syncingSelectionToList = false;
+    /** Body container for the parts tree — rows are added as child
+     *  Containers with their own click handlers. Matches the Properties
+     *  pane structure (Container-of-rows, FillMode.None on major axis)
+     *  to avoid the GridPanel cell-stretch behaviour ListBox has. */
+    private Container partsBody;
+    /** Currently selected row index in {@link #treeRows}; -1 = no selection.
+     *  Drives the highlight tint on the row Container. */
+    private int selectedRowIndex = -1;
+
+    /** Hierarchical row descriptors parallel to the child Containers in
+     *  {@link #partsBody}. Index i in the displayed tree corresponds to
+     *  {@code treeRows.get(i)} and tells us whether row i is an assembly
+     *  header (caret-prefixed) or a child/standalone part, plus the
+     *  underlying name to act on. */
+    private final List<TreeRow> treeRows = new ArrayList<>();
+
+    /** Set of assembly names currently expanded. Tree click on an assembly
+     *  header toggles membership here and triggers a rebuild. */
+    private final Set<String> expandedAssemblies = new HashSet<>();
+
+    private Container propertiesPanel;
+    /** Body container inside the properties panel — gets cleared and
+     *  rebuilt with a fresh set of Label children on each selection change.
+     *  Held separately from the outer panel so the header Label survives. */
+    private Container propertiesBody;
 
     private Container cutSheetPanel;
     /** Container whose background quad displays the rendered cut-sheet
@@ -150,6 +177,10 @@ public class LemurAppState extends BaseAppState {
     private int lastWinW = -1;
     private int lastWinH = -1;
 
+    /** Previous frame's drag state — used to detect drag-release and
+     *  trigger a final reflow with up-to-date visibleItems. */
+    private boolean wasDragging = false;
+
     /**
      * True while the cursor is over any Lemur panel managed by this state.
      * Used by the camera controller as an input gate so scroll-zoom and
@@ -166,6 +197,7 @@ public class LemurAppState extends BaseAppState {
 
         commandPanel = buildCommandPanel();
         partsPanel = buildPartsPanel();
+        propertiesPanel = buildPropertiesPanel();
         cutSheetPanel = buildCutSheetPanel();
 
         // Track which Lemur panels participate in the mouseOverUi gate.
@@ -173,26 +205,46 @@ public class LemurAppState extends BaseAppState {
         // so the check uses getWorldTranslation() each frame.
         gatedPanels.add(commandPanel);
         gatedPanels.add(partsPanel);
+        gatedPanels.add(propertiesPanel);
         gatedPanels.add(cutSheetPanel);
 
         // Build the layout tree. Hardcoded for now; user-saved layouts and
         // drag-to-rearrange are explicit follow-up sessions.
         //
         //   VSplit (ROOT_RATIO):
-        //     ├── HSplit (UPPER_PARTS_RATIO):
-        //     │     ├── partsPanel
+        //     ├── HSplit (UPPER_LEFT_RATIO):
+        //     │     ├── VSplit (LEFT_PARTS_RATIO):
+        //     │     │     ├── partsPanel       (hierarchical tree)
+        //     │     │     └── propertiesPanel  (selection details)
         //     │     └── HSplit (CENTER_VIEWPORT_RATIO):
-        //     │           ├── viewportSpacer  (empty Node — 3D shows through)
+        //     │           ├── viewportSpacer   (empty Node — 3D shows through)
         //     │           └── cutSheetPanel
         //     └── commandPanel
         Node viewportSpacer = new Node("viewportSpacer");
 
+        LemurSplitter leftSplit = makeSplit(LemurSplitter.Orient.VERTICAL,
+                partsPanel, propertiesPanel, LEFT_PARTS_RATIO);
+        // Properties needs ~180px to fit "Position: (xxx, xxx, xxx)" rows
+        // without wrap. Parts gets ~150 so 8+ rows are visible — anything
+        // beyond shows as "... N more" via the truncation logic in
+        // refreshPartsList (real scrolling is backlogged).
+        leftSplit.setMinSizes(150, 180);
+
         LemurSplitter centerSplit = makeSplit(LemurSplitter.Orient.HORIZONTAL,
                 viewportSpacer, cutSheetPanel, CENTER_VIEWPORT_RATIO);
+        // Cut sheet readable at ≥240; viewport collapses to a thumbnail at 160.
+        centerSplit.setMinSizes(160, 240);
+
         LemurSplitter upperSplit = makeSplit(LemurSplitter.Orient.HORIZONTAL,
-                partsPanel, centerSplit, UPPER_PARTS_RATIO);
+                leftSplit, centerSplit, UPPER_LEFT_RATIO);
+        // Left column min driven by properties min above; right column min
+        // matches viewport+cutsheet pair.
+        upperSplit.setMinSizes(200, 420);
+
         rootSplitter = makeSplit(LemurSplitter.Orient.VERTICAL,
                 upperSplit, commandPanel, ROOT_RATIO);
+        // Command panel: at least one input line + a few output rows.
+        rootSplitter.setMinSizes(200, 80);
 
         simpleApp.getGuiNode().attachChild(rootSplitter);
 
@@ -210,6 +262,7 @@ public class LemurAppState extends BaseAppState {
 
         // Populate from whatever's already in the scene (zero on a fresh launch).
         refreshPartsList();
+        refreshProperties();
 
         appendOutput("CADette (Lemur UI). Type 'help' or start adding parts.");
     }
@@ -224,6 +277,23 @@ public class LemurAppState extends BaseAppState {
         return s;
     }
 
+    /** True while at least one splitter divider is being dragged. Used to
+     *  defer expensive / step-jittery layout updates (notably ListBox
+     *  visibleItems) until the drag finishes. */
+    private boolean isAnySplitterDragging() {
+        for (LemurSplitter s : allSplitters) {
+            if (s.isDragging()) return true;
+        }
+        return false;
+    }
+
+    /** Target pixel height per ListBox row. Drives the dynamic
+     *  visibleItems calculation in {@link #onChildReflow} — Lemur's
+     *  GridPanel stretches cells to fill the ListBox's allocated
+     *  height, so the way to keep cells compact is to compute
+     *  visibleItems = listHeight / TARGET_ROW_H. */
+    private static final float TARGET_ROW_H = 18f;
+
     /** Reflow callback invoked by Splitter (and later TabHost) for each of
      *  its children when their allotted size changes. Dispatches by spatial
      *  identity to the appropriate inner-widget sizing logic.
@@ -233,23 +303,43 @@ public class LemurAppState extends BaseAppState {
      *  AND the primary inner widget's preferred size (so the content
      *  stretches to fit rather than sitting at its natural minimum).
      *  Without the outer setPreferredSize, the container shrinks to wrap
-     *  its children and leaves the rest of the splitter cell empty. */
+     *  its children and leaves the rest of the splitter cell empty.
+     *
+     *  <p>ListBoxes additionally get a dynamic {@code setVisibleItems}
+     *  matched to their allocated height — that keeps row height roughly
+     *  constant ({@link #TARGET_ROW_H}) regardless of how much vertical
+     *  space the panel has, instead of stretching a handful of rows to
+     *  fill the panel. */
     private void onChildReflow(Spatial child, float[] size) {
         float w = size[0];
         float h = size[1];
         if (child == partsPanel) {
             partsPanel.setPreferredSize(new Vector3f(w, h, 0));
-            partsList.setPreferredSize(new Vector3f(Math.max(40, w - 20),
-                                                    Math.max(40, h - 50), 0));
+            partsBody.setPreferredSize(new Vector3f(
+                    Math.max(40, w - 20), Math.max(20, h - 40), 0));
+            // Re-render to update the truncation cutoff for the new
+            // height. Deferred during drag to avoid per-frame rebuilds;
+            // the drag-release path in update() triggers a final reflow
+            // that catches the settled size.
+            if (!isAnySplitterDragging()) {
+                refreshPartsList();
+            }
         } else if (child == commandPanel) {
             commandPanel.setPreferredSize(new Vector3f(w, h, 0));
-            outputList.setPreferredSize(new Vector3f(Math.max(40, w - 20),
-                                                     Math.max(40, h - 80), 0));
+            float listH = Math.max(40, h - 80);
+            outputList.setPreferredSize(new Vector3f(Math.max(40, w - 20), listH, 0));
+            if (!isAnySplitterDragging()) {
+                outputList.setVisibleItems(Math.max(3, (int) (listH / TARGET_ROW_H)));
+            }
             commandInput.setPreferredWidth(Math.max(40, w - 20));
         } else if (child == cutSheetPanel) {
             cutSheetPanel.setPreferredSize(new Vector3f(w, h, 0));
             cutSheetImageHolder.setPreferredSize(new Vector3f(
                     Math.max(40, w - 20), Math.max(40, h - 50), 0));
+        } else if (child == propertiesPanel) {
+            propertiesPanel.setPreferredSize(new Vector3f(w, h, 0));
+            propertiesBody.setPreferredSize(new Vector3f(
+                    Math.max(40, w - 20), Math.max(20, h - 40), 0));
         } else if (child instanceof LemurSplitter inner) {
             inner.setSize(w, h);
         } else if (child instanceof LemurTabHost tab) {
@@ -306,11 +396,11 @@ public class LemurAppState extends BaseAppState {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
         panel.addChild(new Label("Cut Sheet"));
 
+        // Image holder gets no explicit background — when no cut sheet has
+        // been rendered yet, the panel's glass style shows through, matching
+        // the other panes. Once content lands, the QuadBackgroundComponent
+        // is swapped to the rendered texture.
         cutSheetImageHolder = panel.addChild(new Container());
-        // Dark fill so an unpopulated/cleared cut sheet doesn't show the
-        // panel's underlying glass background as a transparent void.
-        cutSheetImageHolder.setBackground(new QuadBackgroundComponent(
-                new com.jme3.math.ColorRGBA(0.13f, 0.13f, 0.13f, 1f)));
         return panel;
     }
 
@@ -340,8 +430,9 @@ public class LemurAppState extends BaseAppState {
         Graphics2D g2 = img.createGraphics();
         try {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(new Color(245, 245, 235));
-            g2.fillRect(0, 0, w, h);
+            // Leave the image transparent — the panel's glass background
+            // shows through wherever the renderer doesn't draw, matching
+            // the other panes' translucency.
             CutSheetRenderer.render(g2, w, h, layouts,
                     executor.getUnits(), false, Set.of(), null,
                     sceneManager.getEffectiveCutouts(),
@@ -366,52 +457,306 @@ public class LemurAppState extends BaseAppState {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
         panel.addChild(new Label("Parts"));
 
-        partsModel = new VersionedList<>();
-        partsList = panel.addChild(new ListBox<>(partsModel));
-        partsSelectionRef = partsList.getSelectionModel().createSelectionReference();
-
+        // Container-of-rows; FillMode.None on Y keeps each row at natural
+        // Label height (no cell-stretching like ListBox's GridPanel does).
+        // Each row is added by refreshPartsList() with its own click handler.
+        // Trade-off: no built-in scrolling — backlog for when designs
+        // routinely have more parts than the panel can show.
+        partsBody = panel.addChild(new Container(
+                new SpringGridLayout(Axis.Y, Axis.X, FillMode.None, FillMode.Last)));
         return panel;
     }
 
-    /** Repopulate the parts list from the scene. Sorted alphabetically since
-     *  the SceneManager's ConcurrentHashMap has no defined order. */
+    private Container buildPropertiesPanel() {
+        Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
+        panel.addChild(new Label("Properties"));
+        // FillMode.None on the major (Y) axis stops the body from
+        // stretching its rows to fill the panel's vertical space —
+        // each property row stays at its natural Label height; extra
+        // space falls below the last row.
+        propertiesBody = panel.addChild(new Container(
+                new SpringGridLayout(Axis.Y, Axis.X, FillMode.None, FillMode.Last)));
+        return panel;
+    }
+
+    /** Selection highlight tint applied to the currently-selected parts row. */
+    private static final com.jme3.math.ColorRGBA ROW_SELECTED_BG =
+            new com.jme3.math.ColorRGBA(0.20f, 0.40f, 0.65f, 0.55f);
+
+    /** Repopulate the hierarchical parts tree from the scene. Assemblies
+     *  appear first (alphabetical), each with a ▶ / ▼ caret reflecting
+     *  expansion state. Expanded assemblies are followed by their child
+     *  parts (indented). Standalone parts (in no assembly) come last,
+     *  alphabetical.
+     *
+     *  <p>Each row becomes a child Container of {@link #partsBody} with a
+     *  click handler installed; the selected row gets a tinted background. */
     private void refreshPartsList() {
-        if (partsModel == null) return;
+        if (partsBody == null) return;
         SceneManager sceneManager = (SceneManager) getApplication();
-        // TreeSet for stable ordering; SceneManager.getAllParts returns
-        // a Map<String,Part> with unspecified iteration order.
-        List<String> sorted = new ArrayList<>(new TreeSet<>(sceneManager.getAllParts().keySet()));
-        partsModel.clear();
-        partsModel.addAll(sorted);
+
+        treeRows.clear();
+
+        // Assemblies, alphabetical. Each with its parts when expanded.
+        TreeMap<String, Assembly> sortedAssemblies = new TreeMap<>(sceneManager.getAllAssemblies());
+        Set<String> assemblyMembers = new HashSet<>();
+        for (Assembly a : sortedAssemblies.values()) {
+            for (Part p : a.getParts()) {
+                assemblyMembers.add(p.getName());
+            }
+        }
+        for (var entry : sortedAssemblies.entrySet()) {
+            String aName = entry.getKey();
+            boolean expanded = expandedAssemblies.contains(aName);
+            treeRows.add(new TreeRow((expanded ? "▼ " : "▶ ") + aName, aName, true));
+            if (expanded) {
+                List<Part> parts = new ArrayList<>(entry.getValue().getParts());
+                parts.sort((a, b) -> a.getName().compareTo(b.getName()));
+                for (Part p : parts) {
+                    String fullName = p.getName();
+                    int slash = fullName.indexOf('/');
+                    String slug = slash >= 0 ? fullName.substring(slash + 1) : fullName;
+                    treeRows.add(new TreeRow("    " + slug, fullName, false));
+                }
+            }
+        }
+
+        // Standalone parts (in no assembly) follow, alphabetical.
+        List<String> standalone = new ArrayList<>(
+                new TreeSet<>(sceneManager.getAllParts().keySet()));
+        standalone.removeAll(assemblyMembers);
+        for (String name : standalone) {
+            treeRows.add(new TreeRow(name, name, false));
+        }
+
+        // Determine how many rows fit in the body's allocated height.
+        // Lemur Containers don't clip overflow, so without truncation
+        // the rows just keep rendering down past the panel boundary into
+        // whatever's below — causing the parts/properties overlap the
+        // user hit. Reserve one slot for the "... N more" indicator when
+        // we actually truncate.
+        float bodyH = (partsBody.getPreferredSize() != null)
+                ? partsBody.getPreferredSize().y : 1000f;
+        int maxRows = Math.max(1, (int) (bodyH / TARGET_ROW_H));
+        boolean truncated = treeRows.size() > maxRows;
+        int rendered = truncated ? Math.max(0, maxRows - 1) : treeRows.size();
+
+        partsBody.clearChildren();
+        for (int i = 0; i < rendered; i++) {
+            final int rowIndex = i;
+            TreeRow row = treeRows.get(i);
+            Container rowC = new Container(
+                    new SpringGridLayout(Axis.X, Axis.Y, FillMode.None, FillMode.Last));
+            Label lbl = new Label(row.displayText);
+            lbl.setTextHAlignment(HAlignment.Left);
+            rowC.addChild(lbl);
+            if (rowIndex == selectedRowIndex) {
+                rowC.setBackground(new QuadBackgroundComponent(ROW_SELECTED_BG));
+            }
+            CursorEventControl.addListenersToSpatial(rowC, new DefaultCursorListener() {
+                @Override
+                public void cursorButtonEvent(CursorButtonEvent e,
+                                              com.jme3.scene.Spatial t,
+                                              com.jme3.scene.Spatial c) {
+                    if (e.getButtonIndex() != 0 || !e.isPressed()) return;
+                    handlePartsRowClick(rowIndex);
+                    e.setConsumed();
+                }
+            });
+            partsBody.addChild(rowC);
+        }
+        if (truncated) {
+            int hidden = treeRows.size() - rendered;
+            Container moreRow = new Container(
+                    new SpringGridLayout(Axis.X, Axis.Y, FillMode.None, FillMode.Last));
+            Label more = new Label("... " + hidden + " more");
+            more.setTextHAlignment(HAlignment.Left);
+            moreRow.addChild(more);
+            partsBody.addChild(moreRow);
+        }
+    }
+
+    /** Click dispatch for a parts-tree row. Assembly headers toggle
+     *  expansion + select the assembly; part rows just select the part. */
+    private void handlePartsRowClick(int idx) {
+        if (idx < 0 || idx >= treeRows.size()) return;
+        TreeRow row = treeRows.get(idx);
+        if (row.isAssembly) {
+            if (expandedAssemblies.contains(row.target)) {
+                expandedAssemblies.remove(row.target);
+            } else {
+                expandedAssemblies.add(row.target);
+            }
+            if (!List.of(row.target).equals(selectionManager.getSelectedNames())) {
+                selectionManager.selectAssembly(row.target, false);
+                // selectionManager listener will refresh; nothing more here.
+            } else {
+                // Same assembly clicked → only the expansion toggled.
+                refreshPartsList();
+            }
+        } else {
+            if (!List.of(row.target).equals(selectionManager.getSelectedNames())) {
+                selectionManager.selectByPartName(row.target, false);
+            }
+        }
     }
 
     /** Fired when SelectionManager's state changes (from any source — list
-     *  click, 3D click, command). Mirror the new selection into the parts
-     *  list so the visible highlight matches. */
+     *  click, 3D click, command). Auto-expands the parent assembly when a
+     *  child part is selected from elsewhere, recomputes which tree row is
+     *  highlighted, rebuilds the parts list so the tint moves, and refreshes
+     *  the properties pane. */
     private void onSelectionChanged(SelectionManager.SelectionChange change) {
-        if (partsList == null) return;
+        if (partsBody == null) return;
         List<String> names = change.selectedNames();
-        Integer target = null;
-        if (!names.isEmpty()) {
-            int idx = partsModel.indexOf(names.get(0));
-            if (idx >= 0) target = idx;
+        String first = names.isEmpty() ? null : names.get(0);
+
+        if (first != null) {
+            int slash = first.indexOf('/');
+            if (slash > 0) {
+                expandedAssemblies.add(first.substring(0, slash));
+            }
         }
-        Integer current = partsList.getSelectionModel().getSelection();
-        if (Objects.equals(current, target)) {
-            return; // already in the right state — avoid bumping the version
+        // Predict the future tree-row layout (so we know which row index
+        // will host the new selection), then rebuild with that index set
+        // so the rebuilt rows get the tint on the right one.
+        selectedRowIndex = (first != null) ? indexOfTargetIn(first, computeFutureRows()) : -1;
+        refreshPartsList();
+        refreshProperties();
+    }
+
+    /** Replicates the treeRows computation without mutating state, for the
+     *  rare case we need to predict the new selectedRowIndex before
+     *  {@link #refreshPartsList} runs. */
+    private List<TreeRow> computeFutureRows() {
+        SceneManager sm = (SceneManager) getApplication();
+        List<TreeRow> rows = new ArrayList<>();
+        TreeMap<String, Assembly> sortedAssemblies = new TreeMap<>(sm.getAllAssemblies());
+        Set<String> assemblyMembers = new HashSet<>();
+        for (Assembly a : sortedAssemblies.values()) {
+            for (Part p : a.getParts()) assemblyMembers.add(p.getName());
         }
-        syncingSelectionToList = true;
-        if (target == null) {
-            // Lemur's SelectionModel doesn't tolerate setSelection(null) —
-            // its renderer later does selection.intValue() unconditionally
-            // and NPEs. Clear the underlying Set instead; that bumps the
-            // version cleanly and getSelection() returns null afterward
-            // without the renderer touching it.
-            partsList.getSelectionModel().clear();
-        } else {
-            partsList.getSelectionModel().setSelection(target);
+        for (var entry : sortedAssemblies.entrySet()) {
+            String aName = entry.getKey();
+            boolean expanded = expandedAssemblies.contains(aName);
+            rows.add(new TreeRow((expanded ? "▼ " : "▶ ") + aName, aName, true));
+            if (expanded) {
+                List<Part> parts = new ArrayList<>(entry.getValue().getParts());
+                parts.sort((a, b) -> a.getName().compareTo(b.getName()));
+                for (Part p : parts) {
+                    String full = p.getName();
+                    int slash = full.indexOf('/');
+                    String slug = slash >= 0 ? full.substring(slash + 1) : full;
+                    rows.add(new TreeRow("    " + slug, full, false));
+                }
+            }
         }
-        syncingSelectionToList = false;
+        List<String> standalone = new ArrayList<>(new TreeSet<>(sm.getAllParts().keySet()));
+        standalone.removeAll(assemblyMembers);
+        for (String name : standalone) rows.add(new TreeRow(name, name, false));
+        return rows;
+    }
+
+    private int indexOfTargetIn(String target, List<TreeRow> rows) {
+        for (int i = 0; i < rows.size(); i++) {
+            if (rows.get(i).target.equals(target)) return i;
+        }
+        return -1;
+    }
+
+    /** Repopulate the Properties body from the current selection. Read-only
+     *  v1 — Cadette is script-driven so values change via commands, not
+     *  by editing in this panel. */
+    private void refreshProperties() {
+        if (propertiesBody == null) return;
+        propertiesBody.clearChildren();
+
+        SceneManager sm = (SceneManager) getApplication();
+        List<String> names = selectionManager.getSelectedNames();
+        if (names.isEmpty()) {
+            propertiesBody.addChild(new Label("Nothing selected."));
+            return;
+        }
+        if (names.size() > 1) {
+            propertiesBody.addChild(new Label(names.size() + " items selected:"));
+            for (String n : names) {
+                propertiesBody.addChild(new Label("  " + n));
+            }
+            return;
+        }
+        String name = names.get(0);
+        Assembly assembly = sm.getAssembly(name);
+        if (assembly != null) {
+            addProperty("Assembly", name);
+            addProperty("Parts",    String.valueOf(assembly.getParts().size()));
+            // List part names; truncate to keep the pane manageable.
+            int shown = 0;
+            for (Part p : assembly.getParts()) {
+                if (shown++ >= 10) {
+                    propertiesBody.addChild(new Label("  ... and "
+                            + (assembly.getParts().size() - 10) + " more"));
+                    break;
+                }
+                String slug = p.getName();
+                int slash = slug.indexOf('/');
+                if (slash >= 0) slug = slug.substring(slash + 1);
+                propertiesBody.addChild(new Label("  " + slug));
+            }
+            return;
+        }
+        Part part = sm.getPart(name);
+        if (part != null) {
+            UnitSystem u = executor.getUnits();
+            String displayName = name;
+            int slash = displayName.indexOf('/');
+            if (slash >= 0) displayName = displayName.substring(slash + 1);
+            addProperty("Name",     displayName);
+            addProperty("Material", part.getMaterial().getDisplayName());
+            addProperty("Length",   formatMm(part.getCutWidthMm(), u));
+            addProperty("Width",    formatMm(part.getCutHeightMm(), u));
+            addProperty("Thickness", formatMm(part.getThicknessMm(), u));
+            Vector3f pos = part.getPosition();
+            addProperty("Position", String.format("(%s, %s, %s)",
+                    formatMm(pos.x, u), formatMm(pos.y, u), formatMm(pos.z, u)));
+            Vector3f rot = sm.getRotation(name);
+            addProperty("Rotation", String.format("(%.0f°, %.0f°, %.0f°)",
+                    rot.x, rot.y, rot.z));
+            if (part.getGrainRequirement() != null) {
+                addProperty("Grain", part.getGrainRequirement().name().toLowerCase());
+            }
+            return;
+        }
+        propertiesBody.addChild(new Label("Unknown: " + name));
+    }
+
+    /** Width of the title column in property rows. Fixed so titles line
+     *  up vertically and values become a scannable column. */
+    private static final float PROP_TITLE_W = 70f;
+
+    private void addProperty(String label, String value) {
+        // FillMode.None on the major (X) axis stops SpringGridLayout from
+        // splitting the row 50/50 between title and value — without this,
+        // the value's left-aligned text starts halfway across the row,
+        // reading as "centered" to the user.
+        Container row = new Container(
+                new SpringGridLayout(Axis.X, Axis.Y, FillMode.None, FillMode.Last));
+        Label titleLbl = new Label(label);
+        titleLbl.setTextHAlignment(HAlignment.Left);
+        titleLbl.setPreferredSize(new Vector3f(PROP_TITLE_W, 18f, 0));
+        row.addChild(titleLbl);
+        Label valueLbl = new Label(value);
+        valueLbl.setTextHAlignment(HAlignment.Left);
+        row.addChild(valueLbl);
+        propertiesBody.addChild(row);
+    }
+
+    /** Format a mm length in the user's current display units. */
+    private String formatMm(float mm, UnitSystem u) {
+        float v = u.fromMm(mm);
+        if (u == UnitSystem.MILLIMETERS) {
+            return String.format("%.1f mm", v);
+        }
+        return String.format("%.3f %s", v, u.getAbbreviation());
     }
 
     @Override
@@ -436,6 +781,15 @@ public class LemurAppState extends BaseAppState {
             s.updateDrag(input);
         }
 
+        // 0b. Detect drag-release: re-trigger reflow so ListBox
+        //     visibleItems (which we skipped during drag to avoid
+        //     stepping) snaps to its final value.
+        boolean nowDragging = isAnySplitterDragging();
+        if (wasDragging && !nowDragging) {
+            applyRootSize(cam.getWidth(), cam.getHeight());
+        }
+        wasDragging = nowDragging;
+
         // 1. Refresh mouseOverUi from actual panel bounds. Panels live
         //    inside the splitter tree now so we use getWorldTranslation()
         //    rather than getLocalTranslation() — local would be relative
@@ -452,19 +806,9 @@ public class LemurAppState extends BaseAppState {
         }
         mouseOverUi = over;
 
-        // 2. Poll list-selection reference; on user-driven change, propagate
-        //    to SelectionManager. The syncingSelectionToList guard blocks
-        //    the SelectionManager → list → here echo path.
-        if (partsSelectionRef != null && partsSelectionRef.update()
-                && !syncingSelectionToList) {
-            Integer idx = partsSelectionRef.get();
-            if (idx != null && idx >= 0 && idx < partsModel.size()) {
-                String name = partsModel.get(idx);
-                if (!List.of(name).equals(selectionManager.getSelectedNames())) {
-                    selectionManager.selectByPartName(name, false);
-                }
-            }
-        }
+        // 2. (Parts row clicks are now handled directly by per-row
+        //     CursorEventControl listeners installed in refreshPartsList;
+        //     no polling needed here.)
 
         // 3. Cut-sheet refresh on scene-dirty or panel-size change.
         //    isCutSheetDirty is set by SceneManager on every mutation that
@@ -578,4 +922,10 @@ public class LemurAppState extends BaseAppState {
             Files.write(HISTORY_FILE, history);
         } catch (Exception ignored) { /* non-fatal */ }
     }
+
+    /** One row in the parts tree. {@code displayText} is what the ListBox
+     *  shows (already including caret/indent); {@code target} is the
+     *  underlying name (assembly name or part name) for selection +
+     *  expansion lookup. */
+    private record TreeRow(String displayText, String target, boolean isAssembly) {}
 }

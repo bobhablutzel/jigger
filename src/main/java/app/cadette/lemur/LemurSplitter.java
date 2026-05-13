@@ -75,6 +75,12 @@ public class LemurSplitter extends Node {
     private float totalW = 0f;
     private float totalH = 0f;
 
+    /** Minimum pixel size for each child along the split axis. Drag-resize
+     *  is clamped so neither child goes below its min. Use
+     *  {@link #setMinSizes} to set; defaults below are conservative. */
+    private float firstMinSize = 60f;
+    private float secondMinSize = 60f;
+
     private boolean dragging = false;
     /** Cursor coord (X for horizontal, Y for vertical) at drag start. */
     private float dragStartCursor = 0f;
@@ -95,17 +101,50 @@ public class LemurSplitter extends Node {
         this.dividerBg = new QuadBackgroundComponent(DIVIDER_COLOR);
         divider.setBackground(dividerBg);
 
+        // Divider attached LAST and with a slightly forward Z so it's
+        // always on top of either child — important when window/min-size
+        // constraints force the panels to visually overlap (otherwise
+        // the divider becomes hidden under a panel and unclickable).
         attachChild(firstChild);
-        attachChild(divider);
         attachChild(secondChild);
+        attachChild(divider);
 
         CursorEventControl.addListenersToSpatial(divider, new DragListener());
     }
 
-    /** Set the divider position as a fraction (0..1) of the total split axis. */
+    /** Set the divider position as a fraction (0..1) of the total split axis.
+     *  Clamped both by a hardcoded 5%/95% safety range and by the
+     *  per-child minimum-pixel sizes (see {@link #setMinSizes}).
+     *
+     *  <p>When the splitter is too small to satisfy BOTH children's
+     *  minimums, falls back to a proportional split (each child gets a
+     *  fraction proportional to its declared min). This still produces
+     *  smaller-than-ideal panels but avoids the prior bug where the
+     *  safety 5%/95% clamp let the divider end up far past one
+     *  child's min, producing visible content overlap. */
     public void setRatio(float r) {
-        ratio = Math.max(0.05f, Math.min(0.95f, r));
+        float clamped = Math.max(0.05f, Math.min(0.95f, r));
+        float total = (orient == Orient.HORIZONTAL) ? totalW : totalH;
+        if (total > 0) {
+            float minRatio = (firstMinSize + DIVIDER_THICKNESS / 2f) / total;
+            float maxRatio = 1f - (secondMinSize + DIVIDER_THICKNESS / 2f) / total;
+            if (minRatio < maxRatio) {
+                clamped = Math.max(minRatio, Math.min(maxRatio, clamped));
+            } else if (firstMinSize + secondMinSize > 0) {
+                clamped = firstMinSize / (firstMinSize + secondMinSize);
+            }
+        }
+        ratio = clamped;
         applyLayout();
+    }
+
+    /** Lower bounds on each child's pixel size along the split axis.
+     *  Prevents the user from dragging a panel into illegibility (e.g.,
+     *  shrinking properties so values wrap). */
+    public void setMinSizes(float first, float second) {
+        this.firstMinSize = first;
+        this.secondMinSize = second;
+        setRatio(ratio); // re-clamp with the new bounds
     }
 
     public float getRatio() {
@@ -148,6 +187,11 @@ public class LemurSplitter extends Node {
         setRatio(dragStartRatio + delta);
     }
 
+    /** Z offset given to the divider so it renders on top of any
+     *  overflowing panel content. Otherwise content that spills past
+     *  its panel's allocated bounds can obscure the divider hit-target. */
+    private static final float DIVIDER_Z = 0.1f;
+
     private void applyLayout() {
         if (totalW <= 0 || totalH <= 0) {
             return; // not yet sized
@@ -159,7 +203,7 @@ public class LemurSplitter extends Node {
             firstChild.setLocalTranslation(0, 0, 0);
             reflowCallback.accept(firstChild, new float[]{firstW, totalH});
 
-            divider.setLocalTranslation(firstW, 0, 0);
+            divider.setLocalTranslation(firstW, 0, DIVIDER_Z);
             divider.setPreferredSize(new Vector3f(DIVIDER_THICKNESS, totalH, 0));
 
             secondChild.setLocalTranslation(firstW + DIVIDER_THICKNESS, 0, 0);
@@ -171,7 +215,7 @@ public class LemurSplitter extends Node {
             firstChild.setLocalTranslation(0, 0, 0);
             reflowCallback.accept(firstChild, new float[]{totalW, topH});
 
-            divider.setLocalTranslation(0, -topH, 0);
+            divider.setLocalTranslation(0, -topH, DIVIDER_Z);
             divider.setPreferredSize(new Vector3f(totalW, DIVIDER_THICKNESS, 0));
 
             secondChild.setLocalTranslation(0, -topH - DIVIDER_THICKNESS, 0);

@@ -22,8 +22,11 @@ import app.cadette.SceneManager;
 import app.cadette.SelectionManager;
 import app.cadette.command.CommandExecutor;
 import com.jme3.system.AppSettings;
+import com.jme3.math.ColorRGBA;
 import com.simsilica.lemur.GuiGlobals;
+import com.simsilica.lemur.component.QuadBackgroundComponent;
 import com.simsilica.lemur.style.BaseStyles;
+import com.simsilica.lemur.style.Styles;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -93,6 +96,25 @@ public class LemurApp extends SceneManager {
         GuiGlobals.initialize(this);
         BaseStyles.loadGlassStyle();
         GuiGlobals.getInstance().getStyles().setDefaultStyle("glass");
+
+        // Tighten the default glass style: 12pt font reduces the dead
+        // leading between rows. Themeable backlog covers a proper
+        // light/dark + font-family/size selector; this is the placeholder
+        // that makes the current build readable. Apply to every selector
+        // that renders text — labels, the command textfield, list items
+        // (ListBox cells), and buttons.
+        //
+        // Also flatten the TextField background — the glass style ships
+        // a tinted/gradient background that reads as distracting noise
+        // for a CAD command shell. A flat dark grey is cleaner.
+        Styles styles = GuiGlobals.getInstance().getStyles();
+        float font = 12f;
+        styles.getSelector("label",     "glass").set("fontSize", font);
+        styles.getSelector("textField", "glass").set("fontSize", font);
+        styles.getSelector("items",     "glass").set("fontSize", font);
+        styles.getSelector("button",    "glass").set("fontSize", font);
+        styles.getSelector("textField", "glass").set("background",
+                new QuadBackgroundComponent(new ColorRGBA(0.18f, 0.18f, 0.20f, 0.92f)));
 
         LemurAppState uiState = new LemurAppState(executor, selectionManager);
         getStateManager().attach(uiState);
