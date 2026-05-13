@@ -344,7 +344,6 @@ public class ImGuiAppState extends BaseAppState {
         if (frameCount < 3) {
             System.err.println("[spike] postRender #" + frameCount
                     + " thread=" + Thread.currentThread().getName());
-            frameCount++;
         }
         // Refresh selection highlights each frame so they follow parts that
         // get moved/resized via commands. Cheap when selection is empty.
@@ -353,6 +352,21 @@ public class ImGuiAppState extends BaseAppState {
         imGuiGl3.newFrame();
         imGuiGlfw.newFrame();
         ImGui.newFrame();
+
+        // Diagnostic: dump ImGui IO state every ~60 frames (~1s at 60fps).
+        // This runs AFTER newFrame so the IO has the current frame's state.
+        if (frameCount < 300 && frameCount % 60 == 0) {
+            var io = ImGui.getIO();
+            System.err.println(String.format(
+                "[spike] frame %d: pos=(%.0f,%.0f) lmb=%b rmb=%b "
+                + "wantMouse=%b wantKey=%b anyHovered=%b anyActive=%b",
+                frameCount,
+                io.getMousePosX(), io.getMousePosY(),
+                io.getMouseDown(0), io.getMouseDown(1),
+                io.getWantCaptureMouse(), io.getWantCaptureKeyboard(),
+                ImGui.isAnyItemHovered(), ImGui.isAnyItemActive()));
+        }
+        frameCount++;
 
         int dockId = ImGui.dockSpaceOverViewport(ImGui.getMainViewport(),
                 ImGuiDockNodeFlags.PassthruCentralNode);
