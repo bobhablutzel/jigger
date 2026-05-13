@@ -239,7 +239,15 @@ public class ImGuiAppState extends BaseAppState {
         };
 
         cursorPosCb = new GLFWCursorPosCallback() {
+            int n = 0;
             @Override public void invoke(long window, double x, double y) {
+                // Throttled: log first 5 cursor moves so we can confirm
+                // they're firing without spamming.
+                if (n < 5) {
+                    System.err.println("[spike] cursorPos #" + n
+                            + " (" + x + ", " + y + ") thread=" + Thread.currentThread().getName());
+                    n++;
+                }
                 imGuiGlfw.cursorPosCallback(window, x, y);
                 // Always forward — viewport handler ignores when no drag
                 // is active. This keeps drags that wander over panels alive.
