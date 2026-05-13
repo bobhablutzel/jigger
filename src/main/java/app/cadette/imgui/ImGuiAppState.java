@@ -353,18 +353,33 @@ public class ImGuiAppState extends BaseAppState {
         imGuiGlfw.newFrame();
         ImGui.newFrame();
 
-        // Diagnostic: dump ImGui IO state every ~60 frames (~1s at 60fps).
-        // This runs AFTER newFrame so the IO has the current frame's state.
-        if (frameCount < 300 && frameCount % 60 == 0) {
+        // Diagnostic: dump ImGui IO state. First 3 frames: every frame.
+        // After that: every 10 frames. Also dumps GLFW window/framebuffer
+        // size so we can compare to ImGui's DisplaySize for the Retina/
+        // multi-monitor coordinate-system bug hypothesis.
+        if (frameCount < 3 || (frameCount < 200 && frameCount % 10 == 0)) {
             var io = ImGui.getIO();
-            System.err.println(String.format(
-                "[spike] frame %d: pos=(%.0f,%.0f) lmb=%b rmb=%b "
-                + "wantMouse=%b wantKey=%b anyHovered=%b anyActive=%b",
-                frameCount,
-                io.getMousePosX(), io.getMousePosY(),
-                io.getMouseDown(0), io.getMouseDown(1),
-                io.getWantCaptureMouse(), io.getWantCaptureKeyboard(),
-                ImGui.isAnyItemHovered(), ImGui.isAnyItemActive()));
+            if (getApplication().getContext() instanceof LwjglWindow w) {
+                long h = w.getWindowHandle();
+                int[] wW = new int[1], wH = new int[1];
+                int[] fbW = new int[1], fbH = new int[1];
+                int[] xpos = new int[1], ypos = new int[1];
+                GLFW.glfwGetWindowSize(h, wW, wH);
+                GLFW.glfwGetFramebufferSize(h, fbW, fbH);
+                GLFW.glfwGetWindowPos(h, xpos, ypos);
+                System.err.println(String.format(
+                    "[spike] frame %d: cursor=(%.0f,%.0f) lmb=%b rmb=%b "
+                    + "wantMouse=%b anyHovered=%b "
+                    + "winPos=(%d,%d) winSize=%dx%d fb=%dx%d disp=%.0fx%.0f scale=(%.1f,%.1f)",
+                    frameCount,
+                    io.getMousePosX(), io.getMousePosY(),
+                    io.getMouseDown(0), io.getMouseDown(1),
+                    io.getWantCaptureMouse(),
+                    ImGui.isAnyItemHovered(),
+                    xpos[0], ypos[0], wW[0], wH[0], fbW[0], fbH[0],
+                    io.getDisplaySizeX(), io.getDisplaySizeY(),
+                    io.getDisplayFramebufferScaleX(), io.getDisplayFramebufferScaleY()));
+            }
         }
         frameCount++;
 
