@@ -347,6 +347,11 @@ public class ImGuiAppState extends BaseAppState {
             buildDefaultLayout = false;
         }
 
+        // DIAGNOSTIC: ImGui's built-in demo window. If this renders on Mac,
+        // ImGui works and our panel-layout code is the bug. If it doesn't,
+        // ImGui's GL3 backend is genuinely broken on Apple's Metal GL.
+        ImGui.showDemoWindow();
+
         drawCommandPanel();
         drawLogPanel();
         drawPartsPanel();
