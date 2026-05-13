@@ -70,6 +70,9 @@ public class ImGuiCutSheetPanel {
     }
 
     public void draw() {
+        // Right side, bottom half.
+        ImGui.setNextWindowPos(1290, 370, imgui.flag.ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(290, 320, imgui.flag.ImGuiCond.FirstUseEver);
         ImGui.begin("Cut Sheet", ImGuiWindowFlags.NoCollapse);
 
         var avail = ImGui.getContentRegionAvail();

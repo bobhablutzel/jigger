@@ -342,10 +342,16 @@ public class ImGuiAppState extends BaseAppState {
         int dockId = ImGui.dockSpaceOverViewport(ImGui.getMainViewport(),
                 ImGuiDockNodeFlags.PassthruCentralNode);
 
-        if (buildDefaultLayout) {
-            buildDefaultLayout(dockId);
-            buildDefaultLayout = false;
-        }
+        // DockBuilder programmatic layout is silently failing on macOS
+        // (panels end up in unrenderable dock nodes). Until that's
+        // understood, fall back to setNextWindowPos on each panel below
+        // with FirstUseEver — windows appear floating at sensible
+        // positions on first launch, and imgui.ini takes over on
+        // subsequent launches if the user docks them by hand.
+        // if (buildDefaultLayout) {
+        //     buildDefaultLayout(dockId);
+        //     buildDefaultLayout = false;
+        // }
 
         // DIAGNOSTIC: ImGui's built-in demo window. If this renders on Mac,
         // ImGui works and our panel-layout code is the bug. If it doesn't,
@@ -392,6 +398,12 @@ public class ImGuiAppState extends BaseAppState {
     // ---- Command panel ---------------------------------------------------
 
     private void drawCommandPanel() {
+        // FirstUseEver: only applied on the very first run (when imgui.ini
+        // doesn't yet have a saved position). On subsequent runs the user's
+        // saved layout wins. Window is 1600×1000 by default; lay panels out
+        // so they're all visible and non-overlapping.
+        ImGui.setNextWindowPos(20, 700, imgui.flag.ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(1000, 280, imgui.flag.ImGuiCond.FirstUseEver);
         ImGui.begin("Command", ImGuiWindowFlags.NoCollapse);
 
         ImGui.pushStyleColor(ImGuiCol.Text, 1f, 0.85f, 0.2f, 1f);
@@ -529,6 +541,9 @@ public class ImGuiAppState extends BaseAppState {
     // ---- Log panel -------------------------------------------------------
 
     private void drawLogPanel() {
+        // Just right of Command at the bottom.
+        ImGui.setNextWindowPos(1030, 700, imgui.flag.ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(250, 280, imgui.flag.ImGuiCond.FirstUseEver);
         ImGui.begin("Log", ImGuiWindowFlags.NoCollapse);
         if (ImGui.beginChild("##log-scrollback", 0, 0, true)) {
             for (String line : logLines) {
@@ -546,6 +561,9 @@ public class ImGuiAppState extends BaseAppState {
     // ---- Parts panel -----------------------------------------------------
 
     private void drawPartsPanel() {
+        // Right side, top half.
+        ImGui.setNextWindowPos(1290, 20, imgui.flag.ImGuiCond.FirstUseEver);
+        ImGui.setNextWindowSize(290, 340, imgui.flag.ImGuiCond.FirstUseEver);
         ImGui.begin("Parts", ImGuiWindowFlags.NoCollapse);
         SceneManager scene = (SceneManager) getApplication();
         var parts = scene.getAllParts();
