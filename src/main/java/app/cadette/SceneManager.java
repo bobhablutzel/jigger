@@ -552,17 +552,24 @@ public class SceneManager extends SimpleApplication implements JointGeometryCont
     }
 
     public void deleteAllObjects() {
+        // Clear model state synchronously so scene-change listeners see the
+        // post-delete state. Previously these clears were inside enqueue()
+        // alongside the GL detach, which left the parts/assemblies maps
+        // populated when markCutSheetDirty fired its listeners — Lemur
+        // panels read getAllParts() in the listener and rendered the stale
+        // pre-delete state. The visual/GL cleanup still needs the render
+        // thread, so that part stays enqueued.
+        records.clear();
+        parts.clear();
+        assemblies.clear();
+        jointRegistry.clear();
+        rotations.clear();
         markCutSheetDirty();
         enqueue(() -> {
             objectsNode.detachAllChildren();
             objectNodes.clear();
             geometries.clear();
-            records.clear();
             labelNodes.clear();
-            parts.clear();
-            assemblies.clear();
-            jointRegistry.clear();
-            rotations.clear();
         });
     }
 
