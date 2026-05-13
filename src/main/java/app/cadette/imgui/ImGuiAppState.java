@@ -402,6 +402,23 @@ public class ImGuiAppState extends BaseAppState {
         // ImGui's GL3 backend is genuinely broken on Apple's Metal GL.
         ImGui.showDemoWindow();
 
+        // DIAGNOSTIC: a known-position panel with a bright button. Pinned
+        // at (100, 100) within the window so the user can deliberately
+        // move the cursor over it without aiming guesses.
+        ImGui.setNextWindowPos(100, 100, imgui.flag.ImGuiCond.Always);
+        ImGui.setNextWindowSize(420, 160, imgui.flag.ImGuiCond.Always);
+        ImGui.begin("TEST — click the button", ImGuiWindowFlags.NoCollapse);
+        ImGui.pushStyleColor(ImGuiCol.Text, 1f, 0.85f, 0.2f, 1f);
+        ImGui.text("This panel is anchored at window pos (100, 100).");
+        ImGui.text("Hover over the button below — frame logs should show");
+        ImGui.text("wantMouse=true and anyHovered=true. Then click it.");
+        ImGui.popStyleColor();
+        ImGui.separator();
+        if (ImGui.button("Click me", 200, 40)) {
+            System.err.println("[spike] TEST BUTTON CLICKED at frame " + frameCount);
+        }
+        ImGui.end();
+
         drawCommandPanel();
         drawLogPanel();
         drawPartsPanel();
