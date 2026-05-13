@@ -213,6 +213,21 @@ public class ImGuiAppState extends BaseAppState {
         // compat value used by imgui-java examples and matches Core profile.
         imGuiGl3.init("#version 330");
 
+        // Bootstrap ImGui's focus state. imgui-java's installCallbacks
+        // normally does this; we skip that path (init(handle, false)) so
+        // we can route through our own callbacks. Without an explicit
+        // focus event, ImGui treats the window as unfocused on macOS
+        // (where no follow-up GLFWfocus event fires for an already-
+        // focused window) and silently ignores all input.
+        ImGui.getIO().addFocusEvent(true);
+
+        // Also seed the current cursor position so ImGui's hover state
+        // starts in a meaningful place (otherwise it's 0,0 until the
+        // first cursor-move event).
+        double[] cxArr = new double[1], cyArr = new double[1];
+        GLFW.glfwGetCursorPos(handle, cxArr, cyArr);
+        ImGui.getIO().addMousePosEvent((float) cxArr[0], (float) cyArr[0]);
+
         installCallbacks(handle);
         System.err.println("[spike] GLFW callbacks installed; initialize() complete");
     }
