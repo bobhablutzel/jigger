@@ -19,10 +19,14 @@
 package app.cadette.lemur;
 
 import app.cadette.SceneManager;
+import app.cadette.SelectionManager;
 import app.cadette.command.CommandExecutor;
 import com.jme3.system.AppSettings;
 import com.simsilica.lemur.GuiGlobals;
 import com.simsilica.lemur.style.BaseStyles;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Entry point for the Lemur-based CADette UI. Subclasses {@link SceneManager}
@@ -72,13 +76,21 @@ public class LemurApp extends SceneManager {
         CommandExecutor executor = new CommandExecutor(this);
         executor.loadTemplates();
 
+        // SelectionManager is the single source of truth for what's
+        // selected. The 3D viewport's CameraController and the Lemur
+        // parts panel both drive it; a listener mirrors selection state
+        // into the 3D highlight (same pattern as CadetteApp).
+        SelectionManager selectionManager = new SelectionManager(this);
+        setSelectionManager(selectionManager);
+        wireSelectionHighlights(selectionManager);
+
         // Lemur init — must happen after the GL context is up (i.e. inside
         // simpleInitApp, not before start()).
         GuiGlobals.initialize(this);
         BaseStyles.loadGlassStyle();
         GuiGlobals.getInstance().getStyles().setDefaultStyle("glass");
 
-        LemurAppState uiState = new LemurAppState(executor);
+        LemurAppState uiState = new LemurAppState(executor, selectionManager);
         getStateManager().attach(uiState);
 
         // Gate the camera controller so scroll-zoom and click-orbit don't
@@ -89,5 +101,22 @@ public class LemurApp extends SceneManager {
         }
 
         System.err.println("[lemur-app] init complete");
+    }
+
+    /** Mirror SelectionManager state into 3D viewport highlights — same wiring
+     *  pattern Swing's CadetteApp uses, so Lemur and Swing selection look
+     *  identical from the 3D side. */
+    private void wireSelectionHighlights(SelectionManager selectionManager) {
+        List<String> previousHighlights = new ArrayList<>();
+        selectionManager.addSelectionListener(event -> {
+            for (String name : previousHighlights) {
+                setHighlight(name, false);
+            }
+            previousHighlights.clear();
+            for (String name : selectionManager.getSelectedPartNames()) {
+                setHighlight(name, true);
+                previousHighlights.add(name);
+            }
+        });
     }
 }
