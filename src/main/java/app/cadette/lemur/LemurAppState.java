@@ -23,7 +23,10 @@ import com.jme3.app.Application;
 import com.jme3.app.SimpleApplication;
 import com.jme3.app.state.BaseAppState;
 import com.jme3.input.KeyInput;
+import com.jme3.input.event.MouseButtonEvent;
+import com.jme3.input.event.MouseMotionEvent;
 import com.jme3.math.Vector3f;
+import com.jme3.scene.Spatial;
 import com.jme3.system.AppSettings;
 import com.simsilica.lemur.Axis;
 import com.simsilica.lemur.Container;
@@ -35,6 +38,9 @@ import com.simsilica.lemur.component.SpringGridLayout;
 import com.simsilica.lemur.core.VersionedList;
 import com.simsilica.lemur.event.KeyAction;
 import com.simsilica.lemur.event.KeyActionListener;
+import com.simsilica.lemur.event.MouseEventControl;
+import com.simsilica.lemur.event.MouseListener;
+import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
 import java.nio.file.Files;
@@ -78,6 +84,15 @@ public class LemurAppState extends BaseAppState {
     private TextField commandInput;
     private VersionedList<String> outputModel;
     private ListBox<String> outputList;
+
+    /**
+     * True while the cursor is over any Lemur panel managed by this state.
+     * Used by the camera controller as an input gate so scroll-zoom and
+     * click-orbit don't fire when the user is interacting with the UI.
+     * <p>{@link #isMouseOverUi()} (Lombok-generated) is the public read.
+     */
+    @Getter
+    private boolean mouseOverUi = false;
 
     @Override
     protected void initialize(Application app) {
@@ -131,6 +146,20 @@ public class LemurAppState extends BaseAppState {
 
         // Right-anchor: panel's top-left at (winW - PANEL_W - pad, winH - pad).
         panel.setLocalTranslation(winW - PANEL_W - PANEL_PAD, winH - PANEL_PAD, 0);
+
+        // Track mouse-over-UI so the camera controller can gate scroll-zoom
+        // and click-orbit while the cursor is on a panel. enter/exit fire
+        // for the container as a whole, including motion across child widgets.
+        MouseEventControl.addListenersToSpatial(panel, new MouseListener() {
+            @Override
+            public void mouseEntered(MouseMotionEvent e, Spatial t, Spatial c) { mouseOverUi = true; }
+            @Override
+            public void mouseExited(MouseMotionEvent e, Spatial t, Spatial c)  { mouseOverUi = false; }
+            @Override
+            public void mouseMoved(MouseMotionEvent e, Spatial t, Spatial c)   { /* no-op */ }
+            @Override
+            public void mouseButtonEvent(MouseButtonEvent e, Spatial t, Spatial c) { /* no-op */ }
+        });
 
         GuiGlobals.getInstance().requestFocus(commandInput);
         return panel;

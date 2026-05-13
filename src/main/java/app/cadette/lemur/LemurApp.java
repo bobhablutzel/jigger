@@ -78,7 +78,15 @@ public class LemurApp extends SceneManager {
         BaseStyles.loadGlassStyle();
         GuiGlobals.getInstance().getStyles().setDefaultStyle("glass");
 
-        getStateManager().attach(new LemurAppState(executor));
+        LemurAppState uiState = new LemurAppState(executor);
+        getStateManager().attach(uiState);
+
+        // Gate the camera controller so scroll-zoom and click-orbit don't
+        // fire when the cursor is over a Lemur panel. Without this, wheel
+        // events both scroll the ListBox and zoom the 3D viewport.
+        if (getCameraController() != null) {
+            getCameraController().setInputBlocker(uiState::isMouseOverUi);
+        }
 
         System.err.println("[lemur-app] init complete");
     }

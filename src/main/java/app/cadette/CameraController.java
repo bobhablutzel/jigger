@@ -100,6 +100,21 @@ public class CameraController extends BaseAppState implements AnalogListener, Ac
     @lombok.Setter private ContextMenuRequestHandler contextMenuRequestHandler;
 
     /**
+     * Predicate consulted before starting a new mouse gesture or processing
+     * a scroll-wheel tick. Returns true to suppress the input — used by the
+     * Lemur UI to keep scroll-zoom and click-orbit from firing when the
+     * cursor is over a UI panel. Default permits everything (Swing UI and
+     * ImGui spike attach a real CanvasComponent that already filters at
+     * a different layer, so neither calls {@link #setInputBlocker}).
+     *
+     * <p>Note: only the gesture *start* is blocked. An in-progress orbit
+     * or pan keeps tracking once the cursor wanders over a UI panel — feels
+     * right because the user committed to the gesture in the viewport.
+     */
+    @lombok.Setter
+    private java.util.function.BooleanSupplier inputBlocker = () -> false;
+
+    /**
      * Callback fired when the user right-clicks (without dragging) on a part.
      * Coordinates are in AWT space (origin top-left), ready to hand to a Swing popup.
      */
@@ -157,6 +172,13 @@ public class CameraController extends BaseAppState implements AnalogListener, Ac
 
     @Override
     public void onAction(String name, boolean isPressed, float tpf) {
+        // Block press-down when the UI owns the cursor. Press-up still fires
+        // (rotating/panning may have been set on a press that did make it
+        // through, e.g., gesture started in the viewport then wandered onto
+        // a panel — the release must clear the flag).
+        if (isPressed && inputBlocker.getAsBoolean()) {
+            return;
+        }
         switch (name) {
             case ROTATE_DRAG -> {
                 rotating = isPressed;
@@ -257,6 +279,14 @@ public class CameraController extends BaseAppState implements AnalogListener, Ac
 
     @Override
     public void onAnalog(String name, float value, float tpf) {
+        // Block scroll-wheel and other non-gesture axis input when the
+        // UI is intercepting the cursor. A live drag (rotating / panning)
+        // continues regardless so the user doesn't lose the gesture by
+        // straying over a panel mid-orbit.
+        boolean midGesture = rotating || panning;
+        if (!midGesture && inputBlocker.getAsBoolean()) {
+            return;
+        }
         switch (name) {
             // Keyboard rotation — always active
             case KEY_LEFT   -> azimuth -= KEYBOARD_SPEED * value;

@@ -76,7 +76,7 @@ public class SceneManager extends SimpleApplication implements JointGeometryCont
     private float kerfMm = GuillotinePacker.DEFAULT_KERF_MM;
     private volatile boolean cutSheetDirty = true;
     private final List<Runnable> sceneChangeListeners = new ArrayList<>();
-    private CameraController cameraController;
+    @lombok.Getter private CameraController cameraController;
     private BitmapFont labelFont;
 
     // Geometry-warning sink for diagnostics that fire during mesh rebuild —
