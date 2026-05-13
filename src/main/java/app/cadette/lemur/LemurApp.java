@@ -60,6 +60,10 @@ public class LemurApp extends SceneManager {
         settings.setFrameRate(60);
         settings.setSamples(Integer.getInteger("cadette.msaa", 4));
         settings.setAudioRenderer(null);
+        // Allow the user to corner-drag / maximize the window. LemurAppState
+        // detects the new dimensions in update() and reflows panel positions
+        // and inner-widget preferred sizes.
+        settings.setResizable(true);
         app.setSettings(settings);
         app.setShowSettings(false);
         app.setPauseOnLostFocus(false);

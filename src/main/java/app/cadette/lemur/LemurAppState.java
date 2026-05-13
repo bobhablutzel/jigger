@@ -31,7 +31,8 @@ import com.jme3.input.InputManager;
 import com.jme3.input.KeyInput;
 import com.jme3.math.Vector2f;
 import com.jme3.math.Vector3f;
-import com.jme3.system.AppSettings;
+import com.jme3.scene.Node;
+import com.jme3.scene.Spatial;
 import com.jme3.texture.Texture2D;
 import com.jme3.texture.plugins.AWTLoader;
 import com.simsilica.lemur.Axis;
@@ -87,9 +88,14 @@ public class LemurAppState extends BaseAppState {
     private static final Path HISTORY_FILE =
             Path.of(System.getProperty("user.home"), ".cadette", "cmd_history");
     private static final int HISTORY_MAX = 200;
-    private static final float CMD_PANEL_W = 460;
-    private static final float PARTS_PANEL_W = 280;
-    private static final float PANEL_PAD = 10;
+
+    /** Initial split ratios for the hardcoded layout tree. Persistence and
+     *  user-saved layouts come in a later session — for now these are
+     *  what every launch starts with (and what the user adjusts at runtime
+     *  by dragging the dividers). */
+    private static final float ROOT_RATIO            = 0.72f; // upper : command
+    private static final float UPPER_PARTS_RATIO     = 0.20f; // parts : center
+    private static final float CENTER_VIEWPORT_RATIO = 0.62f; // 3D viewport : cut sheet
 
     private final CommandExecutor executor;
     private final SelectionManager selectionManager;
@@ -128,8 +134,21 @@ public class LemurAppState extends BaseAppState {
     private int lastCutSheetW = -1;
     private int lastCutSheetH = -1;
 
-    /** Panels enrolled in the mouseOverUi gate. Polled bounds-OR'd each frame. */
+    /** Panels enrolled in the mouseOverUi gate. Their world bounds are
+     *  OR'd each frame; the splitter tree decides where each ends up. */
     private final List<Container> gatedPanels = new ArrayList<>();
+
+    /** Root of the layout tree; covers the full window minus jME3 chrome.
+     *  Resized in update() when the camera dimensions change. */
+    private LemurSplitter rootSplitter;
+
+    /** Every splitter in the tree — needed so we can call updateDrag(...)
+     *  on each per frame to advance any active drag. */
+    private final List<LemurSplitter> allSplitters = new ArrayList<>();
+
+    /** Last window dimensions we reflowed against. -1 means no reflow yet. */
+    private int lastWinW = -1;
+    private int lastWinH = -1;
 
     /**
      * True while the cursor is over any Lemur panel managed by this state.
@@ -144,20 +163,45 @@ public class LemurAppState extends BaseAppState {
         loadHistory();
 
         SimpleApplication simpleApp = (SimpleApplication) app;
-        AppSettings settings = simpleApp.getContext().getSettings();
-        float winW = settings.getWidth();
-        float winH = settings.getHeight();
 
-        commandPanel = buildCommandPanel(winW, winH);
-        partsPanel = buildPartsPanel(winH);
-        cutSheetPanel = buildCutSheetPanel(winW, winH);
+        commandPanel = buildCommandPanel();
+        partsPanel = buildPartsPanel();
+        cutSheetPanel = buildCutSheetPanel();
 
-        simpleApp.getGuiNode().attachChild(commandPanel);
-        simpleApp.getGuiNode().attachChild(partsPanel);
-        simpleApp.getGuiNode().attachChild(cutSheetPanel);
+        // Track which Lemur panels participate in the mouseOverUi gate.
+        // Their world bounds shift as the user drags splitter dividers,
+        // so the check uses getWorldTranslation() each frame.
         gatedPanels.add(commandPanel);
         gatedPanels.add(partsPanel);
         gatedPanels.add(cutSheetPanel);
+
+        // Build the layout tree. Hardcoded for now; user-saved layouts and
+        // drag-to-rearrange are explicit follow-up sessions.
+        //
+        //   VSplit (ROOT_RATIO):
+        //     ├── HSplit (UPPER_PARTS_RATIO):
+        //     │     ├── partsPanel
+        //     │     └── HSplit (CENTER_VIEWPORT_RATIO):
+        //     │           ├── viewportSpacer  (empty Node — 3D shows through)
+        //     │           └── cutSheetPanel
+        //     └── commandPanel
+        Node viewportSpacer = new Node("viewportSpacer");
+
+        LemurSplitter centerSplit = makeSplit(LemurSplitter.Orient.HORIZONTAL,
+                viewportSpacer, cutSheetPanel, CENTER_VIEWPORT_RATIO);
+        LemurSplitter upperSplit = makeSplit(LemurSplitter.Orient.HORIZONTAL,
+                partsPanel, centerSplit, UPPER_PARTS_RATIO);
+        rootSplitter = makeSplit(LemurSplitter.Orient.VERTICAL,
+                upperSplit, commandPanel, ROOT_RATIO);
+
+        simpleApp.getGuiNode().attachChild(rootSplitter);
+
+        // Position + size against the current camera dimensions. The camera
+        // is the source of truth — it tracks the actual GL viewport and
+        // updates on window resize, whereas AppSettings holds the initial
+        // request that may differ after corner-drag / maximize.
+        com.jme3.renderer.Camera cam = simpleApp.getCamera();
+        applyRootSize(cam.getWidth(), cam.getHeight());
 
         // Wire scene → parts list and selection → parts list.
         SceneManager sceneManager = (SceneManager) app;
@@ -170,11 +214,63 @@ public class LemurAppState extends BaseAppState {
         appendOutput("CADette (Lemur UI). Type 'help' or start adding parts.");
     }
 
+    /** Construct a Splitter with the standard reflow callback and register
+     *  it in {@link #allSplitters} so {@link #update} can poll its drag. */
+    private LemurSplitter makeSplit(LemurSplitter.Orient orient,
+                                    Spatial first, Spatial second, float ratio) {
+        LemurSplitter s = new LemurSplitter(orient, first, second, this::onChildReflow);
+        s.setRatio(ratio);
+        allSplitters.add(s);
+        return s;
+    }
+
+    /** Reflow callback invoked by Splitter (and later TabHost) for each of
+     *  its children when their allotted size changes. Dispatches by spatial
+     *  identity to the appropriate inner-widget sizing logic.
+     *
+     *  <p>For each Lemur Container leaf we set BOTH the container's own
+     *  preferred size (so the panel's background fills the splitter cell)
+     *  AND the primary inner widget's preferred size (so the content
+     *  stretches to fit rather than sitting at its natural minimum).
+     *  Without the outer setPreferredSize, the container shrinks to wrap
+     *  its children and leaves the rest of the splitter cell empty. */
+    private void onChildReflow(Spatial child, float[] size) {
+        float w = size[0];
+        float h = size[1];
+        if (child == partsPanel) {
+            partsPanel.setPreferredSize(new Vector3f(w, h, 0));
+            partsList.setPreferredSize(new Vector3f(Math.max(40, w - 20),
+                                                    Math.max(40, h - 50), 0));
+        } else if (child == commandPanel) {
+            commandPanel.setPreferredSize(new Vector3f(w, h, 0));
+            outputList.setPreferredSize(new Vector3f(Math.max(40, w - 20),
+                                                     Math.max(40, h - 80), 0));
+            commandInput.setPreferredWidth(Math.max(40, w - 20));
+        } else if (child == cutSheetPanel) {
+            cutSheetPanel.setPreferredSize(new Vector3f(w, h, 0));
+            cutSheetImageHolder.setPreferredSize(new Vector3f(
+                    Math.max(40, w - 20), Math.max(40, h - 50), 0));
+        } else if (child instanceof LemurSplitter inner) {
+            inner.setSize(w, h);
+        } else if (child instanceof LemurTabHost tab) {
+            tab.setSize(w, h);
+        }
+        // viewportSpacer and other no-content Spatials: ignore.
+    }
+
+    /** Position the root splitter at the top-left of the GUI and size it
+     *  to cover the full window. Cascades through the tree via the
+     *  reflow callbacks. */
+    private void applyRootSize(int winW, int winH) {
+        rootSplitter.setLocalTranslation(0, winH, 0);
+        rootSplitter.setSize(winW, winH);
+        lastWinW = winW;
+        lastWinH = winH;
+    }
+
     @Override
     protected void cleanup(Application app) {
-        if (commandPanel != null) commandPanel.removeFromParent();
-        if (partsPanel != null) partsPanel.removeFromParent();
-        if (cutSheetPanel != null) cutSheetPanel.removeFromParent();
+        if (rootSplitter != null) rootSplitter.removeFromParent();
     }
 
     @Override
@@ -183,19 +279,14 @@ public class LemurAppState extends BaseAppState {
     @Override
     protected void onDisable() { /* no-op */ }
 
-    private Container buildCommandPanel(float winW, float winH) {
+    private Container buildCommandPanel() {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
         panel.addChild(new Label("Command"));
 
         outputModel = new VersionedList<>();
         outputList = panel.addChild(new ListBox<>(outputModel));
-        // Top-half height: half the window minus its own padding + the
-        // label + the TextField + a bit of chrome.
-        float halfH = winH / 2f - 100;
-        outputList.setPreferredSize(new Vector3f(CMD_PANEL_W - 20, halfH, 0));
 
         commandInput = panel.addChild(new TextField(""));
-        commandInput.setPreferredWidth(CMD_PANEL_W - 20);
         commandInput.setSingleLine(true);
 
         KeyActionListener submit = (src, key) -> runCurrentInput();
@@ -207,32 +298,19 @@ public class LemurAppState extends BaseAppState {
         commandInput.getActionMap().put(new KeyAction(KeyInput.KEY_DOWN),
                 (src, key) -> recallHistory(+1));
 
-        // Right side, top half.
-        panel.setLocalTranslation(winW - CMD_PANEL_W - PANEL_PAD, winH - PANEL_PAD, 0);
-
         GuiGlobals.getInstance().requestFocus(commandInput);
         return panel;
     }
 
-    private Container buildCutSheetPanel(float winW, float winH) {
+    private Container buildCutSheetPanel() {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
         panel.addChild(new Label("Cut Sheet"));
 
         cutSheetImageHolder = panel.addChild(new Container());
-        float w = CMD_PANEL_W - 20;
-        float h = winH / 2f - 60;
-        cutSheetImageHolder.setPreferredSize(new Vector3f(w, h, 0));
         // Dark fill so an unpopulated/cleared cut sheet doesn't show the
         // panel's underlying glass background as a transparent void.
         cutSheetImageHolder.setBackground(new QuadBackgroundComponent(
                 new com.jme3.math.ColorRGBA(0.13f, 0.13f, 0.13f, 1f)));
-
-        // Right side, bottom half. The panel's top edge is at winH/2 - pad/2
-        // so the gap to the command panel above is symmetric (pad / 2 each).
-        panel.setLocalTranslation(
-                winW - CMD_PANEL_W - PANEL_PAD,
-                winH / 2f - PANEL_PAD / 2f,
-                0);
         return panel;
     }
 
@@ -284,16 +362,14 @@ public class LemurAppState extends BaseAppState {
         sceneManager.clearCutSheetDirty();
     }
 
-    private Container buildPartsPanel(float winH) {
+    private Container buildPartsPanel() {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
         panel.addChild(new Label("Parts"));
 
         partsModel = new VersionedList<>();
         partsList = panel.addChild(new ListBox<>(partsModel));
-        partsList.setPreferredSize(new Vector3f(PARTS_PANEL_W - 20, winH - 80, 0));
         partsSelectionRef = partsList.getSelectionModel().createSelectionReference();
 
-        panel.setLocalTranslation(PANEL_PAD, winH - PANEL_PAD, 0);
         return panel;
     }
 
@@ -342,9 +418,28 @@ public class LemurAppState extends BaseAppState {
     public void update(float tpf) {
         super.update(tpf);
 
-        // 1. Refresh mouseOverUi from actual panel bounds (no Lemur
-        //    event-dispatch assumptions, just geometry).
+        // 0. Detect window resize via the camera (source of truth — tracks
+        //    the actual GL viewport size, unlike AppSettings which only
+        //    holds the initial request). Reflow before everything else so
+        //    bounds checks below see the new panel positions.
+        com.jme3.renderer.Camera cam = getApplication().getCamera();
+        if (cam.getWidth() != lastWinW || cam.getHeight() != lastWinH) {
+            applyRootSize(cam.getWidth(), cam.getHeight());
+        }
+
+        // 0a. Advance any active splitter drags. The Splitter's button
+        //     listener flips its dragging flag; we poll cursor + update
+        //     the ratio here so a drag that strays off the divider still
+        //     tracks.
         InputManager input = getApplication().getInputManager();
+        for (LemurSplitter s : allSplitters) {
+            s.updateDrag(input);
+        }
+
+        // 1. Refresh mouseOverUi from actual panel bounds. Panels live
+        //    inside the splitter tree now so we use getWorldTranslation()
+        //    rather than getLocalTranslation() — local would be relative
+        //    to the splitter's coords.
         Vector2f cursor = input.getCursorPosition();
         boolean over = false;
         if (cursor != null) {
@@ -389,7 +484,7 @@ public class LemurAppState extends BaseAppState {
     }
 
     private boolean cursorOverPanel(Vector2f cursor, Container panel) {
-        Vector3f loc = panel.getLocalTranslation();
+        Vector3f loc = panel.getWorldTranslation();
         GuiControl gc = panel.getControl(GuiControl.class);
         if (gc == null) return false;
         Vector3f size = gc.getSize();
