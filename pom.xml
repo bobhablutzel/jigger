@@ -19,13 +19,12 @@
         <jme3.version>3.9.0-stable</jme3.version>
         <antlr4.version>4.13.1</antlr4.version>
         <lombok.version>1.18.38</lombok.version>
-        <imgui.version>1.88.0</imgui.version>
         <lemur.version>1.16.0</lemur.version>
-        <!-- JVM arg for the spike's exec:exec launch. Default is a harmless
+        <!-- JVM arg for the exec:exec launch. Default is a harmless
              system-property no-op; the mac-thread profile overrides this
              to -XstartOnFirstThread when running on macOS, where GLFW
              requires the main thread to be JVM thread 0. -->
-        <spike.first-thread-flag>-Dcadette.os=other</spike.first-thread-flag>
+        <cadette.first-thread-flag>-Dcadette.os=other</cadette.first-thread-flag>
     </properties>
 
     <dependencies>
@@ -46,41 +45,31 @@
             <version>${jme3.version}</version>
         </dependency>
 
-        <!-- ANTLR 4 runtime -->
+        <!-- ANTLR 4 runtime — Cadette script parser/lexer. -->
         <dependency>
             <groupId>org.antlr</groupId>
             <artifactId>antlr4-runtime</artifactId>
             <version>${antlr4.version}</version>
         </dependency>
 
-        <!-- Apache PDFBox for cut sheet PDF export -->
+        <!-- Apache PDFBox — cut sheet PDF export. -->
         <dependency>
             <groupId>org.apache.pdfbox</groupId>
             <artifactId>pdfbox</artifactId>
             <version>3.0.4</version>
         </dependency>
 
-        <!-- JTS Topology Suite — polygon clipping (Boolean ops) and Delaunay
-             triangulation for the part-mesh builder. Feeds the unified
-             "regions of constant Z" algorithm in PartMeshBuilder. -->
+        <!-- JTS Topology Suite — polygon clipping (Boolean ops) and
+             Delaunay triangulation for the part-mesh builder. Feeds the
+             unified "regions of constant Z" algorithm in PartMeshBuilder. -->
         <dependency>
             <groupId>org.locationtech.jts</groupId>
             <artifactId>jts-core</artifactId>
             <version>1.20.0</version>
         </dependency>
 
-        <!-- JSVG — pure-Java SVG renderer, used for the splash screen -->
-        <dependency>
-            <groupId>com.github.weisj</groupId>
-            <artifactId>jsvg</artifactId>
-            <version>2.0.0</version>
-        </dependency>
-
-        <!-- Lemur — jME3-native UI library. Renders through jME3's
-             scene graph + renderer (no separate GL/event boundary),
-             so it works wherever jME3 works including macOS Display
-             mode where imgui-java falls over. Used by the Lemur
-             spike to evaluate as an alternative engine-UI path. -->
+        <!-- Lemur — jME3-native UI library. The CADette UI shell (panels,
+             splitters, tabs, drag-to-rearrange) is built on top of it. -->
         <dependency>
             <groupId>com.simsilica</groupId>
             <artifactId>lemur</artifactId>
@@ -92,50 +81,20 @@
             <version>1.13.0</version>
         </dependency>
         <!-- Lemur's StyleLoader is a Groovy script — needs the Groovy
-             scripting engine on the classpath even though we don't
-             use Groovy directly. Must be Groovy 5+ because Groovy's
-             AsmDecompiler resolves stdlib classes during script
-             compile, and only the ASM bundled with Groovy 5 can read
-             Java 25 classfiles (class file major version 69). Groovy
-             3 and 4 both fail with "Unsupported class file major
-             version 69" inside StyleLoader.compileApiResource. -->
+             scripting engine on the classpath even though we don't use
+             Groovy directly. Must be Groovy 5+ because Groovy's
+             AsmDecompiler resolves stdlib classes during script compile,
+             and only the ASM bundled with Groovy 5 can read Java 25
+             classfiles (class file major version 69). Groovy 3 and 4
+             both fail with "Unsupported class file major version 69"
+             inside StyleLoader.compileApiResource. -->
         <dependency>
             <groupId>org.apache.groovy</groupId>
             <artifactId>groovy-jsr223</artifactId>
             <version>5.0.6</version>
         </dependency>
 
-        <!-- imgui-java — engine-style UI for the in-window CAD tool layout
-             spike. Pure Java bindings to Dear ImGui via SpaiR/imgui-java.
-             All three platform-native artifacts bundled so the jar is
-             cross-platform without classifier juggling. -->
-        <dependency>
-            <groupId>io.github.spair</groupId>
-            <artifactId>imgui-java-binding</artifactId>
-            <version>${imgui.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.github.spair</groupId>
-            <artifactId>imgui-java-lwjgl3</artifactId>
-            <version>${imgui.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.github.spair</groupId>
-            <artifactId>imgui-java-natives-linux</artifactId>
-            <version>${imgui.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.github.spair</groupId>
-            <artifactId>imgui-java-natives-macos</artifactId>
-            <version>${imgui.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>io.github.spair</groupId>
-            <artifactId>imgui-java-natives-windows</artifactId>
-            <version>${imgui.version}</version>
-        </dependency>
-
-        <!-- Lombok -->
+        <!-- Lombok — code generation for boilerplate (getters, builders, etc). -->
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -154,7 +113,7 @@
 
     <build>
         <plugins>
-            <!-- ANTLR4 Maven Plugin — generates parser/lexer from .g4 -->
+            <!-- ANTLR4 Maven Plugin — generates parser/lexer from .g4. -->
             <plugin>
                 <groupId>org.antlr</groupId>
                 <artifactId>antlr4-maven-plugin</artifactId>
@@ -188,13 +147,34 @@
                 </configuration>
             </plugin>
 
-            <!-- Exec plugin for easy running. mainClass is set via the
-                 active profile so -Dexec.mainClass overrides work; otherwise
-                 a hard-coded mainClass here would shadow the system property. -->
+            <!-- Exec plugin: `mvn exec:exec` launches CadetteApp in a fresh
+                 JVM (subprocess via exec:exec rather than in-process
+                 exec:java) so the main() runs on OS thread 0. macOS
+                 requires this for GLFW; cadette.first-thread-flag below
+                 supplies -XstartOnFirstThread on macOS via the
+                 auto-activated mac-thread profile.
+
+                 -Djava.awt.headless=true: -XstartOnFirstThread claims
+                 thread 0 for GLFW's event pump, but on macOS AWT's
+                 Toolkit also wants thread 0 — instant deadlock the
+                 moment any code touches a font or Toolkit init. Headless
+                 mode keeps Java2D + BufferedImage fully functional for
+                 off-screen rendering (CutSheetRenderer, AWTLoader → GL
+                 texture) and disables the bits that would deadlock. -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
                 <version>3.2.0</version>
+                <configuration>
+                    <executable>java</executable>
+                    <arguments>
+                        <argument>${cadette.first-thread-flag}</argument>
+                        <argument>-Djava.awt.headless=true</argument>
+                        <argument>-classpath</argument>
+                        <classpath/>
+                        <argument>app.cadette.CadetteApp</argument>
+                    </arguments>
+                </configuration>
             </plugin>
 
             <!-- Surefire for JUnit 5 -->
@@ -204,7 +184,8 @@
                 <version>3.2.5</version>
             </plugin>
 
-            <!-- Assembly plugin to create fat jar -->
+            <!-- JAR manifest — sets the main class so `java -jar cadette.jar`
+                 works after packaging. -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
@@ -220,122 +201,17 @@
         </plugins>
     </build>
 
-    <!-- Run profiles. `mvn -Pswing exec:java` launches the Swing CadetteApp;
-         `mvn -Pspike exec:java` launches the ImGui spike. Default (no
-         profile) prints a help message via the exec plugin's required-args
-         check. -->
     <profiles>
-        <profile>
-            <id>swing</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <configuration>
-                            <mainClass>app.cadette.CadetteApp</mainClass>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <!-- Spike profile uses exec:exec (subprocess) rather than exec:java
-             (in-process). Reason: macOS requires the LWJGL3/GLFW main
-             thread to be JVM thread 0. With exec:java the spike's main()
-             runs on a Maven worker thread no matter what JVM flags are
-             passed; only a fresh JVM via exec:exec gets main() == thread 0.
-             Launch:
-                 mvn -Pspike exec:exec
-             ${spike.first-thread-flag} expands to -XstartOnFirstThread on
-             macOS (via the auto-activated mac-thread profile below) and to
-             a harmless -D property elsewhere — non-macOS JVMs reject
-             -XstartOnFirstThread as an unrecognized option. -->
-        <profile>
-            <id>spike</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <configuration>
-                            <executable>java</executable>
-                            <arguments>
-                                <argument>${spike.first-thread-flag}</argument>
-                                <argument>-classpath</argument>
-                                <classpath/>
-                                <argument>app.cadette.imgui.CadetteImGuiSpike</argument>
-                            </arguments>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <!-- Lemur app profile — real CADette UI built on Lemur. Same
-             exec:exec subprocess pattern as the ImGui spike so macOS gets
-             -XstartOnFirstThread via the auto-activated mac-thread profile.
-             Launch:
-                 mvn -Plemur exec:exec
-
-             java.awt.headless=true: -XstartOnFirstThread claims thread 0
-             for GLFW's event pump, but on macOS AWT's Toolkit also wants
-             thread 0 for its own init — instant deadlock the moment any
-             code touches a font or a Toolkit.getDefaultToolkit() path.
-             Headless mode keeps Java2D + BufferedImage fully functional
-             for off-screen rendering (which is what the cut sheet uses)
-             and disables the bits that would deadlock. -->
-        <profile>
-            <id>lemur</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <configuration>
-                            <executable>java</executable>
-                            <arguments>
-                                <argument>${spike.first-thread-flag}</argument>
-                                <argument>-Djava.awt.headless=true</argument>
-                                <argument>-classpath</argument>
-                                <classpath/>
-                                <argument>app.cadette.lemur.LemurApp</argument>
-                            </arguments>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <!-- Lemur spike profile — keeps the 4-panel viability spike
-             reachable for reference / re-testing during the port. -->
-        <profile>
-            <id>lemur-spike</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <configuration>
-                            <executable>java</executable>
-                            <arguments>
-                                <argument>${spike.first-thread-flag}</argument>
-                                <argument>-Djava.awt.headless=true</argument>
-                                <argument>-classpath</argument>
-                                <classpath/>
-                                <argument>app.cadette.lemur.LemurSpike</argument>
-                            </arguments>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <!-- Auto-activated on macOS: overrides spike.first-thread-flag so
-             the spike launch passes -XstartOnFirstThread. -->
+        <!-- Auto-activated on macOS: overrides cadette.first-thread-flag
+             so the exec launch passes -XstartOnFirstThread (required by
+             GLFW for the LWJGL3 backend on macOS). -->
         <profile>
             <id>mac-thread</id>
             <activation>
                 <os><family>mac</family></os>
             </activation>
             <properties>
-                <spike.first-thread-flag>-XstartOnFirstThread</spike.first-thread-flag>
+                <cadette.first-thread-flag>-XstartOnFirstThread</cadette.first-thread-flag>
             </properties>
         </profile>
     </profiles>

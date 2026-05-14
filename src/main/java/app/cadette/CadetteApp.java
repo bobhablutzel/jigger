@@ -19,501 +19,135 @@
 package app.cadette;
 
 import app.cadette.command.CommandExecutor;
-import app.cadette.model.Material;
-import app.cadette.model.MaterialCatalog;
-import app.cadette.model.MeasurementSystem;
+import app.cadette.lemur.LemurAppState;
+import com.jme3.math.ColorRGBA;
 import com.jme3.system.AppSettings;
-import com.jme3.system.JmeCanvasContext;
+import com.simsilica.lemur.GuiGlobals;
+import com.simsilica.lemur.component.QuadBackgroundComponent;
+import com.simsilica.lemur.style.BaseStyles;
+import com.simsilica.lemur.style.Styles;
 
-import javax.swing.*;
-import javax.swing.filechooser.FileNameExtensionFilter;
-import java.awt.*;
-import java.awt.event.*;
-import java.io.File;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.BiFunction;
-import java.util.function.Supplier;
 
 /**
- * Main entry point. Creates a Swing frame with a jME3 3D canvas on top
- * and a command-line panel at the bottom.
+ * CADette entry point. Subclasses {@link SceneManager} (which is a jME3
+ * SimpleApplication) so the 3D viewport, orbital camera, lighting, and
+ * part-management infrastructure are reused as-is, then layers a Lemur-based
+ * UI shell on top via {@link LemurAppState}.
+ *
+ * <p>Launch: {@code mvn exec:exec}. The build passes
+ * {@code -XstartOnFirstThread} on macOS (via the auto-activated
+ * {@code mac-thread} profile) and {@code -Djava.awt.headless=true} on every
+ * platform — the latter dodges the AWT/Toolkit ↔ GLFW thread-0 deadlock
+ * that wedged earlier UI prototypes on macOS.
+ *
+ * <p>The UI implementation lives in {@code app.cadette.lemur} (LemurAppState
+ * + LemurSplitter + LemurTabHost); this class wires it to the scene.
  */
-public class CadetteApp {
-
-    private static SceneManager sceneManager;
-    private static volatile boolean shuttingDown = false;
-
-    // Minimum time the splash stays visible before the main frame takes over.
-    private static final int SPLASH_MIN_DISPLAY_MS = 2500;
+public class CadetteApp extends SceneManager {
 
     public static void main(String[] args) {
-        // Prevent Java2D from using DirectDraw/D3D on Windows, which can conflict
-        // with LWJGL3's OpenGL context in the embedded canvas.
-        System.setProperty("sun.java2d.noddraw", "true");
-        SwingUtilities.invokeLater(() -> {
-            long splashStart = System.currentTimeMillis();
-            JWindow splash = SplashScreen.show();
-            // Yield the EDT so the splash actually paints before createAndShowGUI
-            // starts its heavier initialization work.
-            SwingUtilities.invokeLater(() -> createAndShowGUI(splash, splashStart));
-        });
+        System.out.println();
+        System.out.println("============================================");
+        System.out.println("  CADette");
+        System.out.println("============================================");
+        System.out.println();
+
+        CadetteApp app = new CadetteApp();
+        AppSettings settings = new AppSettings(true);
+        settings.setTitle("CADette");
+        settings.setResolution(1280, 800);
+        settings.setFrameRate(60);
+        settings.setSamples(Integer.getInteger("cadette.msaa", 4));
+        settings.setAudioRenderer(null);
+        // Corner-drag / maximize support. LemurAppState detects the new
+        // dimensions in update() and reflows panel positions accordingly.
+        settings.setResizable(true);
+        app.setSettings(settings);
+        app.setShowSettings(false);
+        app.setPauseOnLostFocus(false);
+        app.start();
     }
 
-    private static void createAndShowGUI(JWindow splash, long splashStart) {
-        JFrame frame = new JFrame("CADette - 3D Command Shell");
-        frame.setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
-        frame.setSize(1280, 900);
-        frame.setLocationRelativeTo(null);
+    @Override
+    public void simpleInitApp() {
+        // SceneManager.simpleInitApp() disables flyCam, attaches the orbital
+        // CameraController, sets up the axis display, lights, and the scene
+        // background colour. Whatever else we add here is layered on top.
+        super.simpleInitApp();
 
-        sceneManager = buildSceneManager();
-        Canvas canvas = ((JmeCanvasContext) sceneManager.getContext()).getCanvas();
-        canvas.setPreferredSize(new Dimension(1280, 600));
+        // SimpleApplication binds Esc to "SIMPLEAPP_Exit" by default —
+        // surprising for a CAD shell where Esc is more naturally a
+        // "cancel current op" or "focus viewport" key. Drop the default
+        // here; broader keybinding rethink is in
+        // project_keybindings_backlog.md.
+        if (getInputManager().hasMapping(INPUT_MAPPING_EXIT)) {
+            getInputManager().deleteMapping(INPUT_MAPPING_EXIT);
+        }
 
-        CommandExecutor executor = new CommandExecutor(sceneManager);
-        executor.setOnExit(() -> shutdown(frame));
-        executor.setFileChooser(scriptOpenChooser(frame));
-        executor.setSaveFileChooser(exportSaveChooser(frame));
+        CommandExecutor executor = new CommandExecutor(this);
         executor.loadTemplates();
 
-        CommandPanel commandPanel = new CommandPanel(executor);
-        // Route mesh-build warnings (e.g. joint cutouts that fall outside
-        // their receiver) to the user-visible output panel instead of stderr.
-        sceneManager.setWarningSink(msg -> commandPanel.appendOutput(msg + "\n"));
-        SelectionManager selectionManager = new SelectionManager(sceneManager);
-        wireSelectionHighlights(selectionManager, commandPanel);
+        // SelectionManager is the single source of truth for what's
+        // selected. The 3D viewport's CameraController and the Lemur
+        // parts panel both drive it; a listener mirrors selection state
+        // into the 3D highlight.
+        SelectionManager selectionManager = new SelectionManager(this);
+        setSelectionManager(selectionManager);
+        wireSelectionHighlights(selectionManager);
 
-        // Right-click context menu — shared by the cut sheet panel and the 3D viewport.
-        PartContextMenu contextMenu = new PartContextMenu(sceneManager, selectionManager, executor, commandPanel);
+        // Lemur init — must happen after the GL context is up (i.e. inside
+        // simpleInitApp, not before start()).
+        GuiGlobals.initialize(this);
+        BaseStyles.loadGlassStyle();
+        GuiGlobals.getInstance().getStyles().setDefaultStyle("glass");
 
-        // Viewport panel = canvas + settings bar along the bottom edge
-        JPanel viewportPanel = new JPanel(new BorderLayout());
-        viewportPanel.add(canvas, BorderLayout.CENTER);
-        viewportPanel.add(buildSettingsBar(executor), BorderLayout.SOUTH);
+        // Tighten the default glass style: 12pt font reduces the dead
+        // leading between rows. Themeable backlog
+        // (project_lemur_theme_backlog.md) covers a proper light/dark +
+        // font-family/size selector; this is the placeholder that makes
+        // the current build readable. Apply to every selector that
+        // renders text — labels, the command textfield, list items
+        // (ListBox cells), and buttons.
+        //
+        // Also flatten the TextField background — the glass style ships
+        // a tinted/gradient background that reads as distracting noise
+        // for a CAD command shell. A flat dark grey is cleaner.
+        Styles styles = GuiGlobals.getInstance().getStyles();
+        float font = 12f;
+        styles.getSelector("label",     "glass").set("fontSize", font);
+        styles.getSelector("textField", "glass").set("fontSize", font);
+        styles.getSelector("items",     "glass").set("fontSize", font);
+        styles.getSelector("button",    "glass").set("fontSize", font);
+        styles.getSelector("textField", "glass").set("background",
+                new QuadBackgroundComponent(new ColorRGBA(0.18f, 0.18f, 0.20f, 0.92f)));
 
-        // Cut sheet panel (scrollable)
-        CutSheetPanel cutSheetPanel = new CutSheetPanel(sceneManager, executor::getUnits);
-        cutSheetPanel.setSelectionManager(selectionManager);
-        cutSheetPanel.setContextMenu(contextMenu);
+        LemurAppState uiState = new LemurAppState(executor, selectionManager);
+        getStateManager().attach(uiState);
 
-        // 3D viewport right-click: camera controller picks a part, we show the menu
-        // on the AWT canvas at the cursor position. Swing popups must run on the EDT.
-        sceneManager.setContextMenuRequestHandler((awtX, awtY, partName) ->
-                SwingUtilities.invokeLater(() -> contextMenu.showAt(canvas, awtX, awtY, partName)));
-        JScrollPane cutSheetScroll = new JScrollPane(cutSheetPanel);
-        cutSheetScroll.setBorder(null);
-        cutSheetScroll.getVerticalScrollBar().setUnitIncrement(40);
-
-        // View layout: permanent horizontal JSplitPane.
-        // The jME3 AWT Canvas cannot be reparented (moving it between containers
-        // invalidates the OpenGL context and crashes GPU drivers), so we use a
-        // permanent split and drive the divider to show/hide panels.
-        JSplitPane hSplitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, viewportPanel, cutSheetScroll);
-        hSplitPane.setResizeWeight(0.6);
-        hSplitPane.setContinuousLayout(true);
-
-        ViewContainer view = buildViewContainer(hSplitPane, cutSheetPanel, executor, frame);
-
-        JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, view.panel(), commandPanel);
-        splitPane.setResizeWeight(0.75);
-        splitPane.setDividerLocation(620);
-        frame.getContentPane().add(splitPane, BorderLayout.CENTER);
-
-        // Escape handoff: command panel releases focus → give it to the canvas
-        commandPanel.setOnFocusToggle(canvas::requestFocusInWindow);
-        canvas.addKeyListener(canvasKeyAdapter(executor, commandPanel, frame));
-        installGlobalEscapeKey(commandPanel);
-
-        frame.addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                shutdown(frame);
-            }
-        });
-
-        frame.setVisible(true);
-        scheduleSplashDispose(splash, splashStart);
-
-        // Start the jME3 canvas now that the frame is visible and the native
-        // window peer exists. This ordering is required on Windows where LWJGL3
-        // cannot bind an OpenGL context to an unrealized AWT canvas.
-        sceneManager.startCanvas();
-        sceneManager.setSelectionManager(selectionManager);
-
-        // Apply initial layout now that the frame is realized
-        // (setDividerLocation with proportional values requires a non-zero width)
-        view.applyLayout().run();
-
-        // Surface any diagnostics from template loading (override warnings,
-        // parse errors, rejected files). They already went to stderr at load
-        // time; repeating them in the command panel gives GUI-only users a
-        // chance to notice.
-        List<String> loaderMessages = executor.drainLoaderMessages();
-        for (String msg : loaderMessages) {
-            commandPanel.appendOutput("[template loader] " + msg + "\n");
+        // Gate the camera controller so scroll-zoom and click-orbit don't
+        // fire when the cursor is over a Lemur panel. Without this, wheel
+        // events both scroll the ListBox and zoom the 3D viewport.
+        if (getCameraController() != null) {
+            getCameraController().setInputBlocker(uiState::isMouseOverUi);
         }
 
-        // Run startup script if it exists (~/.cadette/startup.cds)
-        String startupResult = executor.runStartupScript();
-        if (startupResult != null) {
-            commandPanel.appendOutput(startupResult + "\n");
-        }
+        System.err.println("[cadette] init complete");
     }
 
-    // ---------------------------------------------------------------------
-    // Scene manager setup
-    // ---------------------------------------------------------------------
-
-    private static SceneManager buildSceneManager() {
-        AppSettings settings = new AppSettings(true);
-        settings.setWidth(1280);
-        settings.setHeight(600);
-        settings.setFrameRate(60);
-        // MSAA: try 4x, but can be disabled with -Dcadette.msaa=0 for GPUs that don't support it
-        settings.setSamples(Integer.getInteger("cadette.msaa", 4));
-        settings.setAudioRenderer(null);  // no audio needed for a CAD app
-
-        SceneManager sm = new SceneManager();
-        sm.setPauseOnLostFocus(false);
-        sm.setSettings(settings);
-        sm.createCanvas();
-        // startCanvas() is called after frame.setVisible() in createAndShowGUI.
-        return sm;
-    }
-
-    // ---------------------------------------------------------------------
-    // File choosers
-    // ---------------------------------------------------------------------
-
-    /** Chooser for the `run` command when invoked with no path argument. */
-    private static Supplier<Path> scriptOpenChooser(JFrame frame) {
-        // Starts in the app's launch directory; thereafter remembers the
-        // directory of the last opened script so repeated runs don't force
-        // the user to re-navigate.
-        File[] lastDir = { new File(System.getProperty("user.dir")) };
-        return () -> {
-            JFileChooser chooser = new JFileChooser(lastDir[0]);
-            chooser.setDialogTitle("Open CADette Script");
-            chooser.setFileFilter(new FileNameExtensionFilter("CADette Scripts (*.cds)", "cds"));
-            int result = chooser.showOpenDialog(frame);
-            if (result != JFileChooser.APPROVE_OPTION) return null;
-            File selected = chooser.getSelectedFile();
-            File parent = selected.getParentFile();
-            if (parent != null) lastDir[0] = parent;
-            return selected.toPath();
-        };
-    }
-
-    /** Chooser for `export` commands that need a target path. */
-    private static BiFunction<String, String[], Path> exportSaveChooser(JFrame frame) {
-        return (description, extensions) -> {
-            JFileChooser chooser = new JFileChooser();
-            chooser.setDialogTitle("Export Cut Sheet");
-            chooser.setFileFilter(new FileNameExtensionFilter(description, extensions));
-            if (chooser.showSaveDialog(frame) != JFileChooser.APPROVE_OPTION) return null;
-            File file = chooser.getSelectedFile();
-            // Auto-append extension if the user didn't type one
-            if (!file.getName().contains(".") && extensions.length > 0) {
-                file = new File(file.getParentFile(), file.getName() + "." + extensions[0]);
-            }
-            return file.toPath();
-        };
-    }
-
-    // ---------------------------------------------------------------------
-    // Selection highlight wiring
-    // ---------------------------------------------------------------------
-
-    /**
-     * Subscribe to selection changes: toggle scene highlights for selected parts
-     * and echo a summary to the command output.
-     */
-    private static void wireSelectionHighlights(SelectionManager selectionManager,
-                                                 CommandPanel commandPanel) {
-        final List<String> previousHighlights = new ArrayList<>();
+    /** Mirror SelectionManager state into 3D viewport highlights. */
+    private void wireSelectionHighlights(SelectionManager selectionManager) {
+        List<String> previousHighlights = new ArrayList<>();
         selectionManager.addSelectionListener(event -> {
             for (String name : previousHighlights) {
-                sceneManager.setHighlight(name, false);
+                setHighlight(name, false);
             }
             previousHighlights.clear();
-
-            List<String> parts = selectionManager.getSelectedPartNames();
-            for (String name : parts) {
-                sceneManager.setHighlight(name, true);
-            }
-            previousHighlights.addAll(parts);
-
-            List<String> names = event.selectedNames();
-            if (!names.isEmpty()) {
-                String info = names.size() == 1
-                        ? "Selected '" + names.getFirst() + "'"
-                        : "Selected " + names.size() + " objects: " + String.join(", ", names);
-                SwingUtilities.invokeLater(() -> commandPanel.appendOutput(info + "\n"));
+            for (String name : selectionManager.getSelectedPartNames()) {
+                setHighlight(name, true);
+                previousHighlights.add(name);
             }
         });
-    }
-
-    // ---------------------------------------------------------------------
-    // Settings bar (units + material dropdowns)
-    // ---------------------------------------------------------------------
-
-    private static final Color PANEL_BG = new Color(40, 40, 48);
-    private static final Color LABEL_FG = new Color(180, 180, 180);
-    private static final Font LABEL_FONT = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
-
-    /**
-     * Build the settings row containing the units and material combo boxes,
-     * wired bidirectionally to the executor so command changes sync to the UI
-     * and vice versa. Re-entry guards prevent listener loops.
-     */
-    private static JPanel buildSettingsBar(CommandExecutor executor) {
-        final boolean[] updatingUnits = {false};
-        final boolean[] updatingMaterial = {false};
-        MaterialCatalog catalog = MaterialCatalog.instance();
-        final int[] separatorIndex = { catalog.preferredCount(executor.getUnits().getMeasurementSystem()) };
-
-        JPanel grid = new JPanel(new GridBagLayout());
-        grid.setOpaque(true);
-        grid.setBackground(PANEL_BG);
-        GridBagConstraints gbc = new GridBagConstraints();
-        gbc.insets = new Insets(2, 6, 2, 6);
-        gbc.anchor = GridBagConstraints.WEST;
-
-        // Units row
-        gbc.gridx = 0; gbc.gridy = 0; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        grid.add(styledLabel("Units:"), gbc);
-
-        JComboBox<UnitSystem> unitsCombo = new JComboBox<>(UnitSystem.values());
-        unitsCombo.setSelectedItem(executor.getUnits());
-        unitsCombo.setRenderer(new DefaultListCellRenderer() {
-            @Override
-            public Component getListCellRendererComponent(JList<?> list, Object value,
-                                                          int index, boolean isSelected, boolean cellHasFocus) {
-                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                if (value instanceof UnitSystem u) {
-                    setText(u.name().toLowerCase() + " (" + u.getAbbreviation() + ")");
-                }
-                return this;
-            }
-        });
-        unitsCombo.setFocusable(false);
-        unitsCombo.addActionListener(e -> {
-            if (updatingUnits[0]) return;
-            UnitSystem selected = (UnitSystem) unitsCombo.getSelectedItem();
-            if (selected != null) executor.setUnits(selected);
-        });
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        grid.add(unitsCombo, gbc);
-
-        // Material row
-        gbc.gridx = 0; gbc.gridy = 1; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0;
-        grid.add(styledLabel("Material:"), gbc);
-
-        JComboBox<Material> materialCombo = new JComboBox<>();
-        materialCombo.setFocusable(false);
-        materialCombo.setRenderer(new DefaultListCellRenderer() {
-            @Override
-            public Component getListCellRendererComponent(JList<?> list, Object value,
-                                                          int index, boolean isSelected, boolean cellHasFocus) {
-                JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
-                if (value instanceof Material m) {
-                    label.setText(m.getDisplayName());
-                    if (index >= separatorIndex[0] && index >= 0 && !isSelected) {
-                        label.setForeground(new Color(140, 140, 140));
-                    }
-                }
-                if (index == separatorIndex[0] && index > 0) {
-                    label.setBorder(BorderFactory.createCompoundBorder(
-                            BorderFactory.createMatteBorder(1, 0, 0, 0, new Color(100, 100, 100)),
-                            BorderFactory.createEmptyBorder(2, 0, 0, 0)));
-                } else {
-                    label.setBorder(BorderFactory.createEmptyBorder(1, 0, 1, 0));
-                }
-                return label;
-            }
-        });
-
-        Runnable refreshMaterials = () -> {
-            updatingMaterial[0] = true;
-            try {
-                MeasurementSystem ms = executor.getUnits().getMeasurementSystem();
-                separatorIndex[0] = catalog.preferredCount(ms);
-                Material currentSelection = executor.getDefaultMaterial();
-                materialCombo.removeAllItems();
-                for (Material m : catalog.getSortedFor(ms)) {
-                    materialCombo.addItem(m);
-                }
-                materialCombo.setSelectedItem(currentSelection);
-            } finally {
-                updatingMaterial[0] = false;
-            }
-        };
-        refreshMaterials.run();
-
-        materialCombo.addActionListener(e -> {
-            if (updatingMaterial[0]) return;
-            Material selected = (Material) materialCombo.getSelectedItem();
-            if (selected != null) executor.setDefaultMaterial(selected);
-        });
-        gbc.gridx = 1; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
-        grid.add(materialCombo, gbc);
-
-        // Sync UI when values change via commands
-        executor.addUnitChangeListener(u -> SwingUtilities.invokeLater(() -> {
-            updatingUnits[0] = true;
-            try {
-                unitsCombo.setSelectedItem(u);
-            } finally {
-                updatingUnits[0] = false;
-            }
-            executor.setDefaultMaterial(catalog.getDefaultFor(u.getMeasurementSystem()));
-            refreshMaterials.run();
-        }));
-        executor.addMaterialChangeListener(m -> SwingUtilities.invokeLater(() -> {
-            updatingMaterial[0] = true;
-            try {
-                materialCombo.setSelectedItem(m);
-            } finally {
-                updatingMaterial[0] = false;
-            }
-        }));
-
-        // Right-align the grid so it doesn't stretch across the full width
-        JPanel bottomBar = new JPanel(new BorderLayout());
-        bottomBar.setOpaque(true);
-        bottomBar.setBackground(PANEL_BG);
-        bottomBar.add(grid, BorderLayout.EAST);
-        return bottomBar;
-    }
-
-    private static JLabel styledLabel(String text) {
-        JLabel label = new JLabel(text);
-        label.setForeground(LABEL_FG);
-        label.setFont(LABEL_FONT);
-        return label;
-    }
-
-    // ---------------------------------------------------------------------
-    // View container (tab bar + split-pane layout toggle)
-    // ---------------------------------------------------------------------
-
-    /** The view container plus the Runnable that applies the initial layout. */
-    private record ViewContainer(JPanel panel, Runnable applyLayout) {}
-
-    /**
-     * Build the container around {@code hSplitPane} (viewport + cut sheet).
-     * Always split-pane mode now — the tabbed alternative + grammar were
-     * retired 2026-05-13 in favour of the Lemur app's draggable splitter
-     * tree. The caller must invoke {@link ViewContainer#applyLayout()}
-     * after the frame is realized (proportional divider locations need
-     * a non-zero width).
-     */
-    private static ViewContainer buildViewContainer(JSplitPane hSplitPane,
-                                                     CutSheetPanel cutSheetPanel,
-                                                     CommandExecutor executor,
-                                                     JFrame frame) {
-        JPanel viewContainer = new JPanel(new BorderLayout());
-        viewContainer.add(hSplitPane, BorderLayout.CENTER);
-
-        Runnable applyLayout = () -> {
-            hSplitPane.setResizeWeight(0.6);
-            hSplitPane.setDividerLocation((int) (frame.getWidth() * 0.6));
-        };
-
-        return new ViewContainer(viewContainer, applyLayout);
-    }
-
-    // ---------------------------------------------------------------------
-    // Key handling
-    // ---------------------------------------------------------------------
-
-    /** Hotkeys applied to the jME3 canvas (AWT Canvas bypasses Swing's KeyboardFocusManager). */
-    private static KeyAdapter canvasKeyAdapter(CommandExecutor executor,
-                                                CommandPanel commandPanel,
-                                                JFrame frame) {
-        return new KeyAdapter() {
-            @Override
-            public void keyPressed(KeyEvent e) {
-                int code = e.getKeyCode();
-                if (code == KeyEvent.VK_ESCAPE) {
-                    SwingUtilities.invokeLater(commandPanel::activate);
-                } else if (code == KeyEvent.VK_Z && e.isControlDown()) {
-                    String msg = e.isShiftDown() ? executor.redo() : executor.undo();
-                    SwingUtilities.invokeLater(() -> commandPanel.appendOutput(msg + "\n"));
-                } else if (code == KeyEvent.VK_R && !e.isControlDown() && !e.isAltDown()) {
-                    SwingUtilities.invokeLater(() ->
-                            commandPanel.appendOutput(executor.execute("run") + "\n"));
-                } else if (code == KeyEvent.VK_Q && !e.isControlDown() && !e.isAltDown()) {
-                    shutdown(frame);
-                } else if (code == KeyEvent.VK_L && !e.isControlDown() && !e.isAltDown()) {
-                    SwingUtilities.invokeLater(() ->
-                            commandPanel.appendOutput(executor.execute("list") + "\n"));
-                }
-            }
-        };
-    }
-
-    /**
-     * Catch-all for Escape when focus is on any other Swing component (e.g. split
-     * pane divider). The canvas key listener handles Escape while the canvas has
-     * focus; this picks up the cases where it doesn't.
-     */
-    private static void installGlobalEscapeKey(CommandPanel commandPanel) {
-        KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
-            if (e.getID() == KeyEvent.KEY_PRESSED && e.getKeyCode() == KeyEvent.VK_ESCAPE) {
-                if (!commandPanel.isCommandActive()) {
-                    SwingUtilities.invokeLater(commandPanel::activate);
-                    return true;
-                }
-            }
-            return false;
-        });
-    }
-
-    // ---------------------------------------------------------------------
-    // Splash
-    // ---------------------------------------------------------------------
-
-    /**
-     * Dispose the splash after {@link #SPLASH_MIN_DISPLAY_MS} has elapsed since
-     * it first became visible. The main frame has already been shown by the time
-     * we're called, so the splash (which is always-on-top) hides it briefly.
-     */
-    private static void scheduleSplashDispose(JWindow splash, long splashStart) {
-        if (splash == null) return;
-        long elapsed = System.currentTimeMillis() - splashStart;
-        int remaining = (int) Math.max(0, SPLASH_MIN_DISPLAY_MS - elapsed);
-        Timer timer = new Timer(remaining, e -> {
-            // Defensive: clear always-on-top before dispose. The main frame
-            // appears to inherit always-on-top behavior on some Linux WMs;
-            // see project_always_on_top_papercut.md for the leading theory.
-            splash.setAlwaysOnTop(false);
-            splash.dispose();
-        });
-        timer.setRepeats(false);
-        timer.start();
-    }
-
-    // ---------------------------------------------------------------------
-    // Shutdown
-    // ---------------------------------------------------------------------
-
-    private static void shutdown(JFrame frame) {
-        if (shuttingDown) return;
-        shuttingDown = true;
-
-        // Run shutdown off the EDT to avoid deadlocking with jME3's render thread.
-        // Use a daemon thread + Runtime halt as a fallback if stop() hangs.
-        Thread t = new Thread(() -> {
-            try {
-                sceneManager.stop();
-            } catch (Exception ignored) {
-            }
-            // Force-terminate — jME3/LWJGL can leave non-daemon threads alive
-            Runtime.getRuntime().halt(0);
-        }, "cadette-shutdown");
-        t.setDaemon(true);
-        t.start();
     }
 }
