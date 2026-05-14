@@ -73,16 +73,43 @@ public class LemurTabHost extends Node {
     /** Add a tab. The first tab added becomes active automatically. */
     public void addTab(String label, Spatial content) {
         Button button = new Button(label);
-        int idx = tabs.size();
-        button.addClickCommands(b -> setActive(idx));
+        // Hold onto the Tab reference rather than the index — indices
+        // shift when tabs are removed, so a captured-at-add-time index
+        // would point at the wrong tab after a removal.
+        Tab tab = new Tab(label, content, button);
+        button.addClickCommands(b -> setActive(tabs.indexOf(tab)));
         tabBar.addChild(button);
 
-        tabs.add(new Tab(label, content, button));
+        tabs.add(tab);
         if (activeIndex < 0) {
             setActive(0);
         } else {
             applyLayout(); // tab bar grew — re-layout
         }
+    }
+
+    /** Remove the tab whose content matches the given spatial. If the
+     *  removed tab was active, switches to the next available tab (or
+     *  goes to no-active if none remain). Called during drag-detach
+     *  when a tabbed panel is being moved elsewhere. */
+    public void removeTab(Spatial content) {
+        int idx = indexOf(content);
+        if (idx < 0) return;
+        Tab tab = tabs.remove(idx);
+        tabBar.removeChild(tab.button);
+        if (tab.content.getParent() == this) {
+            detachChild(tab.content);
+        }
+        if (idx == activeIndex) {
+            int previousActive = activeIndex;
+            activeIndex = -1;
+            if (!tabs.isEmpty()) {
+                setActive(Math.min(previousActive, tabs.size() - 1));
+            }
+        } else if (idx < activeIndex) {
+            activeIndex--;
+        }
+        applyLayout();
     }
 
     public void setActive(int index) {
@@ -109,11 +136,35 @@ public class LemurTabHost extends Node {
         return activeIndex >= 0 ? tabs.get(activeIndex).label : null;
     }
 
+    public int getTabCount() {
+        return tabs.size();
+    }
+
+    public Button getTabButton(int index) {
+        return tabs.get(index).button;
+    }
+
+    public Spatial getTabContent(int index) {
+        return tabs.get(index).content;
+    }
+
+    /** Find which tab index hosts the given content spatial; -1 if not
+     *  in this TabHost. Used during drag-detach to locate the source. */
+    public int indexOf(Spatial content) {
+        for (int i = 0; i < tabs.size(); i++) {
+            if (tabs.get(i).content == content) return i;
+        }
+        return -1;
+    }
+
     public void setSize(float w, float h) {
         this.totalW = w;
         this.totalH = h;
         applyLayout();
     }
+
+    public float getCurrentWidth()  { return totalW; }
+    public float getCurrentHeight() { return totalH; }
 
     private void applyLayout() {
         if (totalW <= 0 || totalH <= 0 || tabs.isEmpty()) {

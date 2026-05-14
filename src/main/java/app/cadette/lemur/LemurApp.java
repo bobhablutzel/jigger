@@ -80,6 +80,15 @@ public class LemurApp extends SceneManager {
         // background colour. Whatever else we add here is layered on top.
         super.simpleInitApp();
 
+        // SimpleApplication binds Esc to "SIMPLEAPP_Exit" by default —
+        // surprising for a CAD shell where Esc is more naturally a
+        // "cancel current op" or "focus viewport" key. Drop the default
+        // here; keybindings overall are pending a rethink (see
+        // project_keybindings_backlog.md).
+        if (getInputManager().hasMapping(INPUT_MAPPING_EXIT)) {
+            getInputManager().deleteMapping(INPUT_MAPPING_EXIT);
+        }
+
         CommandExecutor executor = new CommandExecutor(this);
         executor.loadTemplates();
 

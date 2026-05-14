@@ -65,8 +65,10 @@ public class LemurSplitter extends Node {
     private static final ColorRGBA DIVIDER_HOVER_COLOR  = new ColorRGBA(0.45f, 0.55f, 0.70f, 1f);
 
     private final Orient orient;
-    private final Spatial firstChild;
-    private final Spatial secondChild;
+    /** Mutable so {@link #replaceChild(Spatial, Spatial)} can swap a slot
+     *  during drag-to-rearrange. The Splitter is otherwise immutable. */
+    private Spatial firstChild;
+    private Spatial secondChild;
     private final Container divider;
     private final QuadBackgroundComponent dividerBg;
     private final BiConsumer<Spatial, float[]> reflowCallback;
@@ -146,6 +148,31 @@ public class LemurSplitter extends Node {
         this.secondMinSize = second;
         setRatio(ratio); // re-clamp with the new bounds
     }
+
+    /** Swap one child for another. Used by the drag-to-rearrange flow
+     *  to wrap a panel in a TabHost or to replace a moved-away panel
+     *  with a placeholder. Returns true if oldChild was found and
+     *  replaced; false if oldChild isn't in this splitter. */
+    public boolean replaceChild(Spatial oldChild, Spatial newChild) {
+        if (firstChild == oldChild) {
+            firstChild.removeFromParent();
+            firstChild = newChild;
+            attachChild(newChild);
+            applyLayout();
+            return true;
+        }
+        if (secondChild == oldChild) {
+            secondChild.removeFromParent();
+            secondChild = newChild;
+            attachChild(newChild);
+            applyLayout();
+            return true;
+        }
+        return false;
+    }
+
+    public Spatial getFirstChild()  { return firstChild; }
+    public Spatial getSecondChild() { return secondChild; }
 
     public float getRatio() {
         return ratio;

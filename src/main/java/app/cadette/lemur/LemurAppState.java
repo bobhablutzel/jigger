@@ -45,14 +45,19 @@ import com.simsilica.lemur.GuiGlobals;
 import com.simsilica.lemur.HAlignment;
 import com.simsilica.lemur.Label;
 import com.simsilica.lemur.ListBox;
+import com.simsilica.lemur.Panel;
 import com.simsilica.lemur.TextField;
+import com.simsilica.lemur.ValueRenderer;
 import com.simsilica.lemur.component.QuadBackgroundComponent;
 import com.simsilica.lemur.component.SpringGridLayout;
+import com.simsilica.lemur.core.GuiComponent;
 import com.simsilica.lemur.core.GuiControl;
 import com.simsilica.lemur.core.VersionedList;
 import com.simsilica.lemur.event.CursorButtonEvent;
 import com.simsilica.lemur.event.CursorEventControl;
 import com.simsilica.lemur.event.DefaultCursorListener;
+import com.simsilica.lemur.event.MouseEventControl;
+import com.simsilica.lemur.event.MouseListener;
 import com.simsilica.lemur.event.KeyAction;
 import com.simsilica.lemur.event.KeyActionListener;
 import lombok.Getter;
@@ -161,9 +166,10 @@ public class LemurAppState extends BaseAppState {
     private int lastCutSheetW = -1;
     private int lastCutSheetH = -1;
 
-    /** Panels enrolled in the mouseOverUi gate. Their world bounds are
-     *  OR'd each frame; the splitter tree decides where each ends up. */
-    private final List<Container> gatedPanels = new ArrayList<>();
+    /** Drop-target nodes (TabHosts holding panels, plus placeholders)
+     *  enrolled in the mouseOverUi gate. Their world bounds are OR'd
+     *  each frame; the splitter tree decides where each ends up. */
+    private final List<Node> gatedPanels = new ArrayList<>();
 
     /** Root of the layout tree; covers the full window minus jME3 chrome.
      *  Resized in update() when the camera dimensions change. */
@@ -180,6 +186,40 @@ public class LemurAppState extends BaseAppState {
     /** Previous frame's drag state — used to detect drag-release and
      *  trigger a final reflow with up-to-date visibleItems. */
     private boolean wasDragging = false;
+
+    // ---- Drag-to-rearrange state ----------------------------------------
+    /** Set of panels (and TabHosts) eligible to be drag sources / drop
+     *  targets. Viewport spacer + the splitters themselves stay out. */
+    private final java.util.List<com.jme3.scene.Node> draggablePanels = new ArrayList<>();
+    /** Stable display label for each draggable panel — used as the tab
+     *  title when wrapping a panel into a TabHost on drop. */
+    private final java.util.Map<com.jme3.scene.Node, String> panelLabels =
+            new java.util.HashMap<>();
+    /** Currently-dragged panel; null if no drag in progress. */
+    private com.jme3.scene.Node draggingPanel = null;
+    /** The TabHost the dragging panel is currently in. Captured at drag
+     *  promotion. Used to exclude the source from drop-hover detection
+     *  and from completeDrag's move dispatch — dropping on the panel's
+     *  own host should be a no-op, not a detach-and-readd round-trip
+     *  (which would leave the panel orphaned because the empty source
+     *  TabHost gets collapsed to a placeholder before the readd). */
+    private LemurTabHost dragSourceHost = null;
+    /** Currently-hovered drop target during a drag; null if cursor is
+     *  not over any other panel. */
+    private com.jme3.scene.Node dragHoverTarget = null;
+    /** Translucent overlay Container attached as a child of
+     *  {@link #dragHoverTarget} during drag-hover. Reused across hovers;
+     *  attached/detached as the target changes. */
+    private Container dragHoverOverlay = null;
+    /** Tint applied to a drop target to telegraph "release here to drop". */
+    private static final com.jme3.math.ColorRGBA DROP_TARGET_BG =
+            new com.jme3.math.ColorRGBA(0.30f, 0.50f, 0.75f, 0.40f);
+    private static final float DRAG_THRESHOLD_PX = 6f;
+    /** A press has happened on a draggable header but cursor hasn't moved
+     *  far enough yet to commit to a drag. Promoted to {@link #draggingPanel}
+     *  once the cursor crosses {@link #DRAG_THRESHOLD_PX}. */
+    private com.jme3.scene.Node dragCandidate = null;
+    private com.jme3.math.Vector2f dragCandidateStart = null;
 
     /**
      * True while the cursor is over any Lemur panel managed by this state.
@@ -200,50 +240,51 @@ public class LemurAppState extends BaseAppState {
         propertiesPanel = buildPropertiesPanel();
         cutSheetPanel = buildCutSheetPanel();
 
-        // Track which Lemur panels participate in the mouseOverUi gate.
-        // Their world bounds shift as the user drags splitter dividers,
-        // so the check uses getWorldTranslation() each frame.
-        gatedPanels.add(commandPanel);
-        gatedPanels.add(partsPanel);
-        gatedPanels.add(propertiesPanel);
-        gatedPanels.add(cutSheetPanel);
+        // Wrap each panel in its own TabHost. Always-tabbed model: even
+        // a single-panel region is a TabHost so the UX is consistent
+        // (tab button = drag handle = title, regardless of how many
+        // panels share the region).
+        LemurTabHost partsHost      = wrapInTabHost(partsPanel,      "Parts");
+        LemurTabHost propertiesHost = wrapInTabHost(propertiesPanel, "Properties");
+        LemurTabHost cutSheetHost   = wrapInTabHost(cutSheetPanel,   "Cut Sheet");
+        LemurTabHost commandHost    = wrapInTabHost(commandPanel,    "Command");
 
-        // Build the layout tree. Hardcoded for now; user-saved layouts and
-        // drag-to-rearrange are explicit follow-up sessions.
+        // Each TabHost participates in the mouseOverUi gate — its bounds
+        // cover both tab bar and content, so the gate kicks in correctly
+        // for either area.
+        gatedPanels.add(partsHost);
+        gatedPanels.add(propertiesHost);
+        gatedPanels.add(cutSheetHost);
+        gatedPanels.add(commandHost);
+
+        // Build the layout tree. Hardcoded for now; user-saved layouts
+        // are an explicit follow-up session.
         //
         //   VSplit (ROOT_RATIO):
         //     ├── HSplit (UPPER_LEFT_RATIO):
         //     │     ├── VSplit (LEFT_PARTS_RATIO):
-        //     │     │     ├── partsPanel       (hierarchical tree)
-        //     │     │     └── propertiesPanel  (selection details)
+        //     │     │     ├── partsHost       (TabHost wrapping parts)
+        //     │     │     └── propertiesHost  (TabHost wrapping properties)
         //     │     └── HSplit (CENTER_VIEWPORT_RATIO):
-        //     │           ├── viewportSpacer   (empty Node — 3D shows through)
-        //     │           └── cutSheetPanel
-        //     └── commandPanel
+        //     │           ├── viewportSpacer  (empty Node — 3D shows through)
+        //     │           └── cutSheetHost
+        //     └── commandHost
         Node viewportSpacer = new Node("viewportSpacer");
 
         LemurSplitter leftSplit = makeSplit(LemurSplitter.Orient.VERTICAL,
-                partsPanel, propertiesPanel, LEFT_PARTS_RATIO);
-        // Properties needs ~180px to fit "Position: (xxx, xxx, xxx)" rows
-        // without wrap. Parts gets ~150 so 8+ rows are visible — anything
-        // beyond shows as "... N more" via the truncation logic in
-        // refreshPartsList (real scrolling is backlogged).
+                partsHost, propertiesHost, LEFT_PARTS_RATIO);
         leftSplit.setMinSizes(150, 180);
 
         LemurSplitter centerSplit = makeSplit(LemurSplitter.Orient.HORIZONTAL,
-                viewportSpacer, cutSheetPanel, CENTER_VIEWPORT_RATIO);
-        // Cut sheet readable at ≥240; viewport collapses to a thumbnail at 160.
+                viewportSpacer, cutSheetHost, CENTER_VIEWPORT_RATIO);
         centerSplit.setMinSizes(160, 240);
 
         LemurSplitter upperSplit = makeSplit(LemurSplitter.Orient.HORIZONTAL,
                 leftSplit, centerSplit, UPPER_LEFT_RATIO);
-        // Left column min driven by properties min above; right column min
-        // matches viewport+cutsheet pair.
         upperSplit.setMinSizes(200, 420);
 
         rootSplitter = makeSplit(LemurSplitter.Orient.VERTICAL,
-                upperSplit, commandPanel, ROOT_RATIO);
-        // Command panel: at least one input line + a few output rows.
+                upperSplit, commandHost, ROOT_RATIO);
         rootSplitter.setMinSizes(200, 80);
 
         simpleApp.getGuiNode().attachChild(rootSplitter);
@@ -259,6 +300,7 @@ public class LemurAppState extends BaseAppState {
         SceneManager sceneManager = (SceneManager) app;
         sceneManager.addSceneChangeListener(this::refreshPartsList);
         selectionManager.addSelectionListener(this::onSelectionChanged);
+
 
         // Populate from whatever's already in the scene (zero on a fresh launch).
         refreshPartsList();
@@ -294,6 +336,18 @@ public class LemurAppState extends BaseAppState {
      *  visibleItems = listHeight / TARGET_ROW_H. */
     private static final float TARGET_ROW_H = 18f;
 
+    /** Approximate pixel width per glyph at the current 12pt font. Used
+     *  for the output-truncation math; not load-bearing, just needs to
+     *  be in the right ballpark so the ellipsis lands near the right
+     *  edge rather than mid-cell. */
+    private static final float OUTPUT_GLYPH_W = 7f;
+
+    /** Width currently allotted to the output ListBox. Set in
+     *  onChildReflow for commandPanel; consumed by
+     *  {@link #truncateForOutput} to decide how aggressively to ellipsis
+     *  each row's text. */
+    private float outputCellWidth = 0f;
+
     /** Reflow callback invoked by Splitter (and later TabHost) for each of
      *  its children when their allotted size changes. Dispatches by spatial
      *  identity to the appropriate inner-widget sizing logic.
@@ -314,32 +368,40 @@ public class LemurAppState extends BaseAppState {
         float w = size[0];
         float h = size[1];
         if (child == partsPanel) {
+            // Panel headers removed (tab button now provides the title);
+            // body subtracts only padding, not header-height.
             partsPanel.setPreferredSize(new Vector3f(w, h, 0));
             partsBody.setPreferredSize(new Vector3f(
-                    Math.max(40, w - 20), Math.max(20, h - 40), 0));
-            // Re-render to update the truncation cutoff for the new
-            // height. Deferred during drag to avoid per-frame rebuilds;
-            // the drag-release path in update() triggers a final reflow
-            // that catches the settled size.
+                    Math.max(40, w - 10), Math.max(20, h - 10), 0));
             if (!isAnySplitterDragging()) {
                 refreshPartsList();
             }
         } else if (child == commandPanel) {
             commandPanel.setPreferredSize(new Vector3f(w, h, 0));
-            float listH = Math.max(40, h - 80);
-            outputList.setPreferredSize(new Vector3f(Math.max(40, w - 20), listH, 0));
+            // Reserve ~40px for the input TextField + padding.
+            float listH = Math.max(40, h - 40);
+            float listW = Math.max(40, w - 10);
+            outputList.setPreferredSize(new Vector3f(listW, listH, 0));
+            // Cell width = list width minus a slider/padding allowance.
+            outputCellWidth = Math.max(20, listW - 24);
             if (!isAnySplitterDragging()) {
                 outputList.setVisibleItems(Math.max(3, (int) (listH / TARGET_ROW_H)));
+                // Force the ListBox to re-render visible cells through the
+                // cell renderer with the new outputCellWidth (and thus a
+                // new truncation budget). Bumping the model version via
+                // clear+addAll is the cleanest trigger; cost is fine at
+                // the output sizes we expect.
+                rerenderOutputCells();
             }
-            commandInput.setPreferredWidth(Math.max(40, w - 20));
+            commandInput.setPreferredWidth(Math.max(40, w - 10));
         } else if (child == cutSheetPanel) {
             cutSheetPanel.setPreferredSize(new Vector3f(w, h, 0));
             cutSheetImageHolder.setPreferredSize(new Vector3f(
-                    Math.max(40, w - 20), Math.max(40, h - 50), 0));
+                    Math.max(40, w - 10), Math.max(40, h - 10), 0));
         } else if (child == propertiesPanel) {
             propertiesPanel.setPreferredSize(new Vector3f(w, h, 0));
             propertiesBody.setPreferredSize(new Vector3f(
-                    Math.max(40, w - 20), Math.max(20, h - 40), 0));
+                    Math.max(40, w - 10), Math.max(20, h - 10), 0));
         } else if (child instanceof LemurSplitter inner) {
             inner.setSize(w, h);
         } else if (child instanceof LemurTabHost tab) {
@@ -371,10 +433,35 @@ public class LemurAppState extends BaseAppState {
 
     private Container buildCommandPanel() {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
-        panel.addChild(new Label("Command"));
+        panelLabels.put(panel, "Command");
 
         outputModel = new VersionedList<>();
         outputList = panel.addChild(new ListBox<>(outputModel));
+        // Custom cell renderer: dynamically truncates each line to fit
+        // the current cell width. Lemur's TextComponent.reshape always
+        // sets the BitmapText box to the layout-allocated width — so
+        // a Label.setMaxWidth(0) doesn't actually disable wrap; reshape
+        // overrides it. Truncating with ellipsis at render time
+        // sidesteps the issue: lines never wrap because they never
+        // exceed the cell width.
+        outputList.setCellRenderer(new ValueRenderer<String>() {
+            @Override
+            public void configureStyle(com.simsilica.lemur.style.ElementId parent, String style) {
+                // No-op — per-Label properties applied in getView.
+            }
+            @Override
+            public Panel getView(String value, boolean selected, Panel existing) {
+                Label lbl;
+                if (existing instanceof Label l) {
+                    lbl = l;
+                } else {
+                    lbl = new Label("");
+                    lbl.setTextHAlignment(HAlignment.Left);
+                }
+                lbl.setText(truncateForOutput(value));
+                return lbl;
+            }
+        });
 
         commandInput = panel.addChild(new TextField(""));
         commandInput.setSingleLine(true);
@@ -394,7 +481,7 @@ public class LemurAppState extends BaseAppState {
 
     private Container buildCutSheetPanel() {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
-        panel.addChild(new Label("Cut Sheet"));
+        panelLabels.put(panel, "Cut Sheet");
 
         // Image holder gets no explicit background — when no cut sheet has
         // been rendered yet, the panel's glass style shows through, matching
@@ -455,7 +542,7 @@ public class LemurAppState extends BaseAppState {
 
     private Container buildPartsPanel() {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
-        panel.addChild(new Label("Parts"));
+        panelLabels.put(panel, "Parts");
 
         // Container-of-rows; FillMode.None on Y keeps each row at natural
         // Label height (no cell-stretching like ListBox's GridPanel does).
@@ -469,7 +556,7 @@ public class LemurAppState extends BaseAppState {
 
     private Container buildPropertiesPanel() {
         Container panel = new Container(new SpringGridLayout(Axis.Y, Axis.X));
-        panel.addChild(new Label("Properties"));
+        panelLabels.put(panel, "Properties");
         // FillMode.None on the major (Y) axis stops the body from
         // stretching its rows to fill the panel's vertical space —
         // each property row stays at its natural Label height; extra
@@ -477,6 +564,280 @@ public class LemurAppState extends BaseAppState {
         propertiesBody = panel.addChild(new Container(
                 new SpringGridLayout(Axis.Y, Axis.X, FillMode.None, FillMode.Last)));
         return panel;
+    }
+
+    // -------------------------------------------------------------------
+    // Drag-to-rearrange
+    // -------------------------------------------------------------------
+
+    /** Wrap a panel in its own single-tab TabHost. The TabHost provides
+     *  the visible title (its tab button) AND the drag handle — pressing
+     *  the tab button is what starts a drag. Always-tabbed model: every
+     *  panel lives in a TabHost from the start so dropping a panel back
+     *  to its original slot still leaves it tabbed (consistent UX,
+     *  user-flagged decision 2026-05-14). */
+    private LemurTabHost wrapInTabHost(Container panel, String label) {
+        LemurTabHost host = new LemurTabHost(this::onChildReflow);
+        allTabHosts.add(host);
+        draggablePanels.add(host);
+        host.addTab(label, panel);
+        wireTabButtonDrag(host, 0);
+        return host;
+    }
+
+    /** Common press-handling for drag handles (panel headers + tab
+     *  buttons). Defensively clears any stale draggingPanel from a
+     *  previous interaction the release listener might have missed,
+     *  then arms the new candidate. */
+    private void startDragCandidate(com.jme3.scene.Node panel, float x, float y) {
+        if (draggingPanel != null) {
+            clearDropHighlight();
+            draggingPanel = null;
+        }
+        dragCandidate = panel;
+        dragCandidateStart = new Vector2f(x, y);
+    }
+
+    /** Press AND release are handled per-widget by the same listener
+     *  (CursorEventControl for header Labels, MouseEventControl for tab
+     *  Buttons). Lemur's PickEventSession captures press-to-release on
+     *  the source spatial — same pattern LemurSplitter uses for the
+     *  divider — so release reliably fires on the same listener that
+     *  saw the press, even if the cursor moved elsewhere. */
+    private void handleDragRelease() {
+        if (draggingPanel != null) {
+            completeDrag();
+        }
+        dragCandidate = null;
+        dragCandidateStart = null;
+    }
+
+    /** Per-frame drag bookkeeping called from {@link #update}. Promotes a
+     *  press to a drag once the cursor moves past the threshold; tracks
+     *  which panel the cursor is over during the drag and tints that
+     *  panel as a drop-zone hint. */
+    private void updateDragState(InputManager input) {
+        Vector2f cursor = input.getCursorPosition();
+        if (cursor == null) return;
+
+        // Promote candidate → actual drag once cursor moved enough.
+        if (dragCandidate != null && draggingPanel == null && dragCandidateStart != null) {
+            float dx = cursor.x - dragCandidateStart.x;
+            float dy = cursor.y - dragCandidateStart.y;
+            if (dx * dx + dy * dy > DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+                draggingPanel = dragCandidate;
+                dragSourceHost = findTabHostFor(draggingPanel);
+            }
+        }
+
+        // Update which drop target the cursor is currently over.
+        // Skip: the dragging panel itself, the source TabHost (dropping
+        // there would be a no-op), and detached nodes.
+        if (draggingPanel != null) {
+            com.jme3.scene.Node hover = null;
+            for (com.jme3.scene.Node p : draggablePanels) {
+                if (p == draggingPanel) continue;
+                if (p == dragSourceHost) continue;
+                if (p.getParent() == null) continue;
+                if (cursorOverDropTarget(cursor, p)) {
+                    hover = p;
+                    break;
+                }
+            }
+            if (hover != dragHoverTarget) {
+                clearDropHighlight();
+                if (hover != null) {
+                    applyDropHighlight(hover);
+                }
+                dragHoverTarget = hover;
+            }
+        }
+    }
+
+    /** Tint a drop-target node by attaching a translucent overlay
+     *  Container sized to match the target. Works for both TabHosts
+     *  (which don't have setBackground) and placeholder Containers. */
+    private void applyDropHighlight(com.jme3.scene.Node target) {
+        if (dragHoverOverlay == null) {
+            dragHoverOverlay = new Container();
+            dragHoverOverlay.setBackground(new QuadBackgroundComponent(DROP_TARGET_BG));
+        }
+        float w = 0, h = 0;
+        if (target instanceof LemurTabHost t) {
+            w = t.getCurrentWidth();
+            h = t.getCurrentHeight();
+        } else if (target instanceof Container c) {
+            GuiControl gc = c.getControl(GuiControl.class);
+            if (gc != null) {
+                Vector3f s = gc.getSize();
+                w = s.x;
+                h = s.y;
+            }
+        }
+        dragHoverOverlay.setPreferredSize(new Vector3f(w, h, 0));
+        dragHoverOverlay.setLocalTranslation(0, 0, 0.5f);
+        target.attachChild(dragHoverOverlay);
+    }
+
+    private void clearDropHighlight() {
+        if (dragHoverOverlay != null && dragHoverOverlay.getParent() != null) {
+            dragHoverOverlay.removeFromParent();
+        }
+        dragHoverTarget = null;
+    }
+
+    /** Called on mouse-up after a drag. Moves the dragged panel onto the
+     *  drop target — wrapping the target in a TabHost (or adding to an
+     *  existing one) and leaving an empty placeholder in the source slot.
+     *  No-op if the target is the panel's own source host. */
+    private void completeDrag() {
+        if (dragHoverTarget != null
+                && dragHoverTarget != draggingPanel
+                && dragHoverTarget != dragSourceHost) {
+            movePanelOnto(draggingPanel, dragHoverTarget);
+        }
+        clearDropHighlight();
+        draggingPanel = null;
+        dragSourceHost = null;
+    }
+
+    /** Move {@code moving} (a panel content) into the drop {@code target}
+     *  (a TabHost or placeholder). Always-tabbed model: every panel
+     *  lives in a TabHost from initial layout onward, so the target is
+     *  always either an existing TabHost (append as tab) or a
+     *  placeholder Container in a Splitter slot (replace placeholder
+     *  with a fresh single-tab TabHost wrapping moving). */
+    private void movePanelOnto(com.jme3.scene.Node moving, com.jme3.scene.Node target) {
+        String movingLabel = panelLabels.getOrDefault(moving, "Panel");
+
+        // Pull moving out of its current TabHost. If that empties the
+        // source TabHost, the empty host is replaced with a placeholder
+        // (handled inside detachFromHost).
+        detachFromHost(moving);
+
+        // Target is an "(empty)" placeholder — replace it with a new
+        // single-tab TabHost wrapping the moving panel.
+        if (target instanceof Container tc && placeholders.contains(tc)) {
+            com.jme3.scene.Node tcParent = tc.getParent();
+            if (tcParent instanceof LemurSplitter splitter) {
+                LemurTabHost newHost = new LemurTabHost(this::onChildReflow);
+                allTabHosts.add(newHost);
+                draggablePanels.add(newHost);
+                gatedPanels.add(newHost);
+                splitter.replaceChild(tc, newHost);
+                newHost.addTab(movingLabel, moving);
+                wireTabButtonDrag(newHost, 0);
+            }
+            placeholders.remove(tc);
+            draggablePanels.remove(tc);
+            gatedPanels.remove(tc);
+            panelLabels.remove(tc);
+            return;
+        }
+
+        // Target is an existing TabHost — append as another tab.
+        if (target instanceof LemurTabHost existing) {
+            existing.addTab(movingLabel, moving);
+            wireTabButtonDrag(existing, existing.getTabCount() - 1);
+            existing.setActive(existing.getTabCount() - 1);
+        }
+    }
+
+    /** Remove a panel content from its current TabHost. If the TabHost
+     *  is left empty (had only one tab), it gets replaced in its parent
+     *  Splitter by a placeholder so the layout doesn't collapse to dead
+     *  space. Handles both active and inactive tabs — an inactive tab's
+     *  content has no scene-graph parent but is still in the TabHost's
+     *  tabs list, so we locate the host via {@link #findTabHostFor}. */
+    private void detachFromHost(com.jme3.scene.Node panel) {
+        LemurTabHost host = findTabHostFor(panel);
+        if (host == null) return;
+        host.removeTab(panel);
+        if (host.getTabCount() == 0) {
+            com.jme3.scene.Node hostParent = host.getParent();
+            if (hostParent instanceof LemurSplitter splitter) {
+                Container placeholder = makePlaceholder();
+                splitter.replaceChild(host, placeholder);
+                allTabHosts.remove(host);
+                draggablePanels.remove(host);
+                gatedPanels.remove(host);
+            }
+        }
+    }
+
+    /** Find the TabHost that currently holds {@code content} as one of
+     *  its tabs (active or inactive). Returns null if the content isn't
+     *  in any tracked TabHost. */
+    private LemurTabHost findTabHostFor(com.jme3.scene.Spatial content) {
+        for (LemurTabHost h : allTabHosts) {
+            if (h.indexOf(content) >= 0) return h;
+        }
+        return null;
+    }
+
+    /** Empty placeholder shown in a Splitter slot after the panel that
+     *  was there has been dragged elsewhere. Holds the slot open until
+     *  another panel is dropped on it. Registered in {@link #placeholders}
+     *  and {@link #draggablePanels} so the drag-hover system recognises
+     *  it as a drop target (but doesn't itself become draggable — it
+     *  has no header). */
+    private Container makePlaceholder() {
+        Container c = new Container(new SpringGridLayout(Axis.Y, Axis.X));
+        Label l = new Label("(drop a panel here)");
+        l.setTextHAlignment(HAlignment.Center);
+        c.addChild(l);
+        placeholders.add(c);
+        draggablePanels.add(c);
+        gatedPanels.add(c);
+        panelLabels.put(c, "(empty)");
+        return c;
+    }
+
+    /** All TabHosts we've created. Tracked so future drag operations
+     *  can recognise them as containers and add to them. */
+    private final List<LemurTabHost> allTabHosts = new ArrayList<>();
+
+    /** Containers that are "(empty)" placeholders left in a Splitter slot
+     *  after a panel was dragged elsewhere. Tracked separately so the
+     *  drop logic can recognise them and just replace them rather than
+     *  wrap in a TabHost. */
+    private final Set<Container> placeholders = new java.util.HashSet<>();
+
+    /** Wire drag detection onto a tab button so the user can grab a tab
+     *  by its button and move the panel elsewhere. The Button's own
+     *  click command (switch active tab) still fires when the press is
+     *  followed by a release without moving past the drag threshold —
+     *  Lemur Buttons only fire click on release-over-button, which a
+     *  drag-away naturally cancels. */
+    private void wireTabButtonDrag(LemurTabHost host, int tabIndex) {
+        com.simsilica.lemur.Button button = host.getTabButton(tabIndex);
+        Spatial content = host.getTabContent(tabIndex);
+        // Lemur's Button uses MouseEventControl/MouseListener for its
+        // internal click handling. A CursorListener attached via
+        // CursorEventControl on the same Button never fires — Button
+        // appears to dispatch events through MouseEventControl
+        // exclusively. So use the matching channel here.
+        MouseEventControl.addListenersToSpatial(button, new MouseListener() {
+            @Override
+            public void mouseButtonEvent(com.jme3.input.event.MouseButtonEvent e,
+                                         Spatial target, Spatial capture) {
+                if (e.getButtonIndex() != 0) return;
+                if (!(content instanceof com.jme3.scene.Node n)) return;
+                if (e.isPressed()) {
+                    startDragCandidate(n, e.getX(), e.getY());
+                } else {
+                    handleDragRelease();
+                }
+                // Don't consume — Button's own click handling needs the
+                // release to fire for click-without-drag (tab switch).
+            }
+            @Override public void mouseEntered(com.jme3.input.event.MouseMotionEvent e,
+                                                Spatial t, Spatial c) {}
+            @Override public void mouseExited(com.jme3.input.event.MouseMotionEvent e,
+                                               Spatial t, Spatial c) {}
+            @Override public void mouseMoved(com.jme3.input.event.MouseMotionEvent e,
+                                              Spatial t, Spatial c) {}
+        });
     }
 
     /** Selection highlight tint applied to the currently-selected parts row. */
@@ -790,6 +1151,11 @@ public class LemurAppState extends BaseAppState {
         }
         wasDragging = nowDragging;
 
+        // 0c. Drag-to-rearrange state advance: promote candidate to drag
+        //     once cursor moves past threshold, and update which panel
+        //     is currently the drop-zone target.
+        updateDragState(input);
+
         // 1. Refresh mouseOverUi from actual panel bounds. Panels live
         //    inside the splitter tree now so we use getWorldTranslation()
         //    rather than getLocalTranslation() — local would be relative
@@ -797,8 +1163,8 @@ public class LemurAppState extends BaseAppState {
         Vector2f cursor = input.getCursorPosition();
         boolean over = false;
         if (cursor != null) {
-            for (Container panel : gatedPanels) {
-                if (cursorOverPanel(cursor, panel)) {
+            for (Node panel : gatedPanels) {
+                if (cursorOverDropTarget(cursor, panel)) {
                     over = true;
                     break;
                 }
@@ -827,14 +1193,28 @@ public class LemurAppState extends BaseAppState {
         }
     }
 
-    private boolean cursorOverPanel(Vector2f cursor, Container panel) {
-        Vector3f loc = panel.getWorldTranslation();
-        GuiControl gc = panel.getControl(GuiControl.class);
-        if (gc == null) return false;
-        Vector3f size = gc.getSize();
+    /** Cursor-bounds test for any drop-target node — TabHost (uses
+     *  totalW/totalH it stores) or a placeholder Container (uses its
+     *  GuiControl size). Panels live inside TabHosts so we don't hit-test
+     *  them directly. */
+    private boolean cursorOverDropTarget(Vector2f cursor, Node target) {
+        Vector3f loc = target.getWorldTranslation();
+        float w, h;
+        if (target instanceof LemurTabHost tab) {
+            w = tab.getCurrentWidth();
+            h = tab.getCurrentHeight();
+        } else if (target instanceof Container c) {
+            GuiControl gc = c.getControl(GuiControl.class);
+            if (gc == null) return false;
+            Vector3f size = gc.getSize();
+            w = size.x;
+            h = size.y;
+        } else {
+            return false;
+        }
         return cursor.x >= loc.x
-            && cursor.x <= loc.x + size.x
-            && cursor.y >= loc.y - size.y
+            && cursor.x <= loc.x + w
+            && cursor.y >= loc.y - h
             && cursor.y <= loc.y;
     }
 
@@ -864,6 +1244,33 @@ public class LemurAppState extends BaseAppState {
         if (outputList != null) {
             outputList.getSelectionModel().setSelection(outputModel.size() - 1);
         }
+    }
+
+    /** Trim {@code value} to fit the current {@link #outputCellWidth},
+     *  adding "…" when truncated. Cap at 200 chars even if the cell is
+     *  wide, just to keep render cost bounded for pathological lines. */
+    private String truncateForOutput(String value) {
+        if (value == null) return "";
+        if (outputCellWidth <= 0) return value;
+        int maxChars = Math.max(4, (int) (outputCellWidth / OUTPUT_GLYPH_W));
+        maxChars = Math.min(maxChars, 200);
+        if (value.length() <= maxChars) return value;
+        return value.substring(0, Math.max(1, maxChars - 1)) + "…";
+    }
+
+    /** Force the output ListBox to re-call its cell renderer for every
+     *  visible row. Used after a resize so existing rows get
+     *  re-truncated to the new cell width. Implemented by bumping the
+     *  VersionedList's version via a clear/addAll cycle on the same
+     *  contents — Lemur's ListBox reacts to version bumps. */
+    private void rerenderOutputCells() {
+        if (outputModel == null || outputList == null) return;
+        if (outputModel.isEmpty()) return;
+        java.util.List<String> snapshot = new ArrayList<>(outputModel);
+        outputModel.clear();
+        outputModel.addAll(snapshot);
+        // Restore the scroll-to-bottom selection (clear cleared it).
+        outputList.getSelectionModel().setSelection(outputModel.size() - 1);
     }
 
     private void recallHistory(int direction) {
