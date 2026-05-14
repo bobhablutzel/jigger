@@ -1,0 +1,32 @@
+# CADette theme — dark
+# Default theme. Neutral grays, low-saturation blue accents.
+# Loaded by app.cadette.theme.ThemeRegistry.
+
+name: dark
+description: Default dark theme — neutral grays, blue accents
+
+elements:
+
+  # Plain text labels (panel content, properties values, parts rows).
+  label:
+    fontSize: 12
+    color: "#dddddd"
+
+  # Command input field. Background overrides the glass-style gradient
+  # with a flat dark to keep the CLI feeling crisp.
+  textField:
+    fontSize: 12
+    color: "#eeeeee"
+    background: "#1e1e22f0"
+
+  # ListBox cell rows (currently only the Command output uses ListBox;
+  # parts rows are plain Containers).
+  items:
+    fontSize: 12
+    color: "#cccccc"
+
+  # Buttons — tab buttons in TabHosts.
+  button:
+    fontSize: 12
+    color: "#dddddd"
+    background: "#2a2a32e6"

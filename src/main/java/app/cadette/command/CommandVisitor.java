@@ -1395,7 +1395,46 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         if (target.SCRIPT_PATH() != null) {
             return showScriptPath();
         }
-        return "Unknown show target. Try: show units, show objects, show materials, show templates, show joints, show cutlist, show bom, show layout, show script_path";
+        if (target.THEMES() != null) {
+            return showThemes();
+        }
+        if (target.THEME() != null) {
+            return showActiveTheme();
+        }
+        return "Unknown show target. Try: show units, show objects, show materials, show templates, show joints, show cutlist, show bom, show layout, show script_path, show theme, show themes";
+    }
+
+    /** Brief "what's active right now". Use {@code show themes} to list. */
+    private String showActiveTheme() {
+        app.cadette.theme.ThemeRegistry reg = executor.getThemeRegistry();
+        String active = executor.getThemeName();
+        if (reg == null) return "Active theme: " + active + " (registry not initialised).";
+        app.cadette.theme.Theme t = reg.getTheme(active);
+        if (t == null) return "Active theme: " + active + " (NOT FOUND in registry).";
+        StringBuilder sb = new StringBuilder("Active theme: ").append(active);
+        if (t.description() != null) sb.append(" — ").append(t.description());
+        if (t.extendsFrom() != null) sb.append(" (extends ").append(t.extendsFrom()).append(")");
+        return sb.toString();
+    }
+
+    private String showThemes() {
+        app.cadette.theme.ThemeRegistry reg = executor.getThemeRegistry();
+        if (reg == null) return "Themes: registry not initialised.";
+        java.util.List<String> names = reg.listThemes();
+        if (names.isEmpty()) return "No themes loaded.";
+        StringBuilder sb = new StringBuilder("Themes (").append(names.size()).append(", * = active):\n");
+        String active = executor.getThemeName();
+        for (String n : names) {
+            sb.append("  ");
+            sb.append(n.equals(active) ? "* " : "  ");
+            sb.append(n);
+            app.cadette.theme.Theme t = reg.getTheme(n);
+            if (t != null && t.description() != null) {
+                sb.append("  — ").append(t.description());
+            }
+            sb.append('\n');
+        }
+        return sb.toString().stripTrailing();
     }
 
     private String showScriptPath() {
@@ -1461,6 +1500,22 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
             executor.pushAction(new SetScriptPathAction(executor::setUserScriptPath, oldPath, entries));
             executor.setUserScriptPath(entries);
             return formatScriptPathStatus(entries);
+        }
+        if (ctx.themeName() != null) {
+            String name;
+            if (ctx.themeName().ID() != null) {
+                name = ctx.themeName().ID().getText();
+            } else {
+                name = stripQuotes(ctx.themeName().STRING().getText());
+            }
+            app.cadette.theme.ThemeRegistry reg = executor.getThemeRegistry();
+            if (reg == null || reg.getTheme(name) == null) {
+                String known = reg == null ? "(registry not initialised)"
+                                            : String.join(", ", reg.listThemes());
+                return "Unknown theme '" + name + "'. Known: " + known + ".";
+            }
+            executor.setThemeName(name);
+            return "Theme set to " + name + ". Restart to apply.";
         }
         return "Unknown set target.";
     }

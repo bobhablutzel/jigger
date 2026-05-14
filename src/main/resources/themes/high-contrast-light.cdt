@@ -1,0 +1,23 @@
+# CADette theme — high-contrast-light
+# Pure white backgrounds, pure-black text. For very bright shops and
+# accessibility needs.
+
+name: high-contrast-light
+description: High-contrast light — pure white backgrounds, pure black text
+extends: light
+
+elements:
+
+  label:
+    color: "#000000"
+
+  textField:
+    color: "#000000"
+    background: "#ffffffff"
+
+  items:
+    color: "#000000"
+
+  button:
+    color: "#000000"
+    background: "#ffffffff"

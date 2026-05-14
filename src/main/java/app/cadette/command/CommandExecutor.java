@@ -55,6 +55,13 @@ public class CommandExecutor {
             UnitSystem.MILLIMETERS.getMeasurementSystem());
     private final List<Consumer<UnitSystem>> unitChangeListeners = new ArrayList<>();
     private final List<Consumer<Material>> materialChangeListeners = new ArrayList<>();
+    private final List<Consumer<String>> themeChangeListeners = new ArrayList<>();
+    @Getter private String themeName = "dark";
+    /** Installed by CadetteApp once Lemur + the registry are up. Used
+     *  by the {@code set theme}/{@code show themes} visitor paths to
+     *  validate names against the actually-loaded set. May be null
+     *  during early init or in test contexts that don't construct a UI. */
+    @Getter @Setter private app.cadette.theme.ThemeRegistry themeRegistry;
 
     private final Deque<UndoableAction> undoStack = new ArrayDeque<>();
     private final Deque<UndoableAction> redoStack = new ArrayDeque<>();
@@ -175,6 +182,35 @@ public class CommandExecutor {
         // outward to the global as a fallback (matches how shells handle
         // env vars vs locals).
         this.varScopes.push(new LinkedHashMap<>());
+
+        // Restore the active theme from the previous session. setThemeName
+        // would fire listeners (which aren't attached yet here) — assign the
+        // field directly so init order stays clean. CadetteApp picks this up
+        // via getThemeName() at first applyTheme.
+        String saved = loadThemePreference();
+        if (saved != null && !saved.isBlank()) {
+            this.themeName = saved;
+        }
+    }
+
+    private static final java.nio.file.Path THEME_PREF_FILE =
+            java.nio.file.Path.of(System.getProperty("user.home"),
+                    ".cadette", "active_theme");
+
+    private static String loadThemePreference() {
+        try {
+            if (java.nio.file.Files.exists(THEME_PREF_FILE)) {
+                return java.nio.file.Files.readString(THEME_PREF_FILE).trim();
+            }
+        } catch (Exception ignored) { /* fresh start */ }
+        return null;
+    }
+
+    private static void saveThemePreference(String name) {
+        try {
+            java.nio.file.Files.createDirectories(THEME_PREF_FILE.getParent());
+            java.nio.file.Files.writeString(THEME_PREF_FILE, name == null ? "" : name);
+        } catch (Exception ignored) { /* non-fatal */ }
     }
 
     /**
@@ -207,6 +243,21 @@ public class CommandExecutor {
 
     public void addMaterialChangeListener(Consumer<Material> listener) {
         materialChangeListeners.add(listener);
+    }
+
+    /** Switch the active theme. Fires {@link #themeChangeListeners} so the
+     *  UI shell can apply the new theme to Lemur's Styles. Persists the
+     *  choice to {@code ~/.cadette/active_theme} so subsequent launches
+     *  restore it. Doesn't validate the name here — callers
+     *  (CommandVisitor) check against the loaded registry first. */
+    public void setThemeName(String themeName) {
+        this.themeName = themeName;
+        saveThemePreference(themeName);
+        themeChangeListeners.forEach(l -> l.accept(themeName));
+    }
+
+    public void addThemeChangeListener(Consumer<String> listener) {
+        themeChangeListeners.add(listener);
     }
 
     /**

@@ -20,10 +20,9 @@ package app.cadette;
 
 import app.cadette.command.CommandExecutor;
 import app.cadette.lemur.LemurAppState;
-import com.jme3.math.ColorRGBA;
+import app.cadette.theme.ThemeRegistry;
 import com.jme3.system.AppSettings;
 import com.simsilica.lemur.GuiGlobals;
-import com.simsilica.lemur.component.QuadBackgroundComponent;
 import com.simsilica.lemur.style.BaseStyles;
 import com.simsilica.lemur.style.Styles;
 
@@ -88,6 +87,7 @@ public class CadetteApp extends SceneManager {
 
         CommandExecutor executor = new CommandExecutor(this);
         executor.loadTemplates();
+        executor.setOnExit(this::stop);
 
         // SelectionManager is the single source of truth for what's
         // selected. The 3D viewport's CameraController and the Lemur
@@ -103,25 +103,23 @@ public class CadetteApp extends SceneManager {
         BaseStyles.loadGlassStyle();
         GuiGlobals.getInstance().getStyles().setDefaultStyle("glass");
 
-        // Tighten the default glass style: 12pt font reduces the dead
-        // leading between rows. Themeable backlog
-        // (project_lemur_theme_backlog.md) covers a proper light/dark +
-        // font-family/size selector; this is the placeholder that makes
-        // the current build readable. Apply to every selector that
-        // renders text — labels, the command textfield, list items
-        // (ListBox cells), and buttons.
+        // Load + apply the active theme. ThemeRegistry reads .cdt YAML
+        // files from resources/themes/ (bundled) and ~/.cadette/themes/
+        // (user overlays), and writes their per-element attributes into
+        // Lemur's Styles object. Default theme is "dark"; the active
+        // theme persists to disk via CommandExecutor and is restored on
+        // launch.
         //
-        // Also flatten the TextField background — the glass style ships
-        // a tinted/gradient background that reads as distracting noise
-        // for a CAD command shell. A flat dark grey is cleaner.
+        // `set theme <name>` updates the Styles for NEW widgets but does
+        // NOT live-restyle existing widgets — that path turned out to be
+        // a Lemur layout-cascade hornet's nest (see
+        // project_theme_listbox_collapse_backlog.md). Theme changes take
+        // effect on the next launch; the visitor's response prompts the
+        // user accordingly.
         Styles styles = GuiGlobals.getInstance().getStyles();
-        float font = 12f;
-        styles.getSelector("label",     "glass").set("fontSize", font);
-        styles.getSelector("textField", "glass").set("fontSize", font);
-        styles.getSelector("items",     "glass").set("fontSize", font);
-        styles.getSelector("button",    "glass").set("fontSize", font);
-        styles.getSelector("textField", "glass").set("background",
-                new QuadBackgroundComponent(new ColorRGBA(0.18f, 0.18f, 0.20f, 0.92f)));
+        ThemeRegistry themeRegistry = new ThemeRegistry(getAssetManager());
+        executor.setThemeRegistry(themeRegistry);
+        themeRegistry.applyTheme(executor.getThemeName(), styles);
 
         LemurAppState uiState = new LemurAppState(executor, selectionManager);
         getStateManager().attach(uiState);

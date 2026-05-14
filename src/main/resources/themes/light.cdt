@@ -1,0 +1,26 @@
+# CADette theme — light
+# For sunlit shops and printable / screenshot contexts where a dark UI
+# washes out. Pairs well with print-style cut sheet rendering.
+
+name: light
+description: Light theme for sunlit shops or printable reports
+
+elements:
+
+  label:
+    fontSize: 12
+    color: "#202028"
+
+  textField:
+    fontSize: 12
+    color: "#101018"
+    background: "#fafaf8f0"
+
+  items:
+    fontSize: 12
+    color: "#202028"
+
+  button:
+    fontSize: 12
+    color: "#202028"
+    background: "#dadae0e6"

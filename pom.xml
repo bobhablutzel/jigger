@@ -94,6 +94,15 @@
             <version>5.0.6</version>
         </dependency>
 
+        <!-- SnakeYAML — parses theme files (.cdt) in the YAML-based
+             format documented in resources/themes/. Used by
+             app.cadette.theme.ThemeRegistry. -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>2.4</version>
+        </dependency>
+
         <!-- Lombok — code generation for boilerplate (getters, builders, etc). -->
         <dependency>
             <groupId>org.projectlombok</groupId>

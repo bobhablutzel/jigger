@@ -389,6 +389,8 @@ showTarget
     | BOM
     | LAYOUT
     | SCRIPT_PATH
+    | THEME
+    | THEMES
     ;
 
 setCommand
@@ -396,7 +398,10 @@ setCommand
     | SET MATERIAL materialName
     | SET KERF expression
     | SET SCRIPT_PATH scriptPathSpec
+    | SET THEME themeName
     ;
+
+themeName : ID | STRING ;
 
 // `set script_path "..." [, "..."]` replaces the user-configured prefix
 // of the search path; `set script_path none` clears it. The default tail
