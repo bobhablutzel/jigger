@@ -1,0 +1,64 @@
+# CADette theme — dark-high-contrast
+# Pure black backgrounds, pure-white text. Accessibility / low-light
+# shops. Extends `dark` and overrides every surface to pure black so
+# the recessed/raised contrast cues collapse into a single tone.
+
+name: dark-high-contrast
+description: High-contrast dark — pure black surfaces, pure white text
+extends: dark
+
+elements:
+
+  container:
+    background: "#000000ff"
+
+  viewport:
+    background: "#000000ff"
+
+  tab-bar:
+    background: "#000000ff"
+
+  divider:
+    background: "#ffffffff"
+
+  list.container:
+    background: "#000000ff"
+
+  list.item:
+    background: "#00000000"
+
+  list.selector:
+    background: "#ffffff40"
+
+  slider:
+    background: "#000000ff"
+  slider.thumb.button:
+    background: "#ffffffff"
+    color: "#000000"
+  slider.up.button:
+    background: "#000000ff"
+    color: "#ffffff"
+  slider.down.button:
+    background: "#000000ff"
+    color: "#ffffff"
+
+  label:
+    color: "#ffffff"
+
+  textField:
+    color: "#ffffff"
+    background: "#000000ff"
+
+  items:
+    color: "#ffffff"
+
+  button:
+    color: "#ffffff"
+    background: "#000000ff"
+    highlightColor: "#ffffff"
+    focusColor: "#ffffff"
+    # Active tab inverts to white-on-black so the selection is visible
+    # despite the otherwise-uniform black surfaces. Lighten() can't produce
+    # a useful highlight from pure black, hence the explicit override.
+    activeBackground: "#ffffff"
+    activeColor: "#000000"

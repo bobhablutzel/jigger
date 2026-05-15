@@ -63,6 +63,13 @@ public class CadetteApp extends SceneManager {
         // Corner-drag / maximize support. LemurAppState detects the new
         // dimensions in update() and reflows panel positions accordingly.
         settings.setResizable(true);
+        // Gamma correction OFF: jME3 3.9 defaults this on, which makes the
+        // framebuffer sRGB-encode at output. For our 2D-heavy UI we want
+        // theme hex values to map 1:1 to displayed pixels — otherwise
+        // sRGB encoding makes hex pick → render ≠ what the user picked.
+        // Trade-off: 3D shading isn't sRGB-correct, but the cuboid
+        // woodworking previews use Unshaded materials so it doesn't show.
+        settings.setGammaCorrection(false);
         app.setSettings(settings);
         app.setShowSettings(false);
         app.setPauseOnLostFocus(false);
@@ -120,6 +127,16 @@ public class CadetteApp extends SceneManager {
         ThemeRegistry themeRegistry = new ThemeRegistry(getAssetManager());
         executor.setThemeRegistry(themeRegistry);
         themeRegistry.applyTheme(executor.getThemeName(), styles);
+
+        // 3D viewport background driven by the active theme. We read the
+        // styled "viewport" selector's background after applyTheme has
+        // populated it, then push the color onto the actual jME3 viewPort.
+        // (SceneManager already set a placeholder in simpleInitApp; this
+        // overrides it once theme load is done.)
+        Object viewportBg = styles.getSelector("viewport", "glass").get("background");
+        if (viewportBg instanceof com.simsilica.lemur.component.QuadBackgroundComponent qbc) {
+            getViewPort().setBackgroundColor(qbc.getColor().clone());
+        }
 
         LemurAppState uiState = new LemurAppState(executor, selectionManager);
         getStateManager().attach(uiState);

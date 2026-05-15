@@ -30,6 +30,7 @@ import com.simsilica.lemur.event.CursorButtonEvent;
 import com.simsilica.lemur.event.CursorEventControl;
 import com.simsilica.lemur.event.CursorMotionEvent;
 import com.simsilica.lemur.event.DefaultCursorListener;
+import com.simsilica.lemur.style.ElementId;
 
 import java.util.function.BiConsumer;
 
@@ -61,8 +62,8 @@ public class LemurSplitter extends Node {
     public enum Orient { HORIZONTAL, VERTICAL }
 
     private static final float DIVIDER_THICKNESS = 6f;
-    private static final ColorRGBA DIVIDER_COLOR        = new ColorRGBA(0.25f, 0.25f, 0.28f, 1f);
-    private static final ColorRGBA DIVIDER_HOVER_COLOR  = new ColorRGBA(0.45f, 0.55f, 0.70f, 1f);
+    /** Used only as a fallback if the active theme has no `divider` selector. */
+    private static final ColorRGBA DIVIDER_FALLBACK_COLOR = new ColorRGBA(0.25f, 0.25f, 0.28f, 1f);
 
     private final Orient orient;
     /** Mutable so {@link #replaceChild(Spatial, Spatial)} can swap a slot
@@ -71,6 +72,12 @@ public class LemurSplitter extends Node {
     private Spatial secondChild;
     private final Container divider;
     private final QuadBackgroundComponent dividerBg;
+    /** Resting color, sampled from the theme's `divider` selector at construction
+     *  time. {@link #dividerHoverColor} is derived by lightening this. */
+    private final ColorRGBA dividerBaseColor;
+    /** Cursor-over highlight — derived once at construction; intentionally
+     *  not theme-controlled to keep theme YAMLs simple. */
+    private final ColorRGBA dividerHoverColor;
     private final BiConsumer<Spatial, float[]> reflowCallback;
 
     private float ratio = 0.5f;
@@ -99,8 +106,18 @@ public class LemurSplitter extends Node {
         this.secondChild = secondChild;
         this.reflowCallback = reflowCallback;
 
-        this.divider = new Container();
-        this.dividerBg = new QuadBackgroundComponent(DIVIDER_COLOR);
+        // ElementId "divider" lets the active theme set our background via
+        // its `divider:` selector; if none is provided we fall back to the
+        // hardcoded color. Lemur shares the QuadBackgroundComponent across
+        // every widget of a given style, so we clone it before mutating
+        // — otherwise a hover-color flip on this divider would tint every
+        // other divider in the tree.
+        this.divider = new Container(new ElementId("divider"));
+        QuadBackgroundComponent themed = (divider.getBackground() instanceof QuadBackgroundComponent qbc) ? qbc : null;
+        ColorRGBA base = themed != null ? themed.getColor().clone() : DIVIDER_FALLBACK_COLOR.clone();
+        this.dividerBaseColor = base;
+        this.dividerHoverColor = lighten(base, 0.10f);
+        this.dividerBg = new QuadBackgroundComponent(base.clone());
         divider.setBackground(dividerBg);
 
         // Divider attached LAST and with a slightly forward Z so it's
@@ -273,15 +290,25 @@ public class LemurSplitter extends Node {
 
         @Override
         public void cursorEntered(CursorMotionEvent e, Spatial t, Spatial c) {
-            dividerBg.setColor(DIVIDER_HOVER_COLOR);
+            dividerBg.setColor(dividerHoverColor);
         }
 
         @Override
         public void cursorExited(CursorMotionEvent e, Spatial t, Spatial c) {
             if (!dragging) {
-                dividerBg.setColor(DIVIDER_COLOR);
+                dividerBg.setColor(dividerBaseColor);
             }
         }
+    }
+
+    /** Move each channel a fraction of the way toward white. Used to derive
+     *  the divider hover color from its theme-supplied resting color so the
+     *  themes don't have to declare both. */
+    private static ColorRGBA lighten(ColorRGBA c, float amount) {
+        float r = c.r + (1f - c.r) * amount;
+        float g = c.g + (1f - c.g) * amount;
+        float b = c.b + (1f - c.b) * amount;
+        return new ColorRGBA(r, g, b, c.a);
     }
 
     /** True while a divider drag is in progress. Used by the gating logic

@@ -26,8 +26,10 @@ import com.simsilica.lemur.Axis;
 import com.simsilica.lemur.Button;
 import com.simsilica.lemur.Container;
 import com.simsilica.lemur.FillMode;
+import com.simsilica.lemur.GuiGlobals;
 import com.simsilica.lemur.component.QuadBackgroundComponent;
 import com.simsilica.lemur.component.SpringGridLayout;
+import com.simsilica.lemur.style.ElementId;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -51,11 +53,14 @@ import java.util.function.BiConsumer;
 public class LemurTabHost extends Node {
 
     private static final float TAB_BAR_HEIGHT = 26f;
-    private static final ColorRGBA TAB_BAR_BG = new ColorRGBA(0.18f, 0.18f, 0.20f, 1f);
 
     private final BiConsumer<Spatial, float[]> reflowCallback;
     private final List<Tab> tabs = new ArrayList<>();
     private final Container tabBar;
+    /** Sized to the full TabHost area; sits behind tabBar + active content
+     *  so the slot fills with theme color rather than 3D-scene-through
+     *  whenever no tab is active (e.g. during a drag-detach). */
+    private final Container bgFill;
 
     private int activeIndex = -1;
     private float totalW = 0f;
@@ -65,18 +70,66 @@ public class LemurTabHost extends Node {
         super("LemurTabHost");
         this.reflowCallback = reflowCallback;
 
-        tabBar = new Container(new SpringGridLayout(Axis.X, Axis.Y, FillMode.None, FillMode.Last));
-        tabBar.setBackground(new QuadBackgroundComponent(TAB_BAR_BG));
+        // bgFill attached FIRST so it sits behind everything in the GUI Z
+        // order. Element-id "container" so it picks up the theme's panel
+        // background — fills the area when no tab is active.
+        bgFill = new Container(new ElementId("container"));
+        // Belt-and-braces: explicitly copy the theme's container bg so we
+        // don't depend on Lemur's auto-style cascade firing at construction.
+        // In practice the auto-cascade seems to miss bgFill in some cases
+        // (the panel rendered transparent — observed 2026-05-15).
+        Object themedBg = GuiGlobals.getInstance().getStyles()
+                .getSelector("container", "glass").get("background");
+        if (themedBg instanceof QuadBackgroundComponent qbc) {
+            bgFill.setBackground(new QuadBackgroundComponent(qbc.getColor().clone()));
+        }
+        attachChild(bgFill);
+
+        // ElementId "tab-bar" so themes can style the tab strip distinctly
+        // from generic containers — typically the same color as the panel
+        // body (so the strip merges visually) but themable separately.
+        tabBar = new Container(
+                new SpringGridLayout(Axis.X, Axis.Y, FillMode.None, FillMode.Last),
+                new ElementId("tab-bar"));
         attachChild(tabBar);
     }
 
     /** Add a tab. The first tab added becomes active automatically. */
     public void addTab(String label, Spatial content) {
         Button button = new Button(label);
+        // Give the button its own QuadBackgroundComponent (cloned from the
+        // styled one) so we can flip its color when the tab activates
+        // without mutating the shared style-default instance — that would
+        // tint every other button in the app.
+        ColorRGBA baseBg;
+        if (button.getBackground() instanceof QuadBackgroundComponent qbc) {
+            baseBg = qbc.getColor().clone();
+        } else {
+            baseBg = new ColorRGBA(0.18f, 0.18f, 0.20f, 1f);
+        }
+        QuadBackgroundComponent ownBg = new QuadBackgroundComponent(baseBg.clone());
+        button.setBackground(ownBg);
+        // Prefer explicit `activeBackground` from the theme if provided —
+        // necessary for high-contrast themes where lightening pure black
+        // produces a barely-visible shift. Fall back to the derived
+        // lighten for normal themes.
+        Object themeActive = GuiGlobals.getInstance().getStyles()
+                .getSelector("button", "glass").get("activeBackground");
+        ColorRGBA activeBg = (themeActive instanceof ColorRGBA c)
+                ? c.clone()
+                : lighten(baseBg, 0.12f);
+        // Optional `activeColor` swaps the text color when active — useful
+        // for HC inverted treatments (e.g. white bg + black text active).
+        ColorRGBA baseColor = button.getColor() != null ? button.getColor().clone() : null;
+        Object themeActiveColor = GuiGlobals.getInstance().getStyles()
+                .getSelector("button", "glass").get("activeColor");
+        ColorRGBA activeColor = (themeActiveColor instanceof ColorRGBA cc) ? cc.clone() : null;
+
         // Hold onto the Tab reference rather than the index — indices
         // shift when tabs are removed, so a captured-at-add-time index
         // would point at the wrong tab after a removal.
-        Tab tab = new Tab(label, content, button);
+        Tab tab = new Tab(label, content, button, ownBg,
+                baseBg, activeBg, baseColor, activeColor);
         button.addClickCommands(b -> setActive(tabs.indexOf(tab)));
         tabBar.addChild(button);
 
@@ -116,15 +169,24 @@ public class LemurTabHost extends Node {
         if (index < 0 || index >= tabs.size() || index == activeIndex) {
             return;
         }
-        // Detach previous content
+        // Detach previous content + revert its tab button to inactive color
         if (activeIndex >= 0) {
-            Spatial prev = tabs.get(activeIndex).content;
-            if (prev.getParent() == this) {
-                detachChild(prev);
+            Tab prev = tabs.get(activeIndex);
+            if (prev.content.getParent() == this) {
+                detachChild(prev.content);
+            }
+            prev.bg.setColor(prev.baseBg);
+            if (prev.activeColor != null && prev.baseColor != null) {
+                prev.button.setColor(prev.baseColor);
             }
         }
         activeIndex = index;
-        attachChild(tabs.get(activeIndex).content);
+        Tab now = tabs.get(activeIndex);
+        attachChild(now.content);
+        now.bg.setColor(now.activeBg);
+        if (now.activeColor != null) {
+            now.button.setColor(now.activeColor);
+        }
         applyLayout();
     }
 
@@ -167,21 +229,67 @@ public class LemurTabHost extends Node {
     public float getCurrentHeight() { return totalH; }
 
     private void applyLayout() {
-        if (totalW <= 0 || totalH <= 0 || tabs.isEmpty()) {
+        if (totalW <= 0 || totalH <= 0) {
+            return;
+        }
+        // Background fill spans the whole TabHost — always present so the
+        // panel doesn't show through to 3D when no tab is active.
+        bgFill.setLocalTranslation(0, 0, 0);
+        bgFill.setPreferredSize(new Vector3f(totalW, totalH, 0));
+
+        if (tabs.isEmpty()) {
             return;
         }
         // Tab bar across the top, fills width.
-        tabBar.setLocalTranslation(0, 0, 0);
+        tabBar.setLocalTranslation(0, 0, 0.1f); // small Z so it draws on top of bgFill
         tabBar.setPreferredSize(new Vector3f(totalW, TAB_BAR_HEIGHT, 0));
 
         // Active content occupies the remaining space below the tab bar.
         if (activeIndex >= 0) {
             Spatial content = tabs.get(activeIndex).content;
             float contentH = totalH - TAB_BAR_HEIGHT;
-            content.setLocalTranslation(0, -TAB_BAR_HEIGHT, 0);
+            content.setLocalTranslation(0, -TAB_BAR_HEIGHT, 0.1f);
             reflowCallback.accept(content, new float[]{totalW, contentH});
         }
     }
 
-    private record Tab(String label, Spatial content, Button button) {}
+    /** Move each channel a fraction of the way toward white. Used to derive
+     *  the active-tab highlight color from each button's resting color. */
+    private static ColorRGBA lighten(ColorRGBA c, float amount) {
+        float r = c.r + (1f - c.r) * amount;
+        float g = c.g + (1f - c.g) * amount;
+        float b = c.b + (1f - c.b) * amount;
+        return new ColorRGBA(r, g, b, c.a);
+    }
+
+    /** Per-tab state. Owns the QuadBackgroundComponent attached to the
+     *  button so we can mutate its color on active/inactive transitions
+     *  without bleeding to other widgets sharing the style instance. */
+    private static final class Tab {
+        final String label;
+        final Spatial content;
+        final Button button;
+        final QuadBackgroundComponent bg;
+        final ColorRGBA baseBg;
+        final ColorRGBA activeBg;
+        /** Resting text color, captured at construction so we can revert
+         *  on tab-deactivate when the theme also overrides activeColor.
+         *  Null when the theme doesn't override the text color. */
+        final ColorRGBA baseColor;
+        /** Text color when this tab is active. Null = leave text color
+         *  alone on activate (most themes; only HC needs the swap). */
+        final ColorRGBA activeColor;
+        Tab(String label, Spatial content, Button button,
+            QuadBackgroundComponent bg, ColorRGBA baseBg, ColorRGBA activeBg,
+            ColorRGBA baseColor, ColorRGBA activeColor) {
+            this.label = label;
+            this.content = content;
+            this.button = button;
+            this.bg = bg;
+            this.baseBg = baseBg;
+            this.activeBg = activeBg;
+            this.baseColor = baseColor;
+            this.activeColor = activeColor;
+        }
+    }
 }

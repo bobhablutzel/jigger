@@ -1,32 +1,85 @@
 # CADette theme — dark
-# Default theme. Neutral grays, low-saturation blue accents.
-# Loaded by app.cadette.theme.ThemeRegistry.
+# Default opaque dark theme. Traditional-app look: solid dark panels
+# with light text, recessed text fields, raised buttons. For the
+# translucent variant that lets the 3D scene bleed through, use
+# `dark-glass`.
 
 name: dark
-description: Default dark theme — neutral grays, blue accents
+description: Default opaque dark theme — dark panels, light text
 
 elements:
 
-  # Plain text labels (panel content, properties values, parts rows).
+  # Solid panel background. Overrides Lemur's built-in glass gradient
+  # so panels read as opaque chrome. Inner Containers (parts rows,
+  # properties rows, body wrappers) inherit this and visually merge
+  # into one slab — selection highlights still override per-row.
+  container:
+    background: "#1c1d21ff"
+
+  # 3D scene viewport background. Slightly darker than the panel so
+  # there's a faint visual edge between scene and chrome.
+  viewport:
+    background: "#141518ff"
+
+  # Tab strip across the top of TabHosts.
+  tab-bar:
+    background: "#15161aff"
+
+  # Splitter divider.
+  divider:
+    background: "#2e2f35ff"
+
+  # ListBox outer panel (lemur-proto wires this to `list.container`).
+  list.container:
+    background: "#1c1d21ff"
+
+  # ListBox cell rows — transparent so list.container bg shows through.
+  list.item:
+    background: "#1c1d2100"
+
+  # Selection highlight on the active output row. Translucent so the
+  # cell text underneath remains visible — Lemur draws the selector
+  # quad over the cell content with alpha blending, so alpha < 1 lets
+  # the text show through.
+  list.selector:
+    background: "#e6e6e640"
+
+  # Vertical scrollbar track + thumb + up/down buttons. Without these
+  # the slider falls back to Lemur's glass-style gradient.
+  slider:
+    background: "#15161aff"
+  slider.thumb.button:
+    background: "#3a3b40ff"
+    color: "#dddddd"
+  slider.up.button:
+    background: "#2e2f35ff"
+    color: "#dddddd"
+  slider.down.button:
+    background: "#2e2f35ff"
+    color: "#dddddd"
+
   label:
     fontSize: 12
-    color: "#dddddd"
+    color: "#e6e6e6"
 
-  # Command input field. Background overrides the glass-style gradient
-  # with a flat dark to keep the CLI feeling crisp.
+  # TextField sits slightly recessed (darker) against the panel — the
+  # classic input-affordance cue.
   textField:
     fontSize: 12
-    color: "#eeeeee"
-    background: "#1e1e22f0"
+    color: "#f0f0f0"
+    background: "#0e0f12ff"
 
-  # ListBox cell rows (currently only the Command output uses ListBox;
-  # parts rows are plain Containers).
+  # ListBox cell rows.
   items:
     fontSize: 12
-    color: "#cccccc"
+    color: "#dcdcdc"
 
-  # Buttons — tab buttons in TabHosts.
+  # Buttons sit slightly raised (lighter) against the panel. Override
+  # Lemur's default yellow hover + green focus with theme-toned variants.
   button:
     fontSize: 12
-    color: "#dddddd"
-    background: "#2a2a32e6"
+    color: "#e6e6e6"
+    background: "#2e2f35ff"
+    highlightColor: "#ffffff"
+    focusColor: "#cfd6e0"
+    insets: [4, 10, 4, 10]

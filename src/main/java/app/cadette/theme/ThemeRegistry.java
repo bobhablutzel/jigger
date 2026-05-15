@@ -45,7 +45,8 @@ import java.util.TreeMap;
  * <p>Resolution order:
  * <ol>
  *   <li>Bundled built-ins under {@code resources/themes/*.cdt} —
- *       dark, light, high-contrast-dark, high-contrast-light.</li>
+ *       dark, light, dark-glass, light-glass, dark-high-contrast,
+ *       light-high-contrast.</li>
  *   <li>User overlays at {@code ~/.cadette/themes/*.cdt} — a user
  *       file with the same name as a built-in wins.</li>
  * </ol>
@@ -62,8 +63,18 @@ import java.util.TreeMap;
  *   <li>{@code fontSize}: Number, applied as float.</li>
  *   <li>{@code color}: hex string like {@code "#ddeeff"} or
  *       {@code "#ddeeffcc"} (with alpha) → ColorRGBA.</li>
+ *   <li>{@code highlightColor} / {@code focusColor} (Button state colors —
+ *       hover and pressed/focused). Same hex format as {@code color}.
+ *       Override the Lemur defaults (yellow, green respectively).</li>
+ *   <li>{@code shadowColor} / {@code highlightShadowColor} /
+ *       {@code focusShadowColor}: hex string → ColorRGBA. For text shadow
+ *       on Buttons / Labels.</li>
  *   <li>{@code background}: hex string → flat
  *       QuadBackgroundComponent.</li>
+ *   <li>{@code insets}: a single number for uniform padding, or a list
+ *       {@code [top, left, bottom, right]} → Lemur {@code Insets3f}.
+ *       Useful on the {@code button} selector to give tabs more
+ *       visual weight.</li>
  *   <li>{@code font}: string path resolvable by jME3's AssetManager.
  *       Looked up in this order — {@code ~/.cadette/fonts/<value>},
  *       {@code Interface/Fonts/<value>}, then the value as a
@@ -77,8 +88,10 @@ public class ThemeRegistry {
     private static final String[] BUILTINS = {
             "dark",
             "light",
-            "high-contrast-dark",
-            "high-contrast-light"
+            "dark-glass",
+            "light-glass",
+            "dark-high-contrast",
+            "light-high-contrast"
     };
     private static final Path USER_THEME_DIR =
             Path.of(System.getProperty("user.home"), ".cadette", "themes");
@@ -181,7 +194,19 @@ public class ThemeRegistry {
                 if (yamlValue instanceof Number n) return n.floatValue();
                 return null;
             }
-            case "color" -> {
+            case "color", "highlightColor", "focusColor",
+                    "shadowColor", "highlightShadowColor", "focusShadowColor",
+                    "activeBackground", "activeColor" -> {
+                // Color-shaped attributes — Lemur Button uses highlightColor
+                // (hover) and focusColor (clicked/keyboard focus), defaulting
+                // to yellow + green respectively. Themes need to override
+                // those or the tabs flash technicolor on interaction.
+                //
+                // `activeBackground` / `activeColor` are custom keys read by
+                // LemurTabHost — when a theme provides them, the active tab
+                // uses these explicit values instead of the derived
+                // `lighten(baseBg, 12%)` highlight. Necessary for HC themes
+                // where lightening pure black or pure white is meaningless.
                 if (yamlValue instanceof String s) return parseHexColor(s);
                 return null;
             }
@@ -189,6 +214,25 @@ public class ThemeRegistry {
                 if (yamlValue instanceof String s) {
                     ColorRGBA c = parseHexColor(s);
                     return c != null ? new QuadBackgroundComponent(c) : null;
+                }
+                return null;
+            }
+            case "insets" -> {
+                // [top, left, bottom, right]. A single number is shorthand
+                // for uniform padding. Lemur's Insets3f takes (min1, min2,
+                // max1, max2) which is (top, left, bottom, right) in the
+                // GUI Y-up coord system.
+                if (yamlValue instanceof Number n) {
+                    float v = n.floatValue();
+                    return new com.simsilica.lemur.Insets3f(v, v, v, v);
+                }
+                if (yamlValue instanceof List<?> list && list.size() == 4
+                        && list.stream().allMatch(o -> o instanceof Number)) {
+                    return new com.simsilica.lemur.Insets3f(
+                            ((Number) list.get(0)).floatValue(),
+                            ((Number) list.get(1)).floatValue(),
+                            ((Number) list.get(2)).floatValue(),
+                            ((Number) list.get(3)).floatValue());
                 }
                 return null;
             }
@@ -206,18 +250,34 @@ public class ThemeRegistry {
     }
 
     /** Parse {@code #rrggbb} or {@code #rrggbbaa} hex strings into a
-     *  jME3 {@link ColorRGBA}. Returns null on malformed input. */
+     *  jME3 {@link ColorRGBA}. Returns null on malformed input.
+     *
+     *  <p>Constructs a raw ColorRGBA from {@code value/255f}. jME3's GUI
+     *  framebuffer gamma-encodes linear → sRGB at output, so the visible
+     *  pixel will be roughly {@code (hex/255)^(1/2.2) * 255}, i.e. lighter
+     *  than the hex you picked. Empirically iterate the YAML hex darker
+     *  until the visible color matches.
+     *
+     *  <p>(We tried routing through {@link GuiGlobals#srgbaColor} which
+     *  does an sRGB → linear conversion intended to give 1:1 round-trip,
+     *  but the visible result came out about half as bright as expected —
+     *  likely a quirk of Lemur's Unshaded GUI material combined with how
+     *  the framebuffer / screenshot pipeline reports pixel values. The
+     *  raw-division approach is simpler and lets the user iterate
+     *  visually.) */
     static ColorRGBA parseHexColor(String hex) {
         if (hex == null) return null;
         String s = hex.trim();
         if (s.startsWith("#")) s = s.substring(1);
         if (s.length() != 6 && s.length() != 8) return null;
         try {
-            int r = Integer.parseInt(s.substring(0, 2), 16);
-            int g = Integer.parseInt(s.substring(2, 4), 16);
-            int b = Integer.parseInt(s.substring(4, 6), 16);
-            int a = s.length() == 8 ? Integer.parseInt(s.substring(6, 8), 16) : 255;
-            return new ColorRGBA(r / 255f, g / 255f, b / 255f, a / 255f);
+            float r = Integer.parseInt(s.substring(0, 2), 16) / 255f;
+            float g = Integer.parseInt(s.substring(2, 4), 16) / 255f;
+            float b = Integer.parseInt(s.substring(4, 6), 16) / 255f;
+            float a = s.length() == 8
+                    ? Integer.parseInt(s.substring(6, 8), 16) / 255f
+                    : 1f;
+            return new ColorRGBA(r, g, b, a);
         } catch (NumberFormatException e) {
             return null;
         }

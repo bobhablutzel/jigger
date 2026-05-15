@@ -1,0 +1,62 @@
+# CADette theme — light-glass
+# Translucent light panels over the 3D scene — Lemur's built-in glass
+# gradient shows through on the main containers. For a fully
+# traditional opaque look, use the `light` theme.
+
+name: light-glass
+description: Translucent light panels — glass gradient over the 3D scene
+
+elements:
+
+  # No `container` background — leave Lemur's glass gradient in place.
+
+  viewport:
+    background: "#ececeaff"
+
+  tab-bar:
+    background: "#e8e8e6cc"
+
+  divider:
+    background: "#bcbcbaee"
+
+  list.container:
+    background: "#f0f0eec0"
+
+  list.item:
+    background: "#f0f0ee00"
+
+  list.selector:
+    background: "#1a1a1e40"
+
+  slider:
+    background: "#dcdcdacc"
+  slider.thumb.button:
+    background: "#b8b8b6e6"
+    color: "#1a1a1e"
+  slider.up.button:
+    background: "#dadad8e6"
+    color: "#1a1a1e"
+  slider.down.button:
+    background: "#dadad8e6"
+    color: "#1a1a1e"
+
+  label:
+    fontSize: 12
+    color: "#202028"
+
+  textField:
+    fontSize: 12
+    color: "#101018"
+    background: "#fafaf8f0"
+
+  items:
+    fontSize: 12
+    color: "#202028"
+
+  button:
+    fontSize: 12
+    color: "#202028"
+    background: "#dadae0e6"
+    highlightColor: "#000000"
+    focusColor: "#3a3a48"
+    insets: [4, 10, 4, 10]

@@ -32,6 +32,7 @@ import com.jme3.app.SimpleApplication;
 import com.jme3.app.state.BaseAppState;
 import com.jme3.input.InputManager;
 import com.jme3.input.KeyInput;
+import com.jme3.math.ColorRGBA;
 import com.jme3.math.Vector2f;
 import com.jme3.math.Vector3f;
 import com.jme3.scene.Node;
@@ -123,6 +124,15 @@ public class LemurAppState extends BaseAppState {
 
     private Container commandPanel;
     private TextField commandInput;
+    /** TextField background component we own (cloned from the styled one
+     *  at construction) so we can mutate its color on focus change without
+     *  bleeding to every other widget sharing the style instance. */
+    private QuadBackgroundComponent commandInputBg;
+    private ColorRGBA commandInputRestingBg;
+    private ColorRGBA commandInputFocusedBg;
+    /** Last-seen focus state for commandInput, to detect transitions and
+     *  only update the background when it actually changes. */
+    private boolean commandInputFocused = false;
     private VersionedList<String> outputModel;
     private ListBox<String> outputList;
 
@@ -289,6 +299,12 @@ public class LemurAppState extends BaseAppState {
 
         simpleApp.getGuiNode().attachChild(rootSplitter);
 
+        // Restore persisted splitter ratios over the hardcoded defaults
+        // so the layout the user last left is what they get back on next
+        // launch. Tab placement / panel arrangement isn't persisted yet —
+        // see backlog memory.
+        restoreSplitterRatios();
+
         // Position + size against the current camera dimensions. The camera
         // is the source of truth — it tracks the actual GL viewport and
         // updates on window resize, whereas AppSettings holds the initial
@@ -306,7 +322,7 @@ public class LemurAppState extends BaseAppState {
         refreshPartsList();
         refreshProperties();
 
-        appendOutput("CADette (Lemur UI). Type 'help' or start adding parts.");
+        appendOutput("CADette. Type 'help' or start adding parts.");
     }
 
     /** Construct a Splitter with the standard reflow callback and register
@@ -406,6 +422,11 @@ public class LemurAppState extends BaseAppState {
             inner.setSize(w, h);
         } else if (child instanceof LemurTabHost tab) {
             tab.setSize(w, h);
+        } else if (child instanceof Container c && placeholders.contains(c)) {
+            // Drop-target placeholder — without this it stays at its
+            // natural label-sized footprint and the rest of the splitter
+            // slot shows 3D through.
+            c.setPreferredSize(new Vector3f(w, h, 0));
         }
         // viewportSpacer and other no-content Spatials: ignore.
     }
@@ -465,6 +486,25 @@ public class LemurAppState extends BaseAppState {
 
         commandInput = panel.addChild(new TextField(""));
         commandInput.setSingleLine(true);
+        // Inset so the caret at column 0 has breathing room from the field's
+        // left edge (otherwise it sits flush against the bg and is hard to
+        // spot in opaque themes).
+        commandInput.setInsets(new com.simsilica.lemur.Insets3f(3, 6, 3, 6));
+
+        // Focus indicator: clone the styled background so we own the
+        // QuadBackgroundComponent (otherwise mutating its color would
+        // tint every textField sharing the style instance). Hold the
+        // resting + focused colors; update() polls focus and flips between
+        // them so the user can tell when the command line is active.
+        if (commandInput.getBackground() instanceof QuadBackgroundComponent themed) {
+            ColorRGBA resting = themed.getColor().clone();
+            commandInputBg = new QuadBackgroundComponent(resting.clone());
+            commandInput.setBackground(commandInputBg);
+            commandInputRestingBg = resting;
+            // Subtle brighten — bigger amounts compounded through the
+            // gamma chain and made the field look light grey when focused.
+            commandInputFocusedBg = lighten(resting, 0.06f);
+        }
 
         KeyActionListener submit = (src, key) -> runCurrentInput();
         commandInput.getActionMap().put(new KeyAction(KeyInput.KEY_RETURN), submit);
@@ -783,6 +823,16 @@ public class LemurAppState extends BaseAppState {
      *  has no header). */
     private Container makePlaceholder() {
         Container c = new Container(new SpringGridLayout(Axis.Y, Axis.X));
+        // Explicit background sampled from the theme's container style.
+        // The bare-Container path doesn't always pick up the styled bg
+        // (depends on when in the construction cycle the style cascade
+        // runs), so we force it here to make sure the placeholder doesn't
+        // show 3D through.
+        Object themedBg = GuiGlobals.getInstance().getStyles()
+                .getSelector("container", "glass").get("background");
+        if (themedBg instanceof QuadBackgroundComponent qbc) {
+            c.setBackground(new QuadBackgroundComponent(qbc.getColor().clone()));
+        }
         Label l = new Label("(drop a panel here)");
         l.setTextHAlignment(HAlignment.Center);
         c.addChild(l);
@@ -1120,9 +1170,83 @@ public class LemurAppState extends BaseAppState {
         return String.format("%.3f %s", v, u.getAbbreviation());
     }
 
+    /** Persist current splitter ratios to {@code ~/.cadette/layout.properties}.
+     *  Keys are positional ({@code splitter.0}, {@code splitter.1}, …) so the
+     *  encoding stays stable as long as the construction order in
+     *  {@link #initialize} doesn't change. Called on drag-release, not
+     *  every frame — splitter ratios only change when the user finishes
+     *  a drag. Silent on IO failure (it's a cosmetic preference, not data).
+     *
+     *  <p>Tab placement / panel arrangement isn't persisted yet — that's
+     *  a bigger refactor; see the layout-persistence backlog memory. */
+    private void saveSplitterRatios() {
+        java.util.Properties p = new java.util.Properties();
+        for (int i = 0; i < allSplitters.size(); i++) {
+            p.setProperty("splitter." + i,
+                    String.valueOf(allSplitters.get(i).getRatio()));
+        }
+        java.nio.file.Path path = java.nio.file.Path.of(
+                System.getProperty("user.home"), ".cadette", "layout.properties");
+        try {
+            java.nio.file.Files.createDirectories(path.getParent());
+            try (var out = java.nio.file.Files.newBufferedWriter(path)) {
+                p.store(out, "cadette splitter ratios");
+            }
+        } catch (java.io.IOException e) {
+            System.err.println("[cadette] couldn't save layout: " + e.getMessage());
+        }
+    }
+
+    /** Restore splitter ratios from {@code ~/.cadette/layout.properties}
+     *  over the hardcoded defaults. Missing file / missing keys are
+     *  silently ignored — the panel just keeps its default ratio. */
+    private void restoreSplitterRatios() {
+        java.nio.file.Path path = java.nio.file.Path.of(
+                System.getProperty("user.home"), ".cadette", "layout.properties");
+        if (!java.nio.file.Files.isRegularFile(path)) return;
+        java.util.Properties p = new java.util.Properties();
+        try (var in = java.nio.file.Files.newBufferedReader(path)) {
+            p.load(in);
+        } catch (java.io.IOException e) {
+            System.err.println("[cadette] couldn't load layout: " + e.getMessage());
+            return;
+        }
+        for (int i = 0; i < allSplitters.size(); i++) {
+            String v = p.getProperty("splitter." + i);
+            if (v == null) continue;
+            try {
+                allSplitters.get(i).setRatio(Float.parseFloat(v));
+            } catch (NumberFormatException ignored) { /* skip bad entry */ }
+        }
+    }
+
+    /** Move each channel a fraction of the way toward white. Used to derive
+     *  the TextField's "focused" background from its theme-supplied resting
+     *  color so themes don't have to declare both. */
+    private static ColorRGBA lighten(ColorRGBA c, float amount) {
+        float r = c.r + (1f - c.r) * amount;
+        float g = c.g + (1f - c.g) * amount;
+        float b = c.b + (1f - c.b) * amount;
+        return new ColorRGBA(r, g, b, c.a);
+    }
+
     @Override
     public void update(float tpf) {
         super.update(tpf);
+
+        // Focus indicator on the command TextField. Poll instead of attaching
+        // a focus listener because Lemur's FocusManagerState doesn't expose
+        // an addListener for arbitrary spatials — only individual FocusTargets
+        // get their own focusGained/focusLost via the FocusTarget interface,
+        // and TextField hides that behind its internal TextEntryComponent.
+        if (commandInput != null && commandInputBg != null) {
+            boolean focused = GuiGlobals.getInstance().getFocusManagerState()
+                    .getFocus() == commandInput;
+            if (focused != commandInputFocused) {
+                commandInputBg.setColor(focused ? commandInputFocusedBg : commandInputRestingBg);
+                commandInputFocused = focused;
+            }
+        }
 
         // 0. Detect window resize via the camera (source of truth — tracks
         //    the actual GL viewport size, unlike AppSettings which only
@@ -1144,10 +1268,12 @@ public class LemurAppState extends BaseAppState {
 
         // 0b. Detect drag-release: re-trigger reflow so ListBox
         //     visibleItems (which we skipped during drag to avoid
-        //     stepping) snaps to its final value.
+        //     stepping) snaps to its final value, and persist the new
+        //     splitter ratios so they survive the next launch.
         boolean nowDragging = isAnySplitterDragging();
         if (wasDragging && !nowDragging) {
             applyRootSize(cam.getWidth(), cam.getHeight());
+            saveSplitterRatios();
         }
         wasDragging = nowDragging;
 
@@ -1243,7 +1369,21 @@ public class LemurAppState extends BaseAppState {
         outputModel.add(line);
         if (outputList != null) {
             outputList.getSelectionModel().setSelection(outputModel.size() - 1);
+            // ListBox doesn't auto-scroll on selection change — its slider
+            // model is bound to a "topmost-visible-index" RangedValueModel.
+            // Drive it to the minimum (which in Lemur's Y-up GUI means
+            // bottom-of-list visible) so the most recent line is showing.
+            scrollOutputToBottom();
         }
+    }
+
+    /** Scroll the command output ListBox to its last item. Lemur's Slider
+     *  uses an inverted Y-up model (min = bottom, max = top), so setting
+     *  the slider value to its minimum reveals the last items. */
+    private void scrollOutputToBottom() {
+        if (outputList == null || outputList.getSlider() == null) return;
+        com.simsilica.lemur.RangedValueModel m = outputList.getSlider().getModel();
+        if (m != null) m.setValue(m.getMinimum());
     }
 
     /** Trim {@code value} to fit the current {@link #outputCellWidth},

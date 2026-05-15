@@ -1,26 +1,64 @@
 # CADette theme — light
-# For sunlit shops and printable / screenshot contexts where a dark UI
-# washes out. Pairs well with print-style cut sheet rendering.
+# Default opaque light theme. Traditional-app look: solid light-grey
+# panels with dark text, white text fields (classic input affordance),
+# slightly recessed buttons. For the translucent variant, use
+# `light-glass`.
 
 name: light
-description: Light theme for sunlit shops or printable reports
+description: Default opaque light theme — light-grey panels, dark text
 
 elements:
 
+  container:
+    background: "#ececeaff"
+
+  viewport:
+    background: "#d8d8d6ff"
+
+  tab-bar:
+    background: "#dcdcdaff"
+
+  divider:
+    background: "#b8b8b6ff"
+
+  list.container:
+    background: "#ececeaff"
+
+  list.item:
+    background: "#ececea00"
+
+  list.selector:
+    background: "#1a1a1e40"
+
+  slider:
+    background: "#dcdcdaff"
+  slider.thumb.button:
+    background: "#b8b8b6ff"
+    color: "#1a1a1e"
+  slider.up.button:
+    background: "#dadad8ff"
+    color: "#1a1a1e"
+  slider.down.button:
+    background: "#dadad8ff"
+    color: "#1a1a1e"
+
   label:
     fontSize: 12
-    color: "#202028"
+    color: "#1a1a1e"
 
   textField:
     fontSize: 12
-    color: "#101018"
-    background: "#fafaf8f0"
+    color: "#1a1a1e"
+    background: "#ffffffff"
 
   items:
     fontSize: 12
-    color: "#202028"
+    color: "#1a1a1e"
 
   button:
     fontSize: 12
-    color: "#202028"
-    background: "#dadae0e6"
+    color: "#1a1a1e"
+    background: "#dadad8ff"
+    highlightColor: "#000000"
+    focusColor: "#3a3a48"
+    insets: [4, 10, 4, 10]

@@ -556,10 +556,42 @@ public class CutSheetRenderer {
     private static void drawEmptyState(Graphics2D g2, int width, int height) {
         g2.setColor(EMPTY_TEXT_COLOR);
         g2.setFont(new Font(Font.SANS_SERIF, Font.PLAIN, 14));
-        String msg = "No sheet layouts — add parts with sheet materials to see cut sheets.";
         FontMetrics fm = g2.getFontMetrics();
-        int x = (width - fm.stringWidth(msg)) / 2;
-        int y = height / 2;
-        g2.drawString(msg, x, y);
+        // Word-wrap the message so narrow panels (e.g. a side-by-side splitter
+        // that's been dragged tight) don't cut text off the right edge.
+        String msg = "No sheet layouts — add parts with sheet materials to see cut sheets.";
+        int margin = 12;
+        int maxLineW = Math.max(20, width - margin * 2);
+        java.util.List<String> lines = wrapToWidth(msg, fm, maxLineW);
+        int totalH = lines.size() * fm.getHeight();
+        int y = (height - totalH) / 2 + fm.getAscent();
+        for (String line : lines) {
+            int x = (width - fm.stringWidth(line)) / 2;
+            g2.drawString(line, x, y);
+            y += fm.getHeight();
+        }
+    }
+
+    /** Greedy word-wrap: stuff as many whitespace-delimited tokens per line
+     *  as fit within {@code maxWidth} according to {@code fm}. A single token
+     *  longer than {@code maxWidth} occupies its own line (no character-level
+     *  break). Returns at least one line. */
+    private static java.util.List<String> wrapToWidth(String text, FontMetrics fm, int maxWidth) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        StringBuilder line = new StringBuilder();
+        for (String token : text.split("\\s+")) {
+            String candidate = line.length() == 0 ? token : line + " " + token;
+            if (fm.stringWidth(candidate) <= maxWidth) {
+                line.setLength(0);
+                line.append(candidate);
+            } else {
+                if (line.length() > 0) out.add(line.toString());
+                line.setLength(0);
+                line.append(token);
+            }
+        }
+        if (line.length() > 0) out.add(line.toString());
+        if (out.isEmpty()) out.add(text);
+        return out;
     }
 }

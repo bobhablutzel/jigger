@@ -1,0 +1,63 @@
+# CADette theme — dark-glass
+# Translucent panels over the 3D scene — Lemur's built-in glass gradient
+# shows through on the main containers. The tab-bar / divider / list
+# slots stay slightly opaque so they read as chrome rather than scene.
+# For a fully traditional opaque look, use the `dark` theme.
+
+name: dark-glass
+description: Translucent dark panels — glass gradient over the 3D scene
+
+elements:
+
+  # No `container` background — leave Lemur's glass gradient in place.
+
+  viewport:
+    background: "#1c1d21ff"
+
+  tab-bar:
+    background: "#1e1e22cc"
+
+  divider:
+    background: "#2a2a30ee"
+
+  list.container:
+    background: "#1a1a1ec0"
+
+  list.item:
+    background: "#1a1a1e00"
+
+  list.selector:
+    background: "#e6e6e640"
+
+  slider:
+    background: "#15161acc"
+  slider.thumb.button:
+    background: "#3a3b40e6"
+    color: "#dddddd"
+  slider.up.button:
+    background: "#2e2f35e6"
+    color: "#dddddd"
+  slider.down.button:
+    background: "#2e2f35e6"
+    color: "#dddddd"
+
+  label:
+    fontSize: 12
+    color: "#dddddd"
+
+  textField:
+    fontSize: 12
+    color: "#eeeeee"
+    background: "#1e1e22f0"
+
+  items:
+    fontSize: 12
+    color: "#cccccc"
+
+  button:
+    fontSize: 12
+    color: "#dddddd"
+    background: "#2a2a32e6"
+    highlightColor: "#ffffff"
+    focusColor: "#cfd6e0"
+    insets: [4, 10, 4, 10]
