@@ -299,11 +299,15 @@ public class LemurAppState extends BaseAppState {
 
         simpleApp.getGuiNode().attachChild(rootSplitter);
 
-        // Restore persisted splitter ratios over the hardcoded defaults
-        // so the layout the user last left is what they get back on next
-        // launch. Tab placement / panel arrangement isn't persisted yet —
-        // see backlog memory.
-        restoreSplitterRatios();
+        // Restore persisted splitter ratios + active tabs over the
+        // hardcoded defaults so the layout the user last left is what
+        // they get back on next launch. Listeners attached AFTER this
+        // so the restore's setActive() calls don't trigger a save with
+        // the partially-populated state.
+        restoreLayoutProperties();
+        for (LemurTabHost host : allTabHosts) {
+            host.setActiveChangeListener(this::saveLayoutProperties);
+        }
 
         // Position + size against the current camera dimensions. The camera
         // is the source of truth — it tracks the actual GL viewport and
@@ -761,6 +765,7 @@ public class LemurAppState extends BaseAppState {
             com.jme3.scene.Node tcParent = tc.getParent();
             if (tcParent instanceof LemurSplitter splitter) {
                 LemurTabHost newHost = new LemurTabHost(this::onChildReflow);
+                newHost.setActiveChangeListener(this::saveLayoutProperties);
                 allTabHosts.add(newHost);
                 draggablePanels.add(newHost);
                 gatedPanels.add(newHost);
@@ -1170,37 +1175,44 @@ public class LemurAppState extends BaseAppState {
         return String.format("%.3f %s", v, u.getAbbreviation());
     }
 
-    /** Persist current splitter ratios to {@code ~/.cadette/layout.properties}.
-     *  Keys are positional ({@code splitter.0}, {@code splitter.1}, …) so the
-     *  encoding stays stable as long as the construction order in
-     *  {@link #initialize} doesn't change. Called on drag-release, not
-     *  every frame — splitter ratios only change when the user finishes
-     *  a drag. Silent on IO failure (it's a cosmetic preference, not data).
+    /** Persist current splitter ratios + active-tab indices to
+     *  {@code ~/.cadette/layout.properties}. Keys are positional
+     *  ({@code splitter.<i>}, {@code tab.<i>}) so the encoding stays
+     *  stable as long as the construction order in {@link #initialize}
+     *  doesn't change. Called on drag-release and on tab activation.
+     *  Silent on IO failure (it's a cosmetic preference, not data).
      *
-     *  <p>Tab placement / panel arrangement isn't persisted yet — that's
+     *  <p>Panel placement / tab grouping isn't persisted yet — that's
      *  a bigger refactor; see the layout-persistence backlog memory. */
-    private void saveSplitterRatios() {
+    private void saveLayoutProperties() {
         java.util.Properties p = new java.util.Properties();
         for (int i = 0; i < allSplitters.size(); i++) {
             p.setProperty("splitter." + i,
                     String.valueOf(allSplitters.get(i).getRatio()));
+        }
+        for (int i = 0; i < allTabHosts.size(); i++) {
+            p.setProperty("tab." + i,
+                    String.valueOf(allTabHosts.get(i).getActive()));
         }
         java.nio.file.Path path = java.nio.file.Path.of(
                 System.getProperty("user.home"), ".cadette", "layout.properties");
         try {
             java.nio.file.Files.createDirectories(path.getParent());
             try (var out = java.nio.file.Files.newBufferedWriter(path)) {
-                p.store(out, "cadette splitter ratios");
+                p.store(out, "cadette layout — splitter ratios + active tabs");
             }
         } catch (java.io.IOException e) {
             System.err.println("[cadette] couldn't save layout: " + e.getMessage());
         }
     }
 
-    /** Restore splitter ratios from {@code ~/.cadette/layout.properties}
-     *  over the hardcoded defaults. Missing file / missing keys are
-     *  silently ignored — the panel just keeps its default ratio. */
-    private void restoreSplitterRatios() {
+    /** Restore splitter ratios + active-tab indices from
+     *  {@code ~/.cadette/layout.properties} over the hardcoded defaults.
+     *  Missing file / missing keys are silently ignored — the panel
+     *  just keeps its default. Tab listeners aren't wired until after
+     *  this returns, so the setActive() calls here don't recursively
+     *  trigger saveLayoutProperties(). */
+    private void restoreLayoutProperties() {
         java.nio.file.Path path = java.nio.file.Path.of(
                 System.getProperty("user.home"), ".cadette", "layout.properties");
         if (!java.nio.file.Files.isRegularFile(path)) return;
@@ -1216,6 +1228,13 @@ public class LemurAppState extends BaseAppState {
             if (v == null) continue;
             try {
                 allSplitters.get(i).setRatio(Float.parseFloat(v));
+            } catch (NumberFormatException ignored) { /* skip bad entry */ }
+        }
+        for (int i = 0; i < allTabHosts.size(); i++) {
+            String v = p.getProperty("tab." + i);
+            if (v == null) continue;
+            try {
+                allTabHosts.get(i).setActive(Integer.parseInt(v));
             } catch (NumberFormatException ignored) { /* skip bad entry */ }
         }
     }
@@ -1273,7 +1292,7 @@ public class LemurAppState extends BaseAppState {
         boolean nowDragging = isAnySplitterDragging();
         if (wasDragging && !nowDragging) {
             applyRootSize(cam.getWidth(), cam.getHeight());
-            saveSplitterRatios();
+            saveLayoutProperties();
         }
         wasDragging = nowDragging;
 

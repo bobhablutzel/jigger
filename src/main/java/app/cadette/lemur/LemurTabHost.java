@@ -66,6 +66,10 @@ public class LemurTabHost extends Node {
     private float totalW = 0f;
     private float totalH = 0f;
 
+    /** Fires after {@link #setActive} successfully changes the active tab.
+     *  Used by LemurAppState to persist the active index across launches. */
+    private Runnable activeChangeListener;
+
     public LemurTabHost(BiConsumer<Spatial, float[]> reflowCallback) {
         super("LemurTabHost");
         this.reflowCallback = reflowCallback;
@@ -188,6 +192,17 @@ public class LemurTabHost extends Node {
             now.button.setColor(now.activeColor);
         }
         applyLayout();
+        if (activeChangeListener != null) {
+            activeChangeListener.run();
+        }
+    }
+
+    /** Register a callback fired after a successful tab switch. Null
+     *  unregisters. Listener is null at construction so the initial
+     *  setActive(0) during addTab doesn't trigger persistence before
+     *  the host is even wired into the layout. */
+    public void setActiveChangeListener(Runnable r) {
+        this.activeChangeListener = r;
     }
 
     public int getActive() {
