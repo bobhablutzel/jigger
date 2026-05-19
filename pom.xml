@@ -264,10 +264,21 @@
             </properties>
         </profile>
 
-        <!-- Per-OS jpackage defaults. These set the installer type +
-             platform-specific options. They auto-activate on the host
-             platform; the linux defaults live at pom-root so they
-             apply when no other OS profile matches. -->
+        <!-- Per-OS jpackage defaults. Each auto-activates on its host
+             platform and sets cadette.jpackage.type + platform-args.
+             These MUST live in their own profiles (not in package-app
+             below) — Maven property precedence is declaration order,
+             so anything set in package-app would override these. -->
+        <profile>
+            <id>pkg-linux-defaults</id>
+            <activation>
+                <os><family>unix</family><name>linux</name></os>
+            </activation>
+            <properties>
+                <cadette.jpackage.type>deb</cadette.jpackage.type>
+                <cadette.jpackage.platform-args>--linux-shortcut --linux-menu-group Graphics --linux-package-name cadette</cadette.jpackage.platform-args>
+            </properties>
+        </profile>
         <profile>
             <id>pkg-mac-defaults</id>
             <activation>
@@ -295,15 +306,13 @@
              Switch to type=deb once the app-image smoke-tests cleanly. -->
         <profile>
             <id>package-app</id>
-            <properties>
-                <!-- Linux defaults live here (pom-root). Per-OS profiles
-                     above auto-activate on Mac / Windows and override
-                     both type and platform-args. Override on the command
-                     line with `-Dcadette.jpackage.type=...` to force a
-                     specific type (e.g. rpm on Fedora). -->
-                <cadette.jpackage.type>deb</cadette.jpackage.type>
-                <cadette.jpackage.platform-args>--linux-shortcut --linux-menu-group Graphics --linux-package-name cadette</cadette.jpackage.platform-args>
-            </properties>
+            <!-- Intentionally NO cadette.jpackage.type or platform-args
+                 here. Maven evaluates profiles in declaration order and
+                 the last one wins; setting them here would override the
+                 OS-specific values set by pkg-linux/mac/win-defaults
+                 above. Override on the command line via
+                 `-Dcadette.jpackage.type=...` if you need to force a
+                 specific type (e.g. rpm on Fedora). -->
             <build>
                 <plugins>
                     <!-- 0. Parse the pom version so jpackage's app-version
