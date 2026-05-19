@@ -67,13 +67,12 @@ public final class BuildInfo {
     public String getBranch()     { return branch; }
 
     /** One-line summary suitable for log banners + the About dialog
-     *  header. e.g. {@code "Cadette 0.1.0 (build 563df4b · 2026-05-19)"}. */
+     *  header. Includes the full build timestamp because we may cycle
+     *  through multiple builds per day during F&F iteration. */
     public String getDisplayString() {
-        // Take the date portion only — the wall-clock time isn't useful
-        // for a human-facing banner.
-        String day = buildTime == null ? "?"
-                : (buildTime.length() >= 10 ? buildTime.substring(0, 10) : buildTime);
-        return String.format("Cadette %s (build %s · %s)", version, commit, day);
+        return String.format("Cadette %s (build %s · %s)",
+                version, commit,
+                buildTime == null ? "?" : buildTime);
     }
 
     private static BuildInfo load() {

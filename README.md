@@ -17,8 +17,107 @@ provides powerful commands to manipulate these building blocks. The CADette comm
 scripts and executed as a group, or entered manually (often used when playing around, or building an initial
 version of a template or script). The CADette language is described fully in [doc/SCRIPTING.md](doc/SCRIPTING.md).
 
+## Status
+
+CADette is in **early alpha** — a friends-and-family preview. Useful caveats:
+
+- **No save/load yet.** Restarting loses your in-progress work. For
+  now, save your design as a `.cds` script and re-run it via
+  `run path/to/script.cds`.
+- **Linux is the primary supported target right now.** The Maven
+  build produces a Linux app-image via jpackage; macOS and Windows
+  installers are coming.
+- **Lumber prices are estimates.** Defaults are ballpark — edit
+  `~/.cadette/preferences.yaml` to override with your actual
+  lumberyard's prices.
+
+`show about` in the command panel prints the build commit you're on
+— include that when reporting issues.
+
+## Quick start
+
+### Install (Linux .deb)
+
+```bash
+mvn -P package-app clean package -DskipTests
+sudo apt install ./target/dist/cadette_0.1.0_amd64.deb
+```
+
+The `./` prefix in front of the filename is required — apt without
+it treats the argument as a package name to look up in the repos. A
+"download performed unsandboxed as root" warning during install is
+cosmetic (the `_apt` user can't read files in your home directory)
+and the install completes anyway.
+
+Launch from your desktop's app menu (Graphics → Cadette) or:
+
+```bash
+/opt/cadette/bin/Cadette
+```
+
+jpackage doesn't add the binary to `$PATH` automatically. To run as
+`cadette` from any terminal:
+
+```bash
+sudo ln -sf /opt/cadette/bin/Cadette /usr/local/bin/cadette
+```
+
+To uninstall:
+
+```bash
+sudo apt remove cadette
+```
+
+### Building installers on macOS and Windows
+
+The Maven profile auto-detects the host OS and selects the right
+installer type. From a checkout of the repo on each platform:
+
+```bash
+# macOS (produces target/dist/Cadette-0.1.0.dmg)
+mvn -P package-app clean package -DskipTests
+
+# Windows (produces target\dist\Cadette-0.1.0.msi)
+mvn -P package-app clean package -DskipTests
+```
+
+Requirements per platform:
+
+- **macOS**: JDK 25 with `jpackage` on PATH; Xcode command-line tools
+  (for `productbuild`/`hdiutil`, used by jpackage internally). Signing
+  is disabled in the current profile — the produced `.dmg` is unsigned
+  and Gatekeeper will warn on first launch. Users must right-click →
+  Open the first time.
+- **Windows**: JDK 25 with `jpackage` on PATH; WiX Toolset v3.0+
+  (jpackage requires `light.exe`/`candle.exe` for `.msi` generation).
+  The produced installer is unsigned and SmartScreen will warn on
+  first launch.
+
+These installers are unsigned; F&F users should expect a warning the
+first time they install. Code signing for both platforms is on the
+post-F&F backlog.
+
+### Run from source (development)
+
+```bash
+mvn exec:exec
+```
+
+### Try an example
+
+In Cadette's command panel at the bottom of the window:
+
+```
+create crosscut_sled S w 70cm l 60cm fh 12cm
+```
+
+…you'll see a 3D model of a table-saw sled and the cut sheet showing
+how to cut the parts. See [`examples/`](examples/) for more
+walkthroughs.
+
 ## Documentation
 
+- [Examples](examples/) — annotated walkthroughs of the bundled templates (cross-cut sled, fence gate, base cabinet, kitchen island).
 - [Tutorial 1: Simple box](doc/TUTORIAL_1_Simple_box.md) — walk through building your first assembly from scratch.
 - [Scripting reference](doc/SCRIPTING.md) — full reference for the CADette command language.
 

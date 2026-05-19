@@ -124,7 +124,12 @@
       "Bash(jpackage --version)",
       "Bash(mvn -P package-app package -DskipTests)",
       "Bash(timeout 5 ./target/dist/Cadette/bin/Cadette)",
-      "Bash(mvn -q process-resources)"
+      "Bash(mvn -q process-resources)",
+      "Bash(dpkg --version)",
+      "Bash(file target/dist/*.deb)",
+      "Bash(dpkg-deb -I target/dist/cadette_0.1.0_amd64.deb)",
+      "Bash(mvn -P package-app clean package -DskipTests)",
+      "Bash(dpkg-deb -f target/dist/cadette_0.1.0_amd64.deb Package Version Description)"
     ]
   }
 }

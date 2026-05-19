@@ -18,6 +18,7 @@
 
 package app.cadette.lemur;
 
+import app.cadette.BuildInfo;
 import app.cadette.CutSheetRenderer;
 import app.cadette.SceneManager;
 import app.cadette.SelectionManager;
@@ -353,7 +354,8 @@ public class LemurAppState extends BaseAppState {
         refreshPartsList();
         refreshProperties();
 
-        appendOutput("CADette. Type 'help' or start adding parts.");
+        appendOutput(BuildInfo.instance().getDisplayString());
+        appendOutput("Type 'help' or start adding parts. 'show about' for license + links.");
 
         installCutSheetInputHandlers(app);
     }

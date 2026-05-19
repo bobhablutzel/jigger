@@ -264,6 +264,31 @@
             </properties>
         </profile>
 
+        <!-- Per-OS jpackage defaults. These set the installer type +
+             platform-specific options. They auto-activate on the host
+             platform; the linux defaults live at pom-root so they
+             apply when no other OS profile matches. -->
+        <profile>
+            <id>pkg-mac-defaults</id>
+            <activation>
+                <os><family>mac</family></os>
+            </activation>
+            <properties>
+                <cadette.jpackage.type>dmg</cadette.jpackage.type>
+                <cadette.jpackage.platform-args>--mac-package-name Cadette --mac-package-identifier app.cadette</cadette.jpackage.platform-args>
+            </properties>
+        </profile>
+        <profile>
+            <id>pkg-win-defaults</id>
+            <activation>
+                <os><family>windows</family></os>
+            </activation>
+            <properties>
+                <cadette.jpackage.type>msi</cadette.jpackage.type>
+                <cadette.jpackage.platform-args>--win-shortcut --win-menu --win-menu-group Cadette --win-per-user-install --win-dir-chooser</cadette.jpackage.platform-args>
+            </properties>
+        </profile>
+
         <!-- `mvn -P package-app package` produces a native install image
              via jpackage. First-pass config: app-image type (a self-
              contained directory, simpler than .deb for initial bring-up).
@@ -271,7 +296,13 @@
         <profile>
             <id>package-app</id>
             <properties>
-                <cadette.jpackage.type>app-image</cadette.jpackage.type>
+                <!-- Linux defaults live here (pom-root). Per-OS profiles
+                     above auto-activate on Mac / Windows and override
+                     both type and platform-args. Override on the command
+                     line with `-Dcadette.jpackage.type=...` to force a
+                     specific type (e.g. rpm on Fedora). -->
+                <cadette.jpackage.type>deb</cadette.jpackage.type>
+                <cadette.jpackage.platform-args>--linux-shortcut --linux-menu-group Graphics --linux-package-name cadette</cadette.jpackage.platform-args>
             </properties>
             <build>
                 <plugins>
@@ -355,24 +386,12 @@
                                 <goals><goal>exec</goal></goals>
                                 <configuration>
                                     <executable>jpackage</executable>
-                                    <arguments combine.self="override">
-                                        <argument>--input</argument>
-                                        <argument>${project.build.directory}/jpackage-input</argument>
-                                        <argument>--main-jar</argument>
-                                        <argument>${project.build.finalName}.jar</argument>
-                                        <argument>--main-class</argument>
-                                        <argument>app.cadette.CadetteApp</argument>
-                                        <argument>--name</argument>
-                                        <argument>Cadette</argument>
-                                        <argument>--app-version</argument>
-                                        <argument>${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion}</argument>
-                                        <argument>--vendor</argument>
-                                        <argument>Cadette Project</argument>
-                                        <argument>--dest</argument>
-                                        <argument>${project.build.directory}/dist</argument>
-                                        <argument>--type</argument>
-                                        <argument>${cadette.jpackage.type}</argument>
-                                    </arguments>
+                                    <!-- commandlineArgs (parsed by commons-exec
+                                         with quote-aware splitting) so the per-OS
+                                         platform-args property can splat into the
+                                         arg list cleanly. Multi-word values are
+                                         double-quoted. -->
+                                    <commandlineArgs>--input "${project.build.directory}/jpackage-input" --main-jar "${project.build.finalName}.jar" --main-class app.cadette.CadetteApp --name Cadette --app-version ${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion} --vendor "Cadette Project" --dest "${project.build.directory}/dist" --type ${cadette.jpackage.type} --description "Woodworking design + cut sheet generator" --copyright "Copyright 2026 Bob Hablutzel" --license-file "${project.basedir}/LICENSE" ${cadette.jpackage.platform-args}</commandlineArgs>
                                 </configuration>
                             </execution>
                         </executions>
