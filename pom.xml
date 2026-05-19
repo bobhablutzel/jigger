@@ -286,7 +286,14 @@
             </activation>
             <properties>
                 <cadette.jpackage.type>dmg</cadette.jpackage.type>
-                <cadette.jpackage.platform-args>--mac-package-name Cadette --mac-package-identifier app.cadette</cadette.jpackage.platform-args>
+                <!-- macOS needs -XstartOnFirstThread for GLFW's event pump
+                     (LWJGL3 backend). Headless AWT is mandatory alongside
+                     it: -XstartOnFirstThread claims thread 0 for GLFW;
+                     without headless mode, AWT's Toolkit also wants thread
+                     0 and deadlocks on first font / image init. Java2D +
+                     BufferedImage stay fully functional under headless,
+                     which is what CutSheetRenderer + AWTLoader rely on. -->
+                <cadette.jpackage.platform-args>--mac-package-name Cadette --mac-package-identifier app.cadette --java-options -XstartOnFirstThread --java-options -Djava.awt.headless=true</cadette.jpackage.platform-args>
             </properties>
         </profile>
         <profile>
