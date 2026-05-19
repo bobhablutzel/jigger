@@ -384,41 +384,66 @@
                     </plugin>
 
                     <!-- 2. The main jar lives at target/{finalName}.jar;
-                            jpackage wants it inside the input dir alongside
-                            the deps. Cheapest portable copy is via exec.
-                         3. Run jpackage. -->
+                            jpackage wants it inside the input dir
+                            alongside the deps. maven-resources-plugin's
+                            copy-resources works natively on Windows
+                            (no cp). -->
                     <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <version>3.3.1</version>
                         <executions>
                             <execution>
                                 <id>copy-main-jar</id>
                                 <phase>package</phase>
-                                <goals><goal>exec</goal></goals>
+                                <goals><goal>copy-resources</goal></goals>
                                 <configuration>
-                                    <executable>cp</executable>
-                                    <arguments combine.self="override">
-                                        <argument>${project.build.directory}/${project.build.finalName}.jar</argument>
-                                        <argument>${project.build.directory}/jpackage-input/</argument>
-                                    </arguments>
+                                    <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.build.directory}</directory>
+                                            <includes>
+                                                <include>${project.build.finalName}.jar</include>
+                                            </includes>
+                                            <filtering>false</filtering>
+                                        </resource>
+                                    </resources>
                                 </configuration>
                             </execution>
-                            <!-- jpackage refuses to overwrite an existing
-                                 dest directory. Wipe the prior build's
-                                 output first so re-runs work without a
-                                 mvn clean. -->
+                        </executions>
+                    </plugin>
+
+                    <!-- 3. jpackage refuses to overwrite an existing
+                            dest directory. Wipe the prior build's
+                            output first so re-runs work without a top-
+                            level mvn clean. maven-clean-plugin works
+                            natively on Windows (no rm -rf). -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-clean-plugin</artifactId>
+                        <version>3.3.2</version>
+                        <executions>
                             <execution>
                                 <id>clean-prior-dist</id>
                                 <phase>package</phase>
-                                <goals><goal>exec</goal></goals>
+                                <goals><goal>clean</goal></goals>
                                 <configuration>
-                                    <executable>rm</executable>
-                                    <arguments combine.self="override">
-                                        <argument>-rf</argument>
-                                        <argument>${project.build.directory}/dist</argument>
-                                    </arguments>
+                                    <excludeDefaultDirectories>true</excludeDefaultDirectories>
+                                    <filesets>
+                                        <fileset>
+                                            <directory>${project.build.directory}/dist</directory>
+                                        </fileset>
+                                    </filesets>
                                 </configuration>
                             </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- 4. Run jpackage. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
                             <execution>
                                 <id>run-jpackage</id>
                                 <phase>package</phase>
