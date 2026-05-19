@@ -285,19 +285,39 @@
                 <os><family>mac</family></os>
             </activation>
             <properties>
-                <!-- Use app-image, not dmg, because jpackage 25.0.2 on
-                     macOS drops java-options from the inner .app's
-                     cfg when building dmg. App-image honors them
-                     correctly. F&F users install by dragging Cadette.app
-                     to /Applications; we zip it for GitHub Release
-                     distribution. Memo:
-                     project_jpackage_dmg_java_options_bug.
-                     Note: license-file lives in platform-args (not the
-                     cross-platform args block) because app-image refuses
-                     it; Linux deb / Windows msi both include it. -->
+                <!-- Two-step build on macOS:
+                     Step 1 (package phase, run-jpackage): produce an
+                       app-image (.app directory) with java-options +
+                       the headless flag baked into Cadette.cfg.
+                       jpackage's dmg path drops these (a 25.0.2 bug);
+                       app-image doesn't. Memo: project_jpackage_dmg_java_options_bug.
+                     Step 2 (verify phase, wrap-mac-dmg): wrap the
+                       resulting .app into a .dmg via the app-image
+                       option. The wrap step doesn't re-process
+                       java-options, so the bundle's cfg keeps the
+                       flags from step 1. -->
                 <cadette.jpackage.type>app-image</cadette.jpackage.type>
                 <cadette.jpackage.platform-args>--mac-package-name Cadette --mac-package-identifier app.cadette --java-options -XstartOnFirstThread --java-options -Djava.awt.headless=true</cadette.jpackage.platform-args>
             </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>wrap-mac-dmg</id>
+                                <phase>verify</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>jpackage</executable>
+                                    <commandlineArgs>--type dmg --app-image "${project.build.directory}/dist/Cadette.app" --name Cadette --app-version ${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion} --dest "${project.build.directory}/dist" --vendor "Cadette Project" --copyright "Copyright 2026 Bob Hablutzel"</commandlineArgs>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
         <profile>
             <id>pkg-win-defaults</id>
