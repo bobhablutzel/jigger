@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -97,6 +98,68 @@ class PreferencesTest {
         Preferences p = new Preferences(tmp);
         p.load();
         assertEquals("light", p.getString(null, "ui", "theme"));
+    }
+
+    @Test
+    void bundledDefaultsSeedFreshInstall(@TempDir Path tmp) {
+        // No user file, no legacy files — Preferences.load should pull
+        // lumber prices from the bundled default-preferences.yaml.
+        Preferences p = new Preferences(tmp);
+        p.load();
+        Map<Object, Object> prices = p.getMap(
+                "materials", "lumber-2x4-pt", "prices");
+        assertFalse(prices.isEmpty(),
+                "expected bundled lumber prices to seed a fresh install");
+        // The 2x4 PT 8' price is the authoritative anchor — sourced
+        // directly from the user's lumberyard. If this drifts, the
+        // bundle and LumberPrices DEFAULTS have desynced.
+        Object eightFt = prices.entrySet().stream()
+                .filter(e -> e.getKey() instanceof Number n && n.intValue() == 2438)
+                .map(Map.Entry::getValue)
+                .findFirst().orElse(null);
+        assertEquals(4.51, ((Number) eightFt).doubleValue(), 0.01);
+    }
+
+    @Test
+    void userValuesWinOverBundledDefaults(@TempDir Path tmp) throws IOException {
+        // User has customized one price; bundle has different. User wins.
+        Files.writeString(tmp.resolve("preferences.yaml"),
+                "materials:\n"
+              + "  lumber-2x4-pt:\n"
+              + "    prices:\n"
+              + "      2438: 9.99\n");
+        Preferences p = new Preferences(tmp);
+        p.load();
+        Map<Object, Object> prices = p.getMap(
+                "materials", "lumber-2x4-pt", "prices");
+        Object eightFt = prices.entrySet().stream()
+                .filter(e -> e.getKey() instanceof Number n && n.intValue() == 2438)
+                .map(Map.Entry::getValue)
+                .findFirst().orElse(null);
+        assertEquals(9.99, ((Number) eightFt).doubleValue(), 0.01,
+                "user override should win over bundled default");
+        // But bundle fills in keys the user didn't set:
+        assertNotNull(prices.entrySet().stream()
+                .filter(e -> e.getKey() instanceof Number n && n.intValue() == 4877)
+                .findFirst().orElse(null),
+                "bundle should backfill missing length keys");
+    }
+
+    @Test
+    void bundledDefaultsAlsoFillMissingMaterialEntirely(@TempDir Path tmp) throws IOException {
+        // User has only customized 2x4-pt. They should still get the
+        // bundle's entries for OTHER materials (e.g. 2x6-spf).
+        Files.writeString(tmp.resolve("preferences.yaml"),
+                "materials:\n"
+              + "  lumber-2x4-pt:\n"
+              + "    prices:\n"
+              + "      2438: 9.99\n");
+        Preferences p = new Preferences(tmp);
+        p.load();
+        Map<Object, Object> twoBySix = p.getMap(
+                "materials", "lumber-2x6-spf", "prices");
+        assertFalse(twoBySix.isEmpty(),
+                "bundle should backfill materials the user didn't override");
     }
 
     @Test

@@ -1,0 +1,118 @@
+# Cadette bundled defaults.
+# 
+# On first launch (or whenever the user's preferences.yaml is missing
+# a key that's present here), values from this file are merged into
+# ~/.cadette/preferences.yaml. The user's values always win — entries
+# here only fill in gaps. Edit ~/.cadette/preferences.yaml to override.
+#
+# Lumber prices: per-piece USD, keyed by stock length in mm. Sourced
+# from one user's 2x4 PT data at Home Depot, scaled by cross-section
+# area and treatment multiplier (SPF ~ 0.65× PT, GC ~ 1.1× PT). Treat
+# as ballpark — override per your actual lumberyard.
+
+materials:
+  lumber-1x4-pine:
+    prices:
+      1830: 4.5
+      2438: 5.95
+      3048: 7.95
+      3658: 9.85
+  lumber-2x10-gc:
+    prices:
+      3048: 22.65
+      3658: 27.19
+      4877: 40.13
+  lumber-2x10-pt:
+    prices:
+      3048: 20.59
+      3658: 24.71
+      4877: 36.48
+  lumber-2x10-spf:
+    prices:
+      3048: 13.38
+      3658: 16.05
+      4877: 23.71
+  lumber-2x12-gc:
+    prices:
+      3048: 27.54
+      3658: 33.06
+      4877: 48.79
+  lumber-2x12-pt:
+    prices:
+      3048: 25.04
+      3658: 30.05
+      4877: 44.36
+  lumber-2x12-spf:
+    prices:
+      3048: 16.27
+      3658: 19.52
+      4877: 28.83
+  lumber-2x4-gc:
+    prices:
+      2438: 4.96
+      3048: 8.58
+      3658: 10.3
+      4877: 15.2
+  lumber-2x4-pt:
+    prices:
+      2438: 4.51
+      3048: 7.8
+      3658: 9.36
+      4877: 13.82
+  lumber-2x4-spf:
+    prices:
+      2438: 2.93
+      3048: 5.07
+      3658: 6.08
+      4877: 8.98
+  lumber-2x6-gc:
+    prices:
+      2438: 7.79
+      3048: 13.47
+      3658: 16.17
+      4877: 23.86
+  lumber-2x6-pt:
+    prices:
+      2438: 7.08
+      3048: 12.25
+      3658: 14.7
+      4877: 21.7
+  lumber-2x6-spf:
+    prices:
+      2438: 4.6
+      3048: 7.96
+      3658: 9.55
+      4877: 14.1
+  lumber-2x8-gc:
+    prices:
+      2438: 10.27
+      3048: 17.76
+      3658: 21.32
+      4877: 31.46
+  lumber-2x8-pt:
+    prices:
+      2438: 9.34
+      3048: 16.15
+      3658: 19.38
+      4877: 28.61
+  lumber-2x8-spf:
+    prices:
+      2438: 6.07
+      3048: 10.49
+      3658: 12.59
+      4877: 18.59
+  lumber-4x4-gc:
+    prices:
+      2438: 11.9
+      3048: 20.59
+      3658: 24.72
+  lumber-4x4-pt:
+    prices:
+      2438: 10.82
+      3048: 18.72
+      3658: 22.46
+  lumber-4x4-spf:
+    prices:
+      2438: 7.03
+      3048: 12.17
+      3658: 14.59

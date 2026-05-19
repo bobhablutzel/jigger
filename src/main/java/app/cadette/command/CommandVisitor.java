@@ -1401,7 +1401,19 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         if (target.THEME() != null) {
             return showActiveTheme();
         }
-        return "Unknown show target. Try: show units, show objects, show materials, show templates, show joints, show cutlist, show bom, show layout, show script_path, show theme, show themes";
+        if (target.ABOUT() != null) {
+            return showAbout();
+        }
+        return "Unknown show target. Try: show units, show objects, show materials, show templates, show joints, show cutlist, show bom, show layout, show script_path, show theme, show themes, show about";
+    }
+
+    private String showAbout() {
+        app.cadette.BuildInfo bi = app.cadette.BuildInfo.instance();
+        return "Cadette " + bi.getVersion()
+            + "\nBuild commit:  " + bi.getCommit() + " (" + bi.getBranch() + ")"
+            + "\nBuilt:         " + bi.getBuildTime()
+            + "\nLicense:       Apache 2.0"
+            + "\nGitHub:        https://github.com/bobhablutzel/cadette";
     }
 
     /** Brief "what's active right now". Use {@code show themes} to list. */

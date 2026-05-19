@@ -120,7 +120,11 @@
       "Bash(timeout 10 mvn exec:exec)",
       "Bash(mvn -q test -Dtest=PreferencesTest)",
       "Bash(mvn -q test-compile)",
-      "Bash(xargs cat)"
+      "Bash(xargs cat)",
+      "Bash(jpackage --version)",
+      "Bash(mvn -P package-app package -DskipTests)",
+      "Bash(timeout 5 ./target/dist/Cadette/bin/Cadette)",
+      "Bash(mvn -q process-resources)"
     ]
   }
 }

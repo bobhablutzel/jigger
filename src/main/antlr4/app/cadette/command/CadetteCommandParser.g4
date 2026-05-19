@@ -391,6 +391,7 @@ showTarget
     | SCRIPT_PATH
     | THEME
     | THEMES
+    | ABOUT
     ;
 
 setCommand

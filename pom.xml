@@ -121,7 +121,47 @@
     </dependencies>
 
     <build>
+        <!-- Limit resource filtering to build-info.properties — turning on
+             filtering globally would mess with .cdt theme files (which
+             also contain ${...} expressions). -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>build-info.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>build-info.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
         <plugins>
+            <!-- git-commit-id: exposes git.commit.id.abbrev / git.commit.time /
+                 git.branch as build-time properties. Used by the resources
+                 filter above to fill build-info.properties. -->
+            <plugin>
+                <groupId>io.github.git-commit-id</groupId>
+                <artifactId>git-commit-id-maven-plugin</artifactId>
+                <version>9.0.1</version>
+                <executions>
+                    <execution>
+                        <id>git-info</id>
+                        <goals><goal>revision</goal></goals>
+                        <phase>initialize</phase>
+                    </execution>
+                </executions>
+                <configuration>
+                    <generateGitPropertiesFile>false</generateGitPropertiesFile>
+                    <dateFormat>yyyy-MM-dd'T'HH:mm:ssXXX</dateFormat>
+                    <dateFormatTimeZone>UTC</dateFormatTimeZone>
+                </configuration>
+            </plugin>
+
             <!-- ANTLR4 Maven Plugin — generates parser/lexer from .g4. -->
             <plugin>
                 <groupId>org.antlr</groupId>
@@ -222,6 +262,123 @@
             <properties>
                 <cadette.first-thread-flag>-XstartOnFirstThread</cadette.first-thread-flag>
             </properties>
+        </profile>
+
+        <!-- `mvn -P package-app package` produces a native install image
+             via jpackage. First-pass config: app-image type (a self-
+             contained directory, simpler than .deb for initial bring-up).
+             Switch to type=deb once the app-image smoke-tests cleanly. -->
+        <profile>
+            <id>package-app</id>
+            <properties>
+                <cadette.jpackage.type>app-image</cadette.jpackage.type>
+            </properties>
+            <build>
+                <plugins>
+                    <!-- 0. Parse the pom version so jpackage's app-version
+                         arg (which rejects SNAPSHOT and other SemVer pre-
+                         release qualifiers) gets the numeric portion only.
+                         Exposes parsedVersion.majorVersion etc. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <executions>
+                            <execution>
+                                <id>parse-version</id>
+                                <phase>validate</phase>
+                                <goals><goal>parse-version</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- 1. Copy all runtime deps into jpackage-input/.
+                         jpackage's input directory takes a flat tree and
+                         builds a classpath from every JAR there minus
+                         the main-jar. -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-dependency-plugin</artifactId>
+                        <version>3.6.1</version>
+                        <executions>
+                            <execution>
+                                <id>copy-deps</id>
+                                <phase>package</phase>
+                                <goals><goal>copy-dependencies</goal></goals>
+                                <configuration>
+                                    <outputDirectory>${project.build.directory}/jpackage-input</outputDirectory>
+                                    <includeScope>runtime</includeScope>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <!-- 2. The main jar lives at target/{finalName}.jar;
+                            jpackage wants it inside the input dir alongside
+                            the deps. Cheapest portable copy is via exec.
+                         3. Run jpackage. -->
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>copy-main-jar</id>
+                                <phase>package</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>cp</executable>
+                                    <arguments combine.self="override">
+                                        <argument>${project.build.directory}/${project.build.finalName}.jar</argument>
+                                        <argument>${project.build.directory}/jpackage-input/</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <!-- jpackage refuses to overwrite an existing
+                                 dest directory. Wipe the prior build's
+                                 output first so re-runs work without a
+                                 mvn clean. -->
+                            <execution>
+                                <id>clean-prior-dist</id>
+                                <phase>package</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>rm</executable>
+                                    <arguments combine.self="override">
+                                        <argument>-rf</argument>
+                                        <argument>${project.build.directory}/dist</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>run-jpackage</id>
+                                <phase>package</phase>
+                                <goals><goal>exec</goal></goals>
+                                <configuration>
+                                    <executable>jpackage</executable>
+                                    <arguments combine.self="override">
+                                        <argument>--input</argument>
+                                        <argument>${project.build.directory}/jpackage-input</argument>
+                                        <argument>--main-jar</argument>
+                                        <argument>${project.build.finalName}.jar</argument>
+                                        <argument>--main-class</argument>
+                                        <argument>app.cadette.CadetteApp</argument>
+                                        <argument>--name</argument>
+                                        <argument>Cadette</argument>
+                                        <argument>--app-version</argument>
+                                        <argument>${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion}</argument>
+                                        <argument>--vendor</argument>
+                                        <argument>Cadette Project</argument>
+                                        <argument>--dest</argument>
+                                        <argument>${project.build.directory}/dist</argument>
+                                        <argument>--type</argument>
+                                        <argument>${cadette.jpackage.type}</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
     </profiles>
 </project>

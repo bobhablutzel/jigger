@@ -122,6 +122,7 @@ VALIDATE   : 'validate' ;
 SCRIPT_PATH : 'script_path' | 'script-path' ;
 THEME       : 'theme' ;
 THEMES      : 'themes' ;
+ABOUT       : 'about' ;
 RUN        : 'run' -> pushMode(PATH_MODE) ;
 LPAREN     : '(' ;
 RPAREN     : ')' ;

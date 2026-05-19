@@ -161,7 +161,8 @@ public final class Preferences {
 
     @SuppressWarnings("unchecked")
     public void load() {
-        if (Files.isRegularFile(prefsFile)) {
+        boolean userFileExists = Files.isRegularFile(prefsFile);
+        if (userFileExists) {
             try (BufferedReader in = Files.newBufferedReader(prefsFile)) {
                 Object parsed = new Yaml().load(in);
                 if (parsed instanceof Map<?, ?> m) {
@@ -171,11 +172,66 @@ public final class Preferences {
                 System.err.println("[prefs] couldn't load preferences.yaml: "
                         + e.getMessage() + " — starting fresh");
             }
-            return;
+        } else {
+            // Fresh install — pull anything from the legacy files first.
+            migrateLegacyFiles();
         }
-        // Fresh install — migrate legacy files if present.
-        migrateLegacyFiles();
-        if (!root.isEmpty()) save();
+        // Always overlay bundled defaults: user values win where present,
+        // defaults fill missing keys. Catches both fresh installs (file
+        // missing entirely) and existing installs that predate a new
+        // section in the bundle (e.g. user had layout prefs but no
+        // materials section yet).
+        boolean filledFromBundle = mergeBundledDefaults();
+        if (filledFromBundle || !userFileExists) save();
+    }
+
+    /** Read {@code /default-preferences.yaml} from the classpath and
+     *  merge it under the current root: any key absent in user file gets
+     *  the bundled value; existing user keys are untouched. Returns
+     *  {@code true} if anything actually changed (i.e. a save is warranted). */
+    @SuppressWarnings("unchecked")
+    private boolean mergeBundledDefaults() {
+        try (var in = Preferences.class.getResourceAsStream(
+                "/default-preferences.yaml")) {
+            if (in == null) return false;
+            Object parsed = new Yaml().load(in);
+            if (!(parsed instanceof Map<?, ?> bundle)) return false;
+            return mergeUnder((Map<Object, Object>) bundle,
+                              (Map<Object, Object>) (Map<?, ?>) root);
+        } catch (IOException | RuntimeException e) {
+            System.err.println("[prefs] couldn't load bundled defaults: "
+                    + e.getMessage());
+            return false;
+        }
+    }
+
+    /** Deep-merge: for every key in {@code source}, copy into {@code target}
+     *  only if the key is absent. Where both have a Map value, recurse.
+     *  User values (in {@code target}) always win.
+     *
+     *  <p>Uses {@code Map<Object, Object>} because YAML mixes key types
+     *  freely — integer mm length keys at one level, string slug keys at
+     *  another. */
+    @SuppressWarnings("unchecked")
+    private static boolean mergeUnder(Map<Object, Object> source,
+                                      Map<Object, Object> target) {
+        boolean changed = false;
+        for (Map.Entry<Object, Object> e : source.entrySet()) {
+            Object existing = target.get(e.getKey());
+            Object incoming = e.getValue();
+            if (existing == null) {
+                target.put(e.getKey(), incoming);
+                changed = true;
+            } else if (existing instanceof Map<?, ?>
+                    && incoming instanceof Map<?, ?>) {
+                if (mergeUnder((Map<Object, Object>) incoming,
+                               (Map<Object, Object>) existing)) {
+                    changed = true;
+                }
+            }
+            // else: existing scalar/list/etc — user wins, no change.
+        }
+        return changed;
     }
 
     /** Pull settings from the pre-YAML files written by earlier sessions.
