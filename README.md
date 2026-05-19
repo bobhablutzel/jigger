@@ -77,6 +77,8 @@ installer type. From a checkout of the repo on each platform:
 # macOS (produces target/dist/Cadette.app)
 mvn -P package-app clean package -DskipTests
 # Then drag target/dist/Cadette.app into /Applications/
+# To create the distributable zip for GitHub Releases:
+( cd target/dist && zip -r Cadette-1.0.0-macos.zip Cadette.app )
 
 # Windows (produces target\dist\Cadette-1.0.0.msi)
 mvn -P package-app clean package -DskipTests
