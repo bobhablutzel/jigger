@@ -74,8 +74,9 @@ The Maven profile auto-detects the host OS and selects the right
 installer type. From a checkout of the repo on each platform:
 
 ```bash
-# macOS (produces target/dist/Cadette-1.0.0.dmg)
+# macOS (produces target/dist/Cadette.app)
 mvn -P package-app clean package -DskipTests
+# Then drag target/dist/Cadette.app into /Applications/
 
 # Windows (produces target\dist\Cadette-1.0.0.msi)
 mvn -P package-app clean package -DskipTests
@@ -83,17 +84,19 @@ mvn -P package-app clean package -DskipTests
 
 Requirements per platform:
 
-- **macOS**: JDK 25 with `jpackage` on PATH; Xcode command-line tools
-  (for `productbuild`/`hdiutil`, used by jpackage internally). Signing
-  is disabled in the current profile — the produced `.dmg` is unsigned
-  and Gatekeeper will warn on first launch. Users must right-click →
-  Open the first time.
+- **macOS**: JDK 25 with `jpackage` on PATH. Builds an
+  `.app` directory (app-image), not a `.dmg`: jpackage 25.0.2 on
+  macOS has a bug where `.dmg` builds drop `--java-options` from the
+  inner app's config (which we need for `-XstartOnFirstThread`).
+  Distribution is via a zip of the `.app`. Gatekeeper will warn on
+  first launch since the app is unsigned — right-click → Open to
+  bypass.
 - **Windows**: JDK 25 with `jpackage` on PATH; WiX Toolset v3.0+
   (jpackage requires `light.exe`/`candle.exe` for `.msi` generation).
   The produced installer is unsigned and SmartScreen will warn on
   first launch.
 
-These installers are unsigned; F&F users should expect a warning the
+These artifacts are unsigned; F&F users should expect a warning the
 first time they install. Code signing for both platforms is on the
 post-F&F backlog.
 
