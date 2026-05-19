@@ -33,6 +33,18 @@ import java.util.stream.Stream;
  */
 public class MaterialCatalog {
 
+    // Treatment colors for the SPF / PT / GC lumber family. Declared
+    // BEFORE INSTANCE — the singleton's constructor calls loadDefaults()
+    // which references these, and static fields initialize in source
+    // order. Moving these below INSTANCE makes them null at the time
+    // loadDefaults runs.
+    private static final ColorRGBA SPF_COLOR =
+            new ColorRGBA(0.94f, 0.88f, 0.72f, 1f);
+    private static final ColorRGBA PT_COLOR =
+            new ColorRGBA(0.74f, 0.82f, 0.58f, 1f);
+    private static final ColorRGBA GC_COLOR =
+            new ColorRGBA(0.58f, 0.72f, 0.48f, 1f);
+
     private static final MaterialCatalog INSTANCE = new MaterialCatalog();
 
     public static final String DEFAULT_IMPERIAL = "plywood-3/4";
@@ -94,6 +106,24 @@ public class MaterialCatalog {
         return slug.toLowerCase().replace('_', '-').replace(' ', '-');
     }
 
+    // Metric-named entries describe the same physical product as their
+    // Imperial counterpart (lumber-38x89-spf is just a metric label for
+    // lumber-2x4-spf, etc.). Cost lookup uses the Imperial entry as
+    // canonical so the user only enters prices in one place.
+    private static final Map<String, String> COST_ALIAS = Map.of(
+            "lumber-38x89-spf",  "lumber-2x4-spf",
+            "lumber-38x140-spf", "lumber-2x6-spf",
+            "lumber-89x89-spf",  "lumber-4x4-spf",
+            "lumber-19x89-pine", "lumber-1x4-pine");
+
+    /** Map a material slug to the canonical slug under which its cost
+     *  is recorded. Metric lumber entries resolve to their Imperial
+     *  equivalents; everything else passes through unchanged. */
+    public static String costKey(String materialSlug) {
+        if (materialSlug == null) return null;
+        return COST_ALIAS.getOrDefault(normalize(materialSlug), normalize(materialSlug));
+    }
+
     /**
      * Register a dimensional-lumber material. SHEET_GOOD kind so the existing
      * guillotine packer handles it; cross-section width becomes the sheet
@@ -119,6 +149,28 @@ public class MaterialCatalog {
                 .measurementSystem(system)
                 .displayColor(color)
                 .build());
+    }
+
+    /** Register a softwood lumber cross-section in SPF (untreated),
+     *  PT (pressure-treated, above-ground rated), and GC (ground-contact
+     *  rated) variants. Same geometry/lengths across all three — they
+     *  differ only in identity (color, BOM line, eventual price). */
+    private void registerLumberFamily(String nominal,
+                                      float widthMm, float thicknessMm,
+                                      List<Float> standardLengthsMm) {
+        String suffix = " (" + (int) widthMm + " × " + (int) thicknessMm + "mm)";
+        registerLumber("lumber-" + nominal + "-spf",
+                nominal + " SPF" + suffix,
+                MaterialType.SOFTWOOD, widthMm, thicknessMm,
+                standardLengthsMm, MeasurementSystem.IMPERIAL, SPF_COLOR);
+        registerLumber("lumber-" + nominal + "-pt",
+                nominal + " Pressure-Treated" + suffix,
+                MaterialType.SOFTWOOD, widthMm, thicknessMm,
+                standardLengthsMm, MeasurementSystem.IMPERIAL, PT_COLOR);
+        registerLumber("lumber-" + nominal + "-gc",
+                nominal + " Ground-Contact PT" + suffix,
+                MaterialType.SOFTWOOD, widthMm, thicknessMm,
+                standardLengthsMm, MeasurementSystem.IMPERIAL, GC_COLOR);
     }
 
     private void loadDefaults() {
@@ -234,24 +286,27 @@ public class MaterialCatalog {
 
         // -- Dimensional lumber (Imperial-named) -----------------------------
         // Cross-sections are S4S/dressed dimensions (the actual mm). Stock
-        // lengths are the standard 8'/10'/12'/14'/16' set; the packer uses
-        // the longest entry for v1, so leave that one last in the list.
-        registerLumber("lumber-2x4-spf", "2x4 SPF (38 × 89mm)",
-                MaterialType.SOFTWOOD, 38f, 89f,
-                /*lengths*/ List.of(2438f, 3048f, 3658f, 4267f, 4877f),
-                MeasurementSystem.IMPERIAL, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
-        registerLumber("lumber-2x6-spf", "2x6 SPF (38 × 140mm)",
-                MaterialType.SOFTWOOD, 38f, 140f,
-                List.of(2438f, 3048f, 3658f, 4267f, 4877f),
-                MeasurementSystem.IMPERIAL, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
-        registerLumber("lumber-2x8-spf", "2x8 SPF (38 × 184mm)",
-                MaterialType.SOFTWOOD, 38f, 184f,
-                List.of(2438f, 3048f, 3658f, 4267f, 4877f),
-                MeasurementSystem.IMPERIAL, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
-        registerLumber("lumber-4x4-spf", "4x4 SPF (89 × 89mm)",
-                MaterialType.SOFTWOOD, 89f, 89f,
-                List.of(2438f, 3048f, 3658f),
-                MeasurementSystem.IMPERIAL, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+        // lengths are 8'/10'/12'/16' — 14' isn't reliably stocked at the
+        // big-box stores most users buy from. Each cross-section ships
+        // in SPF / PT / GC variants via registerLumberFamily.
+        //
+        // 8'/10'/12'/16' = 2438/3048/3658/4877 mm.
+        // 2x10 and 2x12 typically aren't stocked in 8'; 4x4 typically
+        // tops out at 12'.
+        registerLumberFamily("2x4", 38f, 89f,
+                List.of(2438f, 3048f, 3658f, 4877f));
+        registerLumberFamily("2x6", 38f, 140f,
+                List.of(2438f, 3048f, 3658f, 4877f));
+        registerLumberFamily("2x8", 38f, 184f,
+                List.of(2438f, 3048f, 3658f, 4877f));
+        registerLumberFamily("2x10", 38f, 235f,
+                List.of(3048f, 3658f, 4877f));
+        registerLumberFamily("2x12", 38f, 286f,
+                List.of(3048f, 3658f, 4877f));
+        registerLumberFamily("4x4", 89f, 89f,
+                List.of(2438f, 3048f, 3658f));
+        // 1x4 pine: trim/board stock, not a structural product — no
+        // PT/GC variants.
         registerLumber("lumber-1x4-pine", "1x4 Pine (19 × 89mm)",
                 MaterialType.SOFTWOOD, 19f, 89f,
                 List.of(1830f, 2438f, 3048f, 3658f),
@@ -427,20 +482,21 @@ public class MaterialCatalog {
                 .build());
 
         // -- Dimensional lumber (Metric-named) -------------------------------
-        // Common European-market metric softwood sections. Stock lengths from
-        // 2.4 m up; longest used by the packer for v1.
+        // Common European-market metric softwood sections. Stock lengths
+        // 2.4/3.0/3.6/4.8 m — the 4.2 m equivalent of 14' is omitted to
+        // match the Imperial set above.
         registerLumber("lumber-38x89-spf", "38 × 89mm SPF (2x4 equiv.)",
                 MaterialType.SOFTWOOD, 38f, 89f,
-                List.of(2400f, 3000f, 3600f, 4200f, 4800f),
-                MeasurementSystem.METRIC, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+                List.of(2400f, 3000f, 3600f, 4800f),
+                MeasurementSystem.METRIC, SPF_COLOR);
         registerLumber("lumber-38x140-spf", "38 × 140mm SPF (2x6 equiv.)",
                 MaterialType.SOFTWOOD, 38f, 140f,
-                List.of(2400f, 3000f, 3600f, 4200f, 4800f),
-                MeasurementSystem.METRIC, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+                List.of(2400f, 3000f, 3600f, 4800f),
+                MeasurementSystem.METRIC, SPF_COLOR);
         registerLumber("lumber-89x89-spf", "89 × 89mm SPF (4x4 equiv.)",
                 MaterialType.SOFTWOOD, 89f, 89f,
                 List.of(2400f, 3000f, 3600f),
-                MeasurementSystem.METRIC, new ColorRGBA(0.94f, 0.88f, 0.72f, 1f));
+                MeasurementSystem.METRIC, SPF_COLOR);
         registerLumber("lumber-19x89-pine", "19 × 89mm Pine (1x4 equiv.)",
                 MaterialType.SOFTWOOD, 19f, 89f,
                 List.of(1800f, 2400f, 3000f, 3600f),

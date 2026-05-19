@@ -193,24 +193,14 @@ public class CommandExecutor {
         }
     }
 
-    private static final java.nio.file.Path THEME_PREF_FILE =
-            java.nio.file.Path.of(System.getProperty("user.home"),
-                    ".cadette", "active_theme");
-
     private static String loadThemePreference() {
-        try {
-            if (java.nio.file.Files.exists(THEME_PREF_FILE)) {
-                return java.nio.file.Files.readString(THEME_PREF_FILE).trim();
-            }
-        } catch (Exception ignored) { /* fresh start */ }
-        return null;
+        return app.cadette.prefs.Preferences.instance()
+                .getString(null, "ui", "theme");
     }
 
     private static void saveThemePreference(String name) {
-        try {
-            java.nio.file.Files.createDirectories(THEME_PREF_FILE.getParent());
-            java.nio.file.Files.writeString(THEME_PREF_FILE, name == null ? "" : name);
-        } catch (Exception ignored) { /* non-fatal */ }
+        app.cadette.prefs.Preferences.instance()
+                .set(name == null ? "" : name, "ui", "theme");
     }
 
     /**

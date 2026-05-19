@@ -94,9 +94,8 @@ import java.util.function.Consumer;
  * <p>All five {@link Cutout} shape variants ({@link Cutout.Rect},
  * {@link Cutout.Circle}, {@link Cutout.Polygon}, {@link Cutout.Spline},
  * {@link Cutout.Curve}) are supported. Circles sample to
- * {@value #CIRCLE_SEGMENTS}-segment polygons. Splines tessellate as periodic
- * centripetal Catmull-Rom curves with {@value #SPLINE_SAMPLES_PER_SEGMENT}
- * samples per segment. Curves tessellate as periodic cubic Beziers via
+ * {@value #CIRCLE_SEGMENTS}-segment polygons. Splines tessellate via
+ * {@link SplineTessellator}. Curves tessellate as periodic cubic Beziers via
  * de Casteljau with {@value #CURVE_SAMPLES_PER_SEGMENT} samples per segment.
  */
 public final class PartMeshBuilder {
@@ -105,9 +104,6 @@ public final class PartMeshBuilder {
 
     /** Number of segments used to approximate a circular cutout boundary. */
     private static final int CIRCLE_SEGMENTS = 32;
-
-    /** Samples per segment when tessellating a Catmull-Rom spline. */
-    private static final int SPLINE_SAMPLES_PER_SEGMENT = 16;
 
     /** Samples per segment when tessellating a cubic Bezier curve. */
     private static final int CURVE_SAMPLES_PER_SEGMENT = 16;
@@ -340,43 +336,9 @@ public final class PartMeshBuilder {
             case Cutout.Rect r    -> rectPolygon(r.xMm(), r.yMm(), r.widthMm(), r.heightMm());
             case Cutout.Circle ci -> circlePolygon(ci.cxMm(), ci.cyMm(), ci.radiusMm());
             case Cutout.Polygon p -> polygonFromVertices(p.vertices());
-            case Cutout.Spline s  -> polygonFromVertices(tessellateCatmullRom(s.controlPoints()));
+            case Cutout.Spline s  -> polygonFromVertices(SplineTessellator.tessellateCatmullRom(s.controlPoints()));
             case Cutout.Curve cv  -> polygonFromVertices(tessellateBezier(cv.controlPoints()));
         };
-    }
-
-    /**
-     * Tessellate a periodic (closed) Catmull-Rom spline into a polygon vertex
-     * list. Uses centripetal parameterization (alpha = 0.5) which avoids the
-     * loops and overshoots that uniform Catmull-Rom can produce when control
-     * points are unevenly spaced — important for hand-authored shapes where
-     * control point spacing varies.
-     *
-     * <p>For N control points and K samples per segment, produces N×K points
-     * traversing the curve once. The curve passes exactly through every
-     * control point (Catmull-Rom is interpolating). Segments wrap cyclically
-     * so the curve closes smoothly.
-     */
-    private static List<Point2D> tessellateCatmullRom(List<Point2D> control) {
-        int n = control.size();
-        if (n < 3) return control;
-        List<Point2D> result = new ArrayList<>(n * SPLINE_SAMPLES_PER_SEGMENT);
-        for (int i = 0; i < n; i++) {
-            Point2D p0 = control.get((i - 1 + n) % n);
-            Point2D p1 = control.get(i);
-            Point2D p2 = control.get((i + 1) % n);
-            Point2D p3 = control.get((i + 2) % n);
-            float t0 = 0;
-            float t1 = t0 + alphaDistance(p0, p1);
-            float t2 = t1 + alphaDistance(p1, p2);
-            float t3 = t2 + alphaDistance(p2, p3);
-            for (int j = 0; j < SPLINE_SAMPLES_PER_SEGMENT; j++) {
-                float u = (float) j / SPLINE_SAMPLES_PER_SEGMENT;
-                float t = t1 + u * (t2 - t1);
-                result.add(barryGoldman(p0, p1, p2, p3, t0, t1, t2, t3, t));
-            }
-        }
-        return result;
     }
 
     /**
@@ -417,24 +379,6 @@ public final class PartMeshBuilder {
         Point2D r0 = lerp(q0, q1, t);
         Point2D r1 = lerp(q1, q2, t);
         return lerp(r0, r1, t);
-    }
-
-    /** Centripetal parameterization spacing: |Δp|^0.5 = (Δx² + Δy²)^0.25. */
-    private static float alphaDistance(Point2D a, Point2D b) {
-        float dx = b.xMm() - a.xMm();
-        float dy = b.yMm() - a.yMm();
-        return (float) Math.pow(dx * dx + dy * dy, 0.25);
-    }
-
-    /** Barry-Goldman pyramid evaluation of Catmull-Rom at parameter t. */
-    private static Point2D barryGoldman(Point2D p0, Point2D p1, Point2D p2, Point2D p3,
-                                        float t0, float t1, float t2, float t3, float t) {
-        Point2D a1 = lerp(p0, p1, (t - t0) / (t1 - t0));
-        Point2D a2 = lerp(p1, p2, (t - t1) / (t2 - t1));
-        Point2D a3 = lerp(p2, p3, (t - t2) / (t3 - t2));
-        Point2D b1 = lerp(a1, a2, (t - t0) / (t2 - t0));
-        Point2D b2 = lerp(a2, a3, (t - t1) / (t3 - t1));
-        return lerp(b1, b2, (t - t1) / (t2 - t1));
     }
 
     private static Point2D lerp(Point2D a, Point2D b, float t) {

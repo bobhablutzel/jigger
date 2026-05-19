@@ -111,6 +111,37 @@ class CutSheetCutoutOverlayTest {
     }
 
     @Test
+    void polygon_unrotated_pathTracksVertices() {
+        // Diamond cutout: vertices at (50,30), (70,50), (50,70), (30,50).
+        // Unrotated, scale 0.5: bounding box should land at (px+15, py+15, 20, 20).
+        SheetLayout.PlacedPart part = placed(0, 0, 600, 900, false);
+        java.util.List<app.cadette.model.Point2D> verts = java.util.List.of(
+                new app.cadette.model.Point2D(50, 30),
+                new app.cadette.model.Point2D(70, 50),
+                new app.cadette.model.Point2D(50, 70),
+                new app.cadette.model.Point2D(30, 50));
+        java.awt.geom.Path2D.Float path = CutSheetRenderer.vertexListToSheetPath(
+                verts, part, 100, 200, 0.5f);
+        assertNotNull(path);
+        java.awt.geom.Rectangle2D b = path.getBounds2D();
+        assertEquals(100 + 30 * 0.5f, b.getMinX(), 0.001);
+        assertEquals(200 + 30 * 0.5f, b.getMinY(), 0.001);
+        assertEquals(40 * 0.5f, b.getWidth(), 0.001);
+        assertEquals(40 * 0.5f, b.getHeight(), 0.001);
+    }
+
+    @Test
+    void polygon_degenerateReturnsNull() {
+        SheetLayout.PlacedPart part = placed(0, 0, 600, 900, false);
+        assertNull(CutSheetRenderer.vertexListToSheetPath(
+                java.util.List.of(new app.cadette.model.Point2D(50, 30),
+                                   new app.cadette.model.Point2D(70, 50)),
+                part, 0, 0, 1f));
+        assertNull(CutSheetRenderer.vertexListToSheetPath(
+                java.util.List.of(), part, 0, 0, 1f));
+    }
+
+    @Test
     void rotated_cornerCutoutLandsAtPlacedOrigin() {
         // A cutout at local (0, 0) — the part's origin corner — should land
         // at the placed part's (px, py) regardless of rotation, since both

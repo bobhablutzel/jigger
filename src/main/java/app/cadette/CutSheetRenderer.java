@@ -113,6 +113,35 @@ public class CutSheetRenderer {
                               List<PartRect> hitRects,
                               Map<String, List<Cutout>> partCutouts,
                               Map<String, List<Cutout>> partKeeps) {
+        render(g2, width, height, layouts, units, forExport, selectedParts,
+                hitRects, partCutouts, partKeeps, 1f, 0f, 0f);
+    }
+
+    /**
+     * Zoom-and-pan-aware overload.
+     *
+     * <p>The layout flow (scale-to-fit, wrap-to-next-row) is computed using
+     * {@code width}/{@code height} as the <i>logical</i> reference size — i.e.
+     * the layout that would render at zoom=1. The {@code zoom} factor and
+     * {@code panX}/{@code panY} offsets are applied as a final affine
+     * transform on the graphics context, so the user can scale and shift
+     * the rendered output without reflowing it.
+     *
+     * <p>Pan is in screen pixels. Zoom multiplies the logical scale.
+     * Cursor-centered zoom is the caller's job (the formula is in the
+     * Lemur panel's input handler).
+     *
+     * <p>Hit rects, when requested, are returned in <i>logical</i> pixel
+     * space (pre-transform). Callers using zoom must inverse-transform
+     * screen clicks: {@code logicalX = (screenX - panX) / zoom}.
+     */
+    public static void render(Graphics2D g2, int width, int height,
+                              List<SheetLayout> layouts, UnitSystem units,
+                              boolean forExport, Set<String> selectedParts,
+                              List<PartRect> hitRects,
+                              Map<String, List<Cutout>> partCutouts,
+                              Map<String, List<Cutout>> partKeeps,
+                              float zoom, float panX, float panY) {
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
@@ -126,10 +155,31 @@ public class CutSheetRenderer {
             return;
         }
 
+        boolean transformed = Math.abs(zoom - 1f) > 1e-3f
+                || Math.abs(panX) > 1e-3f || Math.abs(panY) > 1e-3f;
+        Graphics2D g = transformed ? (Graphics2D) g2.create() : g2;
+        try {
+            if (transformed) {
+                g.translate(panX, panY);
+                g.scale(zoom, zoom);
+            }
+            renderLayoutsInLogicalSpace(g, width, height, layouts, units, forExport,
+                    selectedParts, hitRects, partCutouts, partKeeps);
+        } finally {
+            if (transformed) g.dispose();
+        }
+    }
+
+    private static void renderLayoutsInLogicalSpace(
+            Graphics2D g2, int width, int height,
+            List<SheetLayout> layouts, UnitSystem units,
+            boolean forExport, Set<String> selectedParts,
+            List<PartRect> hitRects,
+            Map<String, List<Cutout>> partCutouts,
+            Map<String, List<Cutout>> partKeeps) {
         int availableWidth = width - 2 * SHEET_MARGIN;
         int availableHeight = height - 2 * SHEET_MARGIN;
 
-        // Layout sheets in a flow: left to right, wrapping to next row
         int x = SHEET_MARGIN;
         int y = SHEET_MARGIN;
         int rowHeight = 0;
@@ -140,18 +190,51 @@ public class CutSheetRenderer {
             int sheetW = (int) (layout.getSheetWidthMm() * scale);
             int sheetH = (int) (layout.getSheetHeightMm() * scale) + HEADER_HEIGHT;
 
-            // Wrap to next row if needed
             if (x + sheetW > width - SHEET_MARGIN && x > SHEET_MARGIN) {
                 x = SHEET_MARGIN;
                 y += rowHeight + SHEET_GAP;
                 rowHeight = 0;
             }
 
-            drawSheet(g2, layout, x, y, scale, units, i + 1, forExport, selectedParts, hitRects, partCutouts, partKeeps);
+            drawSheet(g2, layout, x, y, scale, units, i + 1, forExport,
+                    selectedParts, hitRects, partCutouts, partKeeps);
 
             x += sheetW + SHEET_GAP;
             rowHeight = Math.max(rowHeight, sheetH);
         }
+    }
+
+    /**
+     * Compute the actual pixel bounds the rendered cut sheet will reach
+     * for a given panel size. May exceed {@code (width, height)} when the
+     * sheets-per-row clamp forces overflow — in that case the renderer's
+     * caller wants to allocate a bigger backing buffer so pan can navigate.
+     */
+    public static java.awt.Dimension computeContentBounds(
+            int width, int height, List<SheetLayout> layouts) {
+        if (layouts.isEmpty()) return new java.awt.Dimension(width, height);
+        int availableWidth = width - 2 * SHEET_MARGIN;
+        int availableHeight = height - 2 * SHEET_MARGIN;
+        int x = SHEET_MARGIN;
+        int y = SHEET_MARGIN;
+        int rowHeight = 0;
+        int maxX = SHEET_MARGIN;
+        for (SheetLayout layout : layouts) {
+            float scale = computeScale(layout, availableWidth, availableHeight, layouts.size());
+            int sheetW = (int) (layout.getSheetWidthMm() * scale);
+            int sheetH = (int) (layout.getSheetHeightMm() * scale) + HEADER_HEIGHT;
+            if (x + sheetW > width - SHEET_MARGIN && x > SHEET_MARGIN) {
+                x = SHEET_MARGIN;
+                y += rowHeight + SHEET_GAP;
+                rowHeight = 0;
+            }
+            maxX = Math.max(maxX, x + sheetW);
+            x += sheetW + SHEET_GAP;
+            rowHeight = Math.max(rowHeight, sheetH);
+        }
+        return new java.awt.Dimension(
+                maxX + SHEET_MARGIN,
+                y + rowHeight + SHEET_MARGIN + 20);
     }
 
     /**
@@ -262,6 +345,14 @@ public class CutSheetRenderer {
 
             // Label: part name + dimensions
             drawPartLabel(g2, part, px, py, pw, ph, units);
+
+            // Architectural dim lines for the part's overall size,
+            // drawn inside the part footprint near the bottom and left.
+            drawPartOverallDimensions(g2, part, px, py, pw, ph, units);
+
+            // Dimensions on cuts where space allows.
+            drawCutoutDimensions(g2, part, px, py, pw, ph, scale, units,
+                    partCutouts, partKeeps);
 
             // Record hit rect for click detection
             if (hitRects != null) {
@@ -421,9 +512,44 @@ public class CutSheetRenderer {
             Ellipse2D.Float ellipse = circleCutoutToSheetEllipse(ci, part, px, py, scale);
             if (ellipse.width < 0.5f || ellipse.height < 0.5f) return;
             g2.draw(ellipse);
+        } else if (c instanceof Cutout.Polygon poly) {
+            Path2D.Float path = vertexListToSheetPath(
+                    poly.vertices(), part, px, py, scale);
+            if (path != null) g2.draw(path);
+        } else if (c instanceof Cutout.Spline sp) {
+            List<app.cadette.model.Point2D> tessellated =
+                    app.cadette.model.SplineTessellator.tessellateCatmullRom(sp.controlPoints());
+            Path2D.Float path = vertexListToSheetPath(
+                    tessellated, part, px, py, scale);
+            if (path != null) g2.draw(path);
         }
-        // Cutout.Polygon / Spline / Curve: skip until those variants land
-        // (separate backlog: project_cutsheet_nonrect_backlog.md).
+        // Cutout.Curve (Bezier) still skipped — tessellation lives only
+        // in PartMeshBuilder for now; carve out a shared utility if the
+        // user starts using Bezier cuts on parts that need cut-sheet output.
+    }
+
+    /** Build a closed Java2D path from a list of part-local vertices, applying
+     *  the placed-part transform. Returns null for degenerate inputs (fewer
+     *  than 3 points or a path that doesn't move on the sheet).
+     *
+     *  <p>Package-private for unit testing. */
+    static Path2D.Float vertexListToSheetPath(
+            List<app.cadette.model.Point2D> vertices,
+            SheetLayout.PlacedPart part, float px, float py, float scale) {
+        if (vertices == null || vertices.size() < 3) return null;
+        Path2D.Float path = new Path2D.Float();
+        float[] first = partLocalToSheet(
+                vertices.get(0).xMm(), vertices.get(0).yMm(),
+                part, px, py, scale);
+        path.moveTo(first[0], first[1]);
+        for (int i = 1; i < vertices.size(); i++) {
+            float[] pt = partLocalToSheet(
+                    vertices.get(i).xMm(), vertices.get(i).yMm(),
+                    part, px, py, scale);
+            path.lineTo(pt[0], pt[1]);
+        }
+        path.closePath();
+        return path;
     }
 
     /** Java2D Shape for a cutout, used for the X-marker clipping region.
@@ -432,6 +558,14 @@ public class CutSheetRenderer {
                                             float px, float py, float scale) {
         if (c instanceof Cutout.Rect r)   return cutoutToSheetRect(r, part, px, py, scale);
         if (c instanceof Cutout.Circle ci) return circleCutoutToSheetEllipse(ci, part, px, py, scale);
+        if (c instanceof Cutout.Polygon poly) {
+            return vertexListToSheetPath(poly.vertices(), part, px, py, scale);
+        }
+        if (c instanceof Cutout.Spline sp) {
+            return vertexListToSheetPath(
+                    app.cadette.model.SplineTessellator.tessellateCatmullRom(sp.controlPoints()),
+                    part, px, py, scale);
+        }
         return null;
     }
 
@@ -502,35 +636,160 @@ public class CutSheetRenderer {
                                        float px, float py, float pw, float ph, UnitSystem units) {
         g2.setColor(TEXT_COLOR);
         FontMetrics fm = g2.getFontMetrics();
-
         String name = part.getPartName();
+        int textW = fm.stringWidth(name);
+        if (pw > 20 && ph > 16) {
+            g2.drawString(name, px + pw / 2f - textW / 2f,
+                    py + ph / 2f + fm.getAscent() / 2f);
+        }
+    }
+
+    /** Inset (px) from the part edge to the dim line. Pairs with
+     *  {@link #MIN_DIM_LINE_PX} — a part must be at least 2× inset plus the
+     *  minimum line length to fit a dim line inside. */
+    private static final float OVERALL_DIM_INSET_PX = 10f;
+    private static final float MIN_DIM_LINE_PX = 25f;
+    private static final float CUT_DIM_INSET_PX = 5f;
+    /** Minimum real-world extent of a cut along an axis for that axis to get
+     *  a dim line. Mm-based so the threshold is stable across cut-sheet
+     *  scales — a 75mm toe-kick always meets it; a 5mm shelf-pin never does. */
+    private static final float MIN_CUT_DIM_MM = 30f;
+    /** Minimum on-screen pixel extent of a cut for a dim line to be rendered.
+     *  Below this, the dim graphics + label would be illegible — better to
+     *  skip and let the user zoom in to see the cut's dims. */
+    private static final float MIN_CUT_DIM_PX = 20f;
+
+    /** Architectural-style dim lines for the part's overall W × H, drawn
+     *  inside the part footprint along the bottom and left edges. Skipped
+     *  for parts too narrow to fit the dim line + label cleanly. */
+    private static void drawPartOverallDimensions(Graphics2D g2,
+            SheetLayout.PlacedPart part,
+            float px, float py, float pw, float ph, UnitSystem units) {
+        if (pw < OVERALL_DIM_INSET_PX * 2 + MIN_DIM_LINE_PX) return;
+        if (ph < OVERALL_DIM_INSET_PX * 2 + MIN_DIM_LINE_PX) return;
+
         float dimW = part.getWidthOnSheet();
         float dimH = part.getHeightOnSheet();
         if (part.isRotated()) {
-            float tmp = dimW;
-            dimW = dimH;
-            dimH = tmp;
+            float tmp = dimW; dimW = dimH; dimH = tmp;
         }
-        String dims = String.format("%.1f x %.1f %s",
-                units.fromMm(dimW), units.fromMm(dimH), units.getAbbreviation());
+        String labelW = String.format("%.1f %s",
+                units.fromMm(dimW), units.getAbbreviation());
+        String labelH = String.format("%.1f %s",
+                units.fromMm(dimH), units.getAbbreviation());
 
-        int textW = fm.stringWidth(name);
-        int dimsW = fm.stringWidth(dims);
+        Color origColor = g2.getColor();
+        Font origFont = g2.getFont();
+        g2.setColor(DimensionLine.DEFAULT_DIM_COLOR);
+        g2.setFont(DimensionLine.DEFAULT_DIM_FONT_SCREEN);
 
-        if (pw > 20 && ph > 16) {
-            float cx = px + pw / 2f;
-            float cy = py + ph / 2f;
+        // Width dim along bottom interior.
+        DimensionLine.drawHorizontalG2(g2, px, px + pw,
+                /*anchorY*/ py + ph,
+                /*offsetY*/ -OVERALL_DIM_INSET_PX,
+                labelW, DimensionLine.Style.SIMPLIFIED);
+        // Height dim along left interior.
+        DimensionLine.drawVerticalG2(g2,
+                /*anchorX*/ px, /*offsetX*/ +OVERALL_DIM_INSET_PX,
+                py, py + ph,
+                labelH, DimensionLine.Style.SIMPLIFIED);
 
-            if (ph > fm.getHeight() * 2 + 4) {
-                g2.drawString(name, cx - textW / 2f, cy - 2);
-                g2.setFont(g2.getFont().deriveFont(Font.ITALIC, 9f));
-                g2.setColor(DIM_COLOR);
-                g2.drawString(dims, cx - dimsW / 2f, cy + fm.getHeight());
-                g2.setFont(g2.getFont().deriveFont(Font.PLAIN, 10f));
-            } else {
-                g2.drawString(name, cx - textW / 2f, cy + fm.getAscent() / 2f);
+        g2.setColor(origColor);
+        g2.setFont(origFont);
+    }
+
+    /** Architectural dim lines for rectangular cutouts that are big enough
+     *  to host them; diameter callouts for circles. Polygon/Spline cutouts
+     *  get no annotation by design (their geometry is shown by the outline,
+     *  and dimensioning them meaningfully would need a different scheme). */
+    private static void drawCutoutDimensions(Graphics2D g2,
+            SheetLayout.PlacedPart part,
+            float px, float py, float pw, float ph, float scale, UnitSystem units,
+            Map<String, List<Cutout>> partCutouts,
+            Map<String, List<Cutout>> partKeeps) {
+        List<Cutout> cutouts = partCutouts.getOrDefault(part.getPartName(), List.of());
+        List<Cutout> keeps   = partKeeps.getOrDefault(part.getPartName(), List.of());
+        if (cutouts.isEmpty() && keeps.isEmpty()) return;
+
+        Color origColor = g2.getColor();
+        Font origFont = g2.getFont();
+        g2.setColor(DimensionLine.DEFAULT_DIM_COLOR);
+        g2.setFont(DimensionLine.DEFAULT_DIM_FONT_SCREEN);
+        Shape origClip = g2.getClip();
+        g2.clip(new Rectangle2D.Float(px, py, pw, ph));
+
+        for (Cutout c : cutouts) drawSingleCutoutDimension(g2, c, part, px, py, pw, ph, scale, units);
+        for (Cutout k : keeps)   drawSingleCutoutDimension(g2, k, part, px, py, pw, ph, scale, units);
+
+        g2.setClip(origClip);
+        g2.setColor(origColor);
+        g2.setFont(origFont);
+    }
+
+    /** Vertical clearance (px) required above/below a cut to fit a horizontal
+     *  dim line outside it (dim line + label + margin). Mirrors on the
+     *  horizontal axis for vertical dim lines. */
+    private static final float CUT_DIM_OUTSIDE_CLEARANCE_PX = 12f;
+
+    private static void drawSingleCutoutDimension(Graphics2D g2, Cutout c,
+            SheetLayout.PlacedPart part, float px, float py, float pw, float ph,
+            float scale, UnitSystem units) {
+        if (c instanceof Cutout.Rect r) {
+            Rectangle2D.Float sr = cutoutToSheetRect(r, part, px, py, scale);
+            // Sheet-axis dimensions of the cut in mm — width-on-sheet equals
+            // r.widthMm unrotated, r.heightMm when the part is rotated 90°.
+            float sheetWidthMm  = part.isRotated() ? r.heightMm() : r.widthMm();
+            float sheetHeightMm = part.isRotated() ? r.widthMm()  : r.heightMm();
+            String labelW = String.format("%.1f %s",
+                    units.fromMm(sheetWidthMm), units.getAbbreviation());
+            String labelH = String.format("%.1f %s",
+                    units.fromMm(sheetHeightMm), units.getAbbreviation());
+
+            // Width dim: prefer ABOVE the cut, fall back to BELOW. Drop
+            // if neither side has room. Sits in surrounding part material,
+            // not in the cut itself — keeps clear of the waste-mark X.
+            if (sheetWidthMm >= MIN_CUT_DIM_MM && sr.width >= MIN_CUT_DIM_PX) {
+                float spaceAbove = sr.y - py;
+                float spaceBelow = (py + ph) - (sr.y + sr.height);
+                if (spaceAbove >= CUT_DIM_OUTSIDE_CLEARANCE_PX) {
+                    DimensionLine.drawHorizontalG2(g2, sr.x, sr.x + sr.width,
+                            sr.y, -CUT_DIM_OUTSIDE_CLEARANCE_PX / 2f,
+                            labelW, DimensionLine.Style.SIMPLIFIED);
+                } else if (spaceBelow >= CUT_DIM_OUTSIDE_CLEARANCE_PX) {
+                    DimensionLine.drawHorizontalG2(g2, sr.x, sr.x + sr.width,
+                            sr.y + sr.height, +CUT_DIM_OUTSIDE_CLEARANCE_PX / 2f,
+                            labelW, DimensionLine.Style.SIMPLIFIED);
+                }
+            }
+            // Height dim: prefer LEFT, fall back to RIGHT.
+            if (sheetHeightMm >= MIN_CUT_DIM_MM && sr.height >= MIN_CUT_DIM_PX) {
+                float spaceLeft = sr.x - px;
+                float spaceRight = (px + pw) - (sr.x + sr.width);
+                if (spaceLeft >= CUT_DIM_OUTSIDE_CLEARANCE_PX) {
+                    DimensionLine.drawVerticalG2(g2,
+                            sr.x, -CUT_DIM_OUTSIDE_CLEARANCE_PX / 2f,
+                            sr.y, sr.y + sr.height,
+                            labelH, DimensionLine.Style.SIMPLIFIED);
+                } else if (spaceRight >= CUT_DIM_OUTSIDE_CLEARANCE_PX) {
+                    DimensionLine.drawVerticalG2(g2,
+                            sr.x + sr.width, +CUT_DIM_OUTSIDE_CLEARANCE_PX / 2f,
+                            sr.y, sr.y + sr.height,
+                            labelH, DimensionLine.Style.SIMPLIFIED);
+                }
+            }
+        } else if (c instanceof Cutout.Circle ci) {
+            Ellipse2D.Float e = circleCutoutToSheetEllipse(ci, part, px, py, scale);
+            if (ci.radiusMm() * 2f >= MIN_CUT_DIM_MM) {
+                FontMetrics fm = g2.getFontMetrics();
+                String label = String.format("⌀ %.1f %s",
+                        units.fromMm(ci.radiusMm() * 2f), units.getAbbreviation());
+                int lw = fm.stringWidth(label);
+                g2.drawString(label,
+                        e.x + e.width / 2f - lw / 2f,
+                        e.y + e.height / 2f + fm.getAscent() / 2f);
             }
         }
+        // Polygon / Spline: no dimensions (outline only).
     }
 
     private static void drawSheetDimensions(Graphics2D g2, SheetLayout layout,

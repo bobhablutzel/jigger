@@ -176,6 +176,33 @@ public class LemurAppState extends BaseAppState {
     private int lastCutSheetW = -1;
     private int lastCutSheetH = -1;
 
+    /** Zoom + pan state for the cut-sheet view. Pan is in image-pixel
+     *  space (Y-down, same frame the renderer paints in). Reset to
+     *  identity on each fresh launch; not persisted yet — view state,
+     *  not preference. */
+    private float cutSheetZoom = 1.0f;
+    private float cutSheetPanX = 0f;
+    private float cutSheetPanY = 0f;
+    /** True while a middle-button or shift+left pan is in progress. */
+    private boolean cutSheetPanning = false;
+    /** Previous cursor screen position during a pan; used to compute the
+     *  per-frame delta. */
+    private Vector2f cutSheetPanLastCursor = null;
+    /** Last zoom/pan values pushed to the renderer; used to detect
+     *  changes and trigger a re-render. */
+    private float lastCutSheetZoom = 1.0f;
+    private float lastCutSheetPanX = 0f;
+    private float lastCutSheetPanY = 0f;
+    /** Width/height of the most-recently-rendered cut-sheet buffer.
+     *  Used by {@link #clampCutSheetPan} so pan bounds know the actual
+     *  content extent (which may exceed panel size when sheets wrap). */
+    private int lastCutSheetContentW = -1;
+    private int lastCutSheetContentH = -1;
+
+    private static final float CUT_SHEET_ZOOM_MIN = 0.25f;
+    private static final float CUT_SHEET_ZOOM_MAX = 8.0f;
+    private static final float CUT_SHEET_ZOOM_STEP = 1.15f;
+
     /** Drop-target nodes (TabHosts holding panels, plus placeholders)
      *  enrolled in the mouseOverUi gate. Their world bounds are OR'd
      *  each frame; the splitter tree decides where each ends up. */
@@ -327,6 +354,223 @@ public class LemurAppState extends BaseAppState {
         refreshProperties();
 
         appendOutput("CADette. Type 'help' or start adding parts.");
+
+        installCutSheetInputHandlers(app);
+    }
+
+    private boolean shiftHeldForCutSheet = false;
+    private boolean altHeldForCutSheet = false;
+
+    /** Pixels of pan per wheel tick. Tuned to feel like a typical
+     *  document scroll. */
+    private static final float CUT_SHEET_WHEEL_PAN_PX = 40f;
+
+    /** Wire mouse wheel + drag handlers on the cut-sheet panel. Conventions:
+     *  plain wheel = vertical scroll; Shift+wheel = zoom (cursor-anchored);
+     *  Alt+wheel = horizontal scroll. Middle-mouse-drag or Shift+left-drag
+     *  pans. Routed through jME3's InputManager — the cursor-over-cut-sheet
+     *  check lives inside the listener so we don't fight the camera
+     *  controller's wheel zoom (which is gated on mouseOverUi, which becomes
+     *  true while the cursor is over us). */
+    private void installCutSheetInputHandlers(Application app) {
+        InputManager input = app.getInputManager();
+        final String WHEEL_UP    = "cut-sheet-wheel-up";
+        final String WHEEL_DOWN  = "cut-sheet-wheel-down";
+        final String PAN_MID     = "cut-sheet-pan-mid";
+        final String PAN_SHIFT_L = "cut-sheet-pan-shift-left";
+        final String SHIFT       = "cut-sheet-shift-key";
+        final String ALT         = "cut-sheet-alt-key";
+
+        input.addMapping(WHEEL_UP,
+                new com.jme3.input.controls.MouseAxisTrigger(
+                        com.jme3.input.MouseInput.AXIS_WHEEL, false));
+        input.addMapping(WHEEL_DOWN,
+                new com.jme3.input.controls.MouseAxisTrigger(
+                        com.jme3.input.MouseInput.AXIS_WHEEL, true));
+        input.addMapping(PAN_MID,
+                new com.jme3.input.controls.MouseButtonTrigger(
+                        com.jme3.input.MouseInput.BUTTON_MIDDLE));
+        input.addMapping(PAN_SHIFT_L,
+                new com.jme3.input.controls.MouseButtonTrigger(
+                        com.jme3.input.MouseInput.BUTTON_LEFT));
+        input.addMapping(SHIFT,
+                new com.jme3.input.controls.KeyTrigger(com.jme3.input.KeyInput.KEY_LSHIFT),
+                new com.jme3.input.controls.KeyTrigger(com.jme3.input.KeyInput.KEY_RSHIFT));
+        input.addMapping(ALT,
+                new com.jme3.input.controls.KeyTrigger(com.jme3.input.KeyInput.KEY_LMENU),
+                new com.jme3.input.controls.KeyTrigger(com.jme3.input.KeyInput.KEY_RMENU));
+
+        input.addListener((com.jme3.input.controls.AnalogListener)
+                (name, value, tpf) -> {
+                    if (!cursorOverCutSheet()) return;
+                    boolean isUp = WHEEL_UP.equals(name);
+                    boolean isDown = WHEEL_DOWN.equals(name);
+                    if (!isUp && !isDown) return;
+                    float sign = isUp ? +1f : -1f;
+                    if (shiftHeldForCutSheet) {
+                        // Shift+wheel: zoom in/out anchored on cursor.
+                        zoomCutSheet(isUp ? CUT_SHEET_ZOOM_STEP
+                                          : 1f / CUT_SHEET_ZOOM_STEP);
+                    } else if (altHeldForCutSheet) {
+                        // Alt+wheel: horizontal scroll. Wheel-up (sign=+1)
+                        // scrolls the viewport left ⇒ panX DECREASES.
+                        cutSheetPanX -= sign * CUT_SHEET_WHEEL_PAN_PX;
+                        clampCutSheetPan();
+                    } else {
+                        // Plain wheel: vertical scroll. Wheel-up (sign=+1)
+                        // scrolls the viewport up ⇒ panY DECREASES.
+                        cutSheetPanY -= sign * CUT_SHEET_WHEEL_PAN_PX;
+                        clampCutSheetPan();
+                    }
+                }, WHEEL_UP, WHEEL_DOWN);
+
+        input.addListener((com.jme3.input.controls.ActionListener)
+                (name, isPressed, tpf) -> {
+                    if (SHIFT.equals(name)) {
+                        shiftHeldForCutSheet = isPressed;
+                        return;
+                    }
+                    if (ALT.equals(name)) {
+                        altHeldForCutSheet = isPressed;
+                        return;
+                    }
+                    if (PAN_MID.equals(name)) {
+                        if (isPressed && cursorOverCutSheet()) {
+                            startCutSheetPan(input);
+                        } else if (!isPressed) {
+                            endCutSheetPan();
+                        }
+                    } else if (PAN_SHIFT_L.equals(name)) {
+                        // Shift+left as trackpad alternative to middle-mouse.
+                        // Plain left-click stays available for selection
+                        // (which currently isn't wired for the cut sheet,
+                        // but we should leave the channel open).
+                        if (isPressed && shiftHeldForCutSheet
+                                && cursorOverCutSheet()) {
+                            startCutSheetPan(input);
+                        } else if (!isPressed) {
+                            endCutSheetPan();
+                        }
+                    }
+                }, PAN_MID, PAN_SHIFT_L, SHIFT, ALT);
+    }
+
+    private void startCutSheetPan(InputManager input) {
+        cutSheetPanning = true;
+        Vector2f cursor = input.getCursorPosition();
+        cutSheetPanLastCursor = cursor == null ? null : cursor.clone();
+    }
+
+    private void endCutSheetPan() {
+        cutSheetPanning = false;
+        cutSheetPanLastCursor = null;
+    }
+
+    /** Apply a multiplicative zoom factor, anchored on the cursor so the
+     *  feature under the cursor stays put. With the resolution-aware
+     *  zoom architecture (render at panel*zoom; show a panel-sized
+     *  viewport at (panX, panY) inside that), the formula is:
+     *
+     *  <pre>panel_position = image_position - pan
+     *  image_position scales by zoom_ratio when zoom changes
+     *  → pan_new = (cursor + pan_old) * ratio - cursor</pre>
+     */
+    private void zoomCutSheet(float factor) {
+        float oldZoom = cutSheetZoom;
+        float newZoom = Math.max(CUT_SHEET_ZOOM_MIN,
+                Math.min(CUT_SHEET_ZOOM_MAX, oldZoom * factor));
+        if (Math.abs(newZoom - oldZoom) < 1e-4f) return;
+
+        Vector2f cursor = cursorInCutSheetImageCoords();
+        if (cursor != null) {
+            float ratio = newZoom / oldZoom;
+            cutSheetPanX = (cursor.x + cutSheetPanX) * ratio - cursor.x;
+            cutSheetPanY = (cursor.y + cutSheetPanY) * ratio - cursor.y;
+        }
+        cutSheetZoom = newZoom;
+        clampCutSheetPan();
+    }
+
+    /** Clamp pan to valid range [0, content_size - panel_size]. The
+     *  content bound is what the renderer's flow layout actually
+     *  produces, which can exceed panel*zoom when sheets wrap onto
+     *  extra rows. When content fits, pan is locked at 0. */
+    private void clampCutSheetPan() {
+        if (cutSheetImageHolder == null) return;
+        GuiControl gc = cutSheetImageHolder.getControl(GuiControl.class);
+        if (gc == null) return;
+        float w = gc.getSize().x;
+        float h = gc.getSize().y;
+        // Prefer the actual rendered buffer extent; fall back to the
+        // panel*zoom estimate before the first render completes.
+        float contentW = lastCutSheetContentW > 0
+                ? lastCutSheetContentW : Math.max(w, w * cutSheetZoom);
+        float contentH = lastCutSheetContentH > 0
+                ? lastCutSheetContentH : Math.max(h, h * cutSheetZoom);
+        float maxPanX = Math.max(0, contentW - w);
+        float maxPanY = Math.max(0, contentH - h);
+        cutSheetPanX = Math.max(0, Math.min(maxPanX, cutSheetPanX));
+        cutSheetPanY = Math.max(0, Math.min(maxPanY, cutSheetPanY));
+    }
+
+    /** Cursor position in cut-sheet image coordinates (Y-down, origin at
+     *  top-left of the image). Returns null if the cursor isn't over the
+     *  cut sheet or its layout hasn't settled yet.
+     *
+     *  <p>Lemur's getWorldTranslation() returns the panel's <i>top-left</i>
+     *  in jME3 Y-up coords — loc.y is the top edge, loc.y - height is the
+     *  bottom. Mirrors {@link #cursorOverDropTarget}. */
+    private Vector2f cursorInCutSheetImageCoords() {
+        if (cutSheetImageHolder == null) return null;
+        InputManager input = getApplication().getInputManager();
+        Vector2f cursor = input.getCursorPosition();
+        if (cursor == null) return null;
+        GuiControl gc = cutSheetImageHolder.getControl(GuiControl.class);
+        if (gc == null) return null;
+        Vector3f loc = cutSheetImageHolder.getWorldTranslation();
+        // jME3 cursor Y-up; image Y-down; loc.y = top of panel.
+        float localX = cursor.x - loc.x;
+        float localY = loc.y - cursor.y;
+        return new Vector2f(localX, localY);
+    }
+
+    private boolean cursorOverCutSheet() {
+        if (cutSheetImageHolder == null) return false;
+        InputManager input = getApplication().getInputManager();
+        Vector2f cursor = input.getCursorPosition();
+        if (cursor == null) return false;
+        // Use the containing TabHost / placeholder Container's bounds
+        // rather than the inner image holder. The image holder shrinks
+        // during splitter drags and excludes the tab bar; cursorOverUi
+        // is gated on the broader TabHost bounds, and our handler should
+        // match so wheel-over-tab-bar still routes here.
+        Node host = enclosingGatedPanel(cutSheetImageHolder);
+        if (host == null) {
+            // Fall back to the inner-bounds check.
+            GuiControl gc = cutSheetImageHolder.getControl(GuiControl.class);
+            if (gc == null) return false;
+            Vector3f loc = cutSheetImageHolder.getWorldTranslation();
+            Vector3f size = gc.getSize();
+            return cursor.x >= loc.x
+                && cursor.x <= loc.x + size.x
+                && cursor.y >= loc.y - size.y
+                && cursor.y <= loc.y;
+        }
+        return cursorOverDropTarget(cursor, host);
+    }
+
+    /** Walk {@code start}'s parent chain to find the nearest ancestor
+     *  registered in {@link #gatedPanels}. Returns null if none is
+     *  found (e.g. the panel was just detached during a drag). */
+    private Node enclosingGatedPanel(com.jme3.scene.Spatial start) {
+        com.jme3.scene.Spatial cur = start;
+        while (cur != null) {
+            if (cur instanceof Node n && gatedPanels.contains(n)) {
+                return n;
+            }
+            cur = cur.getParent();
+        }
+        return null;
     }
 
     /** Construct a Splitter with the standard reflow callback and register
@@ -557,20 +801,64 @@ public class LemurAppState extends BaseAppState {
         List<SheetLayout> layouts = SheetLayoutGenerator.generateLayouts(
                 sceneManager.getAllParts(), sceneManager.getKerfMm());
 
-        BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2 = img.createGraphics();
+        // Resolution-aware zoom: render the cut sheet at panel*zoom
+        // resolution so text and dim lines stay crisp at high zoom
+        // (rather than bitmap-stretching a panel-sized image).
+        int panelRenderW = Math.max(w, Math.round(w * cutSheetZoom));
+        int panelRenderH = Math.max(h, Math.round(h * cutSheetZoom));
+
+        // The renderer's flow layout can extend beyond (panelRenderW,
+        // panelRenderH) when sheets wrap onto extra rows (visible at
+        // default zoom on tall sheets that don't fit vertically). Size
+        // the backing buffer to hold whatever the flow actually paints,
+        // so pan can reveal overflow content even at zoom=1.
+        java.awt.Dimension content = CutSheetRenderer.computeContentBounds(
+                panelRenderW, panelRenderH, layouts);
+        int bufW = Math.max(panelRenderW, content.width);
+        int bufH = Math.max(panelRenderH, content.height);
+        lastCutSheetContentW = bufW;
+        lastCutSheetContentH = bufH;
+
+        BufferedImage renderImg = new BufferedImage(bufW, bufH,
+                BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2 = renderImg.createGraphics();
         try {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            // Leave the image transparent — the panel's glass background
-            // shows through wherever the renderer doesn't draw, matching
-            // the other panes' translucency.
-            CutSheetRenderer.render(g2, w, h, layouts,
+            // Pass panelRenderW/H so scale + wrap decisions match the
+            // user's "this is my panel at this zoom" expectation. Content
+            // that exceeds those bounds is drawn into the larger buffer
+            // and revealed by pan.
+            CutSheetRenderer.render(g2, panelRenderW, panelRenderH, layouts,
                     executor.getUnits(), false, Set.of(), null,
                     sceneManager.getEffectiveCutouts(),
                     sceneManager.getEffectiveKeeps());
         } finally {
             g2.dispose();
         }
+        // Clamp pan to the now-known buffer extent (the previous frame's
+        // clamp might've used a smaller content bound).
+        clampCutSheetPan();
+
+        // Show only the (w × h) viewport at (panX, panY) inside the
+        // larger renderImg. At zoom=1 with no overflow and no pan,
+        // this is a no-op.
+        BufferedImage img;
+        if (bufW == w && bufH == h
+                && Math.abs(cutSheetPanX) < 0.5f && Math.abs(cutSheetPanY) < 0.5f) {
+            img = renderImg;
+        } else {
+            img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D gv = img.createGraphics();
+            try {
+                gv.drawImage(renderImg, -Math.round(cutSheetPanX),
+                        -Math.round(cutSheetPanY), null);
+            } finally {
+                gv.dispose();
+            }
+        }
+        lastCutSheetZoom = cutSheetZoom;
+        lastCutSheetPanX = cutSheetPanX;
+        lastCutSheetPanY = cutSheetPanY;
 
         com.jme3.texture.Image jmeImage = new AWTLoader().load(img, true);
         if (cutSheetTexture == null) {
@@ -1185,57 +1473,34 @@ public class LemurAppState extends BaseAppState {
      *  <p>Panel placement / tab grouping isn't persisted yet — that's
      *  a bigger refactor; see the layout-persistence backlog memory. */
     private void saveLayoutProperties() {
-        java.util.Properties p = new java.util.Properties();
-        for (int i = 0; i < allSplitters.size(); i++) {
-            p.setProperty("splitter." + i,
-                    String.valueOf(allSplitters.get(i).getRatio()));
-        }
-        for (int i = 0; i < allTabHosts.size(); i++) {
-            p.setProperty("tab." + i,
-                    String.valueOf(allTabHosts.get(i).getActive()));
-        }
-        java.nio.file.Path path = java.nio.file.Path.of(
-                System.getProperty("user.home"), ".cadette", "layout.properties");
-        try {
-            java.nio.file.Files.createDirectories(path.getParent());
-            try (var out = java.nio.file.Files.newBufferedWriter(path)) {
-                p.store(out, "cadette layout — splitter ratios + active tabs");
-            }
-        } catch (java.io.IOException e) {
-            System.err.println("[cadette] couldn't save layout: " + e.getMessage());
-        }
+        java.util.List<Float> ratios = allSplitters.stream()
+                .map(app.cadette.lemur.LemurSplitter::getRatio)
+                .toList();
+        java.util.List<Integer> tabs = allTabHosts.stream()
+                .map(app.cadette.lemur.LemurTabHost::getActive)
+                .toList();
+        var prefs = app.cadette.prefs.Preferences.instance();
+        prefs.set(ratios, "layout", "splitters");
+        prefs.set(tabs, "layout", "tabs");
     }
 
     /** Restore splitter ratios + active-tab indices from
-     *  {@code ~/.cadette/layout.properties} over the hardcoded defaults.
-     *  Missing file / missing keys are silently ignored — the panel
-     *  just keeps its default. Tab listeners aren't wired until after
-     *  this returns, so the setActive() calls here don't recursively
-     *  trigger saveLayoutProperties(). */
+     *  {@code ~/.cadette/preferences.yaml} over the hardcoded defaults.
+     *  Missing keys are silently ignored — the panel keeps its default.
+     *  Tab listeners aren't wired until after this returns, so the
+     *  setActive() calls here don't recursively trigger
+     *  saveLayoutProperties(). */
     private void restoreLayoutProperties() {
-        java.nio.file.Path path = java.nio.file.Path.of(
-                System.getProperty("user.home"), ".cadette", "layout.properties");
-        if (!java.nio.file.Files.isRegularFile(path)) return;
-        java.util.Properties p = new java.util.Properties();
-        try (var in = java.nio.file.Files.newBufferedReader(path)) {
-            p.load(in);
-        } catch (java.io.IOException e) {
-            System.err.println("[cadette] couldn't load layout: " + e.getMessage());
-            return;
+        var prefs = app.cadette.prefs.Preferences.instance();
+        java.util.List<Object> splitters = prefs.getList("layout", "splitters");
+        for (int i = 0; i < allSplitters.size() && i < splitters.size(); i++) {
+            Object v = splitters.get(i);
+            if (v instanceof Number n) allSplitters.get(i).setRatio(n.floatValue());
         }
-        for (int i = 0; i < allSplitters.size(); i++) {
-            String v = p.getProperty("splitter." + i);
-            if (v == null) continue;
-            try {
-                allSplitters.get(i).setRatio(Float.parseFloat(v));
-            } catch (NumberFormatException ignored) { /* skip bad entry */ }
-        }
-        for (int i = 0; i < allTabHosts.size(); i++) {
-            String v = p.getProperty("tab." + i);
-            if (v == null) continue;
-            try {
-                allTabHosts.get(i).setActive(Integer.parseInt(v));
-            } catch (NumberFormatException ignored) { /* skip bad entry */ }
+        java.util.List<Object> tabs = prefs.getList("layout", "tabs");
+        for (int i = 0; i < allTabHosts.size() && i < tabs.size(); i++) {
+            Object v = tabs.get(i);
+            if (v instanceof Number n) allTabHosts.get(i).setActive(n.intValue());
         }
     }
 
@@ -1321,18 +1586,41 @@ public class LemurAppState extends BaseAppState {
         //     CursorEventControl listeners installed in refreshPartsList;
         //     no polling needed here.)
 
-        // 3. Cut-sheet refresh on scene-dirty or panel-size change.
-        //    isCutSheetDirty is set by SceneManager on every mutation that
-        //    affects the layout (parts added, joints changed, kerf changed).
-        //    First-frame check fires once when the panel's GuiControl has
-        //    finally laid out its size.
+        // 2b. Advance cut-sheet pan if in progress. We poll cursor delta
+        //     here rather than chasing onAnalog mouse-axis events because
+        //     LemurAppState's update() already has the cursor in hand.
+        //
+        //     With the resolution-aware zoom architecture, pan is the
+        //     image-pixel offset of the visible viewport — increasing
+        //     panX shows content further right inside the larger image.
+        //     Cursor moves right (dx>0) ⇒ user wants content to follow
+        //     right ⇒ panX must DECREASE so the panel shows content from
+        //     earlier in the image.
+        if (cutSheetPanning && cutSheetPanLastCursor != null && cursor != null) {
+            float dx = cursor.x - cutSheetPanLastCursor.x;
+            float dy = cursor.y - cutSheetPanLastCursor.y;
+            cutSheetPanX -= dx;
+            // jME3 cursor: Y-up. Image coords: Y-down. Cursor up (dy>0)
+            // ⇒ content should follow up ⇒ panY DECREASES.
+            cutSheetPanY += dy;
+            cutSheetPanLastCursor = cursor.clone();
+            clampCutSheetPan();
+        }
+
+        // 3. Cut-sheet refresh on scene-dirty, panel-size change, or
+        //    zoom/pan change.
         SceneManager sceneManager = (SceneManager) getApplication();
         if (cutSheetImageHolder != null) {
             GuiControl gc = cutSheetImageHolder.getControl(GuiControl.class);
             int curW = gc == null ? -1 : (int) gc.getSize().x;
             int curH = gc == null ? -1 : (int) gc.getSize().y;
             boolean sizeChanged = (curW != lastCutSheetW || curH != lastCutSheetH);
-            if (sceneManager.isCutSheetDirty() || sizeChanged || cutSheetTexture == null) {
+            boolean viewChanged =
+                    Math.abs(cutSheetZoom - lastCutSheetZoom) > 1e-4f
+                 || Math.abs(cutSheetPanX - lastCutSheetPanX) > 0.5f
+                 || Math.abs(cutSheetPanY - lastCutSheetPanY) > 0.5f;
+            if (sceneManager.isCutSheetDirty() || sizeChanged || viewChanged
+                    || cutSheetTexture == null) {
                 refreshCutSheet();
             }
         }

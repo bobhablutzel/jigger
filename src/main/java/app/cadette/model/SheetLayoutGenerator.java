@@ -76,11 +76,14 @@ public class SheetLayoutGenerator {
 
     /**
      * Pack lumber by trying each standard stock length and picking the choice
-     * that minimizes total linear stock purchased ({@code boards × L}). Ties
-     * favor the shorter L (cheaper, easier to transport). Stock lengths
-     * shorter than the longest part are skipped — they can't fit it. If no
-     * stock length is long enough for some part, falls back to the longest
-     * standard length and accepts the part-too-large-for-sheet outcome.
+     * that minimizes total dollar cost — shorter stock is cheaper per linear
+     * foot at the big-box yards most users buy from, so the cheapest mix
+     * isn't always the one minimizing linear feet. Falls back to linear-feet
+     * minimization (the older heuristic) when prices aren't known for every
+     * candidate length, so unconfigured materials still pack reasonably.
+     * Stock lengths shorter than the longest part are skipped. If no stock
+     * length fits, the longest stock is used and the packer's per-part skip
+     * handles the oversize.
      */
     private static List<SheetLayout> packLumber(Material mat,
                                                 List<GuillotinePacker.PackingPart> parts,
@@ -93,19 +96,53 @@ public class SheetLayoutGenerator {
         float longestPart = (float) parts.stream()
                 .mapToDouble(GuillotinePacker.PackingPart::getHeightMm)
                 .max().orElse(0);
+        float longestStock = stockLengths.stream()
+                .max(Float::compare).orElse(0f);
+        // Surface oversize parts up-front. The packer drops them
+        // silently later (see "Part too large for sheet — skip" in
+        // GuillotinePacker), which is a real shop-floor footgun —
+        // the part vanishes from the cut sheet with no signal.
+        // stderr is the current convention; routing these into the
+        // command output panel is backlogged.
+        for (GuillotinePacker.PackingPart pp : parts) {
+            if (pp.getHeightMm() > longestStock + 0.5f) {
+                System.err.println(String.format(
+                        "[packer] part '%s' is %.0fmm long; longest %s stock is %.0fmm "
+                      + "— part will be dropped from the cut sheet. "
+                      + "Consider splitting the part or adding a longer stock length.",
+                        pp.getName(), pp.getHeightMm(),
+                        mat.getDisplayName(), longestStock));
+            }
+        }
         float binW = mat.getWidthMm();
 
         // Sorted ascending; shortest viable length wins on ties.
         List<Float> sorted = stockLengths.stream().sorted().toList();
+
+        // Probe whether we have a price for every candidate length up
+        // front. If yes, optimize in dollars; if no, the old linear-feet
+        // metric is still meaningful (it just isn't aware of per-length
+        // pricing). Mixed-mode comparison would be apples-to-oranges.
+        boolean haveFullPriceTable = true;
+        for (float L : sorted) {
+            if (L < longestPart) continue;
+            if (LumberPrices.priceFor(mat.getName(), Math.round(L)) == null) {
+                haveFullPriceTable = false;
+                break;
+            }
+        }
+
         List<SheetLayout> bestLayouts = null;
-        float bestTotal = Float.POSITIVE_INFINITY;
+        double bestCost = Double.POSITIVE_INFINITY;
         for (float L : sorted) {
             if (L < longestPart) continue;
             var layouts = GuillotinePacker.pack(mat, parts, kerfMm, binW, L);
             if (layouts.isEmpty()) continue;
-            float totalLength = layouts.size() * L;
-            if (totalLength < bestTotal - 0.5f) {
-                bestTotal = totalLength;
+            double cost = haveFullPriceTable
+                    ? layouts.size() * LumberPrices.priceFor(mat.getName(), Math.round(L))
+                    : layouts.size() * L;
+            if (cost < bestCost - 0.001) {
+                bestCost = cost;
                 bestLayouts = layouts;
             }
         }

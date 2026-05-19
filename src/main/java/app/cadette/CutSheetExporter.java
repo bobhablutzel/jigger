@@ -395,7 +395,7 @@ public class CutSheetExporter {
         };
     }
 
-    /** Dashed outline for one cutout shape (rect / circle today). */
+    /** Dashed outline for one cutout shape. */
     private static void drawPdfCutoutShape(PDPageContentStream cs,
                                            app.cadette.model.Cutout c,
                                            SheetLayout.PlacedPart part,
@@ -411,8 +411,39 @@ public class CutSheetExporter {
             if (radius < 0.5f) return;
             float[] cxcy = pdfCircleCenter(ci, part, px, py, ph, scale);
             drawPdfCircle(cs, cxcy[0], cxcy[1], radius);
+        } else if (c instanceof app.cadette.model.Cutout.Polygon poly) {
+            drawPdfVertexPath(cs, poly.vertices(), part, px, py, ph, scale);
+        } else if (c instanceof app.cadette.model.Cutout.Spline sp) {
+            drawPdfVertexPath(cs,
+                    app.cadette.model.SplineTessellator.tessellateCatmullRom(sp.controlPoints()),
+                    part, px, py, ph, scale);
         }
-        // Polygon / Spline / Curve: skip until those variants land.
+        // Cutout.Curve (Bezier) still skipped — same reason as the
+        // Graphics2D renderer; punt to a shared Bezier utility when
+        // someone draws a sled handle on a part with PDF output.
+    }
+
+    /** Stroke a closed dashed path through {@code vertices} in PDF space.
+     *  Degenerate inputs (< 3 vertices) are silently dropped — matches the
+     *  Graphics2D renderer's defense. */
+    private static void drawPdfVertexPath(PDPageContentStream cs,
+                                          java.util.List<app.cadette.model.Point2D> vertices,
+                                          SheetLayout.PlacedPart part,
+                                          float px, float py, float ph, float scale)
+            throws IOException {
+        if (vertices == null || vertices.size() < 3) return;
+        float[] first = partLocalToPdf(
+                vertices.get(0).xMm(), vertices.get(0).yMm(),
+                part, px, py, ph, scale);
+        cs.moveTo(first[0], first[1]);
+        for (int i = 1; i < vertices.size(); i++) {
+            float[] pt = partLocalToPdf(
+                    vertices.get(i).xMm(), vertices.get(i).yMm(),
+                    part, px, py, ph, scale);
+            cs.lineTo(pt[0], pt[1]);
+        }
+        cs.closePath();
+        cs.stroke();
     }
 
     /** PDF rect coords (cx, cy, cw, ch) for a {@link app.cadette.model.Cutout.Rect}. */
