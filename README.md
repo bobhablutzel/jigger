@@ -40,7 +40,7 @@ CADette is in **early alpha** — a friends-and-family preview. Useful caveats:
 
 ```bash
 mvn -P package-app clean package -DskipTests
-sudo apt install ./target/dist/cadette_0.1.0_amd64.deb
+sudo apt install ./target/dist/cadette_1.0.0_amd64.deb
 ```
 
 The `./` prefix in front of the filename is required — apt without
@@ -74,10 +74,10 @@ The Maven profile auto-detects the host OS and selects the right
 installer type. From a checkout of the repo on each platform:
 
 ```bash
-# macOS (produces target/dist/Cadette-0.1.0.dmg)
+# macOS (produces target/dist/Cadette-1.0.0.dmg)
 mvn -P package-app clean package -DskipTests
 
-# Windows (produces target\dist\Cadette-0.1.0.msi)
+# Windows (produces target\dist\Cadette-1.0.0.msi)
 mvn -P package-app clean package -DskipTests
 ```
 
