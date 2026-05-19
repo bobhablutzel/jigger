@@ -282,27 +282,11 @@
         <profile>
             <id>pkg-mac-defaults</id>
             <activation>
-                <!-- Match either Maven's `mac` family or the literal
-                     os.name "Mac OS X" / "Darwin". Belt-and-suspenders
-                     against Maven OS-family detection differences across
-                     Java/Maven versions. -->
                 <os><family>mac</family></os>
             </activation>
             <properties>
                 <cadette.jpackage.type>dmg</cadette.jpackage.type>
-                <!-- macOS needs -XstartOnFirstThread for GLFW's event pump
-                     (LWJGL3 backend). Headless AWT is mandatory alongside
-                     it: -XstartOnFirstThread claims thread 0 for GLFW;
-                     without headless mode, AWT's Toolkit also wants thread
-                     0 and deadlocks on first font / image init. Java2D +
-                     BufferedImage stay fully functional under headless,
-                     which is what CutSheetRenderer + AWTLoader rely on. -->
-                <!-- Use the `option=value` form (no space) for
-                     java-options: when the value starts with a dash,
-                     jpackage's arg parser can misinterpret it as a new
-                     option and silently drop the pair. The = form pins
-                     value to option as a single token. -->
-                <cadette.jpackage.platform-args>--mac-package-name Cadette --mac-package-identifier app.cadette --java-options=-XstartOnFirstThread --java-options=-Djava.awt.headless=true</cadette.jpackage.platform-args>
+                <cadette.jpackage.platform-args>--mac-package-name Cadette --mac-package-identifier app.cadette --java-options -XstartOnFirstThread --java-options -Djava.awt.headless=true</cadette.jpackage.platform-args>
             </properties>
         </profile>
         <profile>
@@ -411,11 +395,6 @@
                                 <goals><goal>exec</goal></goals>
                                 <configuration>
                                     <executable>jpackage</executable>
-                                    <!-- commandlineArgs (parsed by commons-exec
-                                         with quote-aware splitting) so the per-OS
-                                         platform-args property can splat into the
-                                         arg list cleanly. Multi-word values are
-                                         double-quoted. -->
                                     <commandlineArgs>--input "${project.build.directory}/jpackage-input" --main-jar "${project.build.finalName}.jar" --main-class app.cadette.CadetteApp --name Cadette --app-version ${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion} --vendor "Cadette Project" --dest "${project.build.directory}/dist" --type ${cadette.jpackage.type} --description "Woodworking design + cut sheet generator" --copyright "Copyright 2026 Bob Hablutzel" --license-file "${project.basedir}/LICENSE" ${cadette.jpackage.platform-args}</commandlineArgs>
                                 </configuration>
                             </execution>
