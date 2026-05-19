@@ -276,7 +276,7 @@
             </activation>
             <properties>
                 <cadette.jpackage.type>deb</cadette.jpackage.type>
-                <cadette.jpackage.platform-args>--linux-shortcut --linux-menu-group Graphics --linux-package-name cadette</cadette.jpackage.platform-args>
+                <cadette.jpackage.platform-args>--linux-shortcut --linux-menu-group Graphics --linux-package-name cadette --license-file ${project.basedir}/LICENSE</cadette.jpackage.platform-args>
             </properties>
         </profile>
         <profile>
@@ -286,12 +286,15 @@
             </activation>
             <properties>
                 <!-- Use app-image, not dmg, because jpackage 25.0.2 on
-                     macOS drops --java-options from the inner .app's
+                     macOS drops java-options from the inner .app's
                      cfg when building dmg. App-image honors them
                      correctly. F&F users install by dragging Cadette.app
                      to /Applications; we zip it for GitHub Release
                      distribution. Memo:
-                     project_jpackage_dmg_java_options_bug. -->
+                     project_jpackage_dmg_java_options_bug.
+                     Note: license-file lives in platform-args (not the
+                     cross-platform args block) because app-image refuses
+                     it; Linux deb / Windows msi both include it. -->
                 <cadette.jpackage.type>app-image</cadette.jpackage.type>
                 <cadette.jpackage.platform-args>--mac-package-name Cadette --mac-package-identifier app.cadette --java-options -XstartOnFirstThread --java-options -Djava.awt.headless=true</cadette.jpackage.platform-args>
             </properties>
@@ -303,7 +306,7 @@
             </activation>
             <properties>
                 <cadette.jpackage.type>msi</cadette.jpackage.type>
-                <cadette.jpackage.platform-args>--win-shortcut --win-menu --win-menu-group Cadette --win-per-user-install --win-dir-chooser</cadette.jpackage.platform-args>
+                <cadette.jpackage.platform-args>--win-shortcut --win-menu --win-menu-group Cadette --win-per-user-install --win-dir-chooser --license-file ${project.basedir}/LICENSE</cadette.jpackage.platform-args>
             </properties>
         </profile>
 
@@ -402,7 +405,7 @@
                                 <goals><goal>exec</goal></goals>
                                 <configuration>
                                     <executable>jpackage</executable>
-                                    <commandlineArgs>--input "${project.build.directory}/jpackage-input" --main-jar "${project.build.finalName}.jar" --main-class app.cadette.CadetteApp --name Cadette --app-version ${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion} --vendor "Cadette Project" --dest "${project.build.directory}/dist" --type ${cadette.jpackage.type} --description "Woodworking design + cut sheet generator" --copyright "Copyright 2026 Bob Hablutzel" --license-file "${project.basedir}/LICENSE" ${cadette.jpackage.platform-args}</commandlineArgs>
+                                    <commandlineArgs>--input "${project.build.directory}/jpackage-input" --main-jar "${project.build.finalName}.jar" --main-class app.cadette.CadetteApp --name Cadette --app-version ${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion} --vendor "Cadette Project" --dest "${project.build.directory}/dist" --type ${cadette.jpackage.type} --description "Woodworking design + cut sheet generator" --copyright "Copyright 2026 Bob Hablutzel" ${cadette.jpackage.platform-args}</commandlineArgs>
                                 </configuration>
                             </execution>
                         </executions>
