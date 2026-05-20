@@ -1772,32 +1772,6 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     }
 
     @Override
-    public String visitDefineCommand(CadetteCommandParser.DefineCommandContext ctx) {
-        String name = templateRefText(ctx.templateRef());
-        List<String> paramNames = ctx.paramDecl().stream()
-                .map(d -> d.paramName().get(0).getText().toLowerCase())
-                .toList();
-        Map<String, String> paramAliases = ctx.paramDecl().stream()
-                .filter(d -> d.paramName().size() > 1)
-                .collect(Collectors.toMap(
-                        d -> d.paramName().get(1).getText().toLowerCase(),
-                        d -> d.paramName().get(0).getText().toLowerCase(),
-                        (a, b) -> b,
-                        LinkedHashMap::new));
-        // Defaults are stored as unevaluated ExpressionContext so they can
-        // reference prior params at instantiation time (e.g. `height = $width * 2`).
-        Map<String, CadetteCommandParser.ExpressionContext> paramDefaults =
-                ctx.paramDecl().stream()
-                        .filter(d -> d.expression() != null)
-                        .collect(Collectors.toMap(
-                                d -> d.paramName().get(0).getText().toLowerCase(),
-                                CadetteCommandParser.ParamDeclContext::expression,
-                                (a, b) -> b,
-                                LinkedHashMap::new));
-        return executor.beginDefine(name, paramNames, paramAliases, paramDefaults);
-    }
-
-    @Override
     public String visitUsingAdd(CadetteCommandParser.UsingAddContext ctx) {
         String ns = templateRefText(ctx.templateRef());
         return executor.addUsingNamespace(ns);
@@ -2546,39 +2520,35 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
      * assembly and appending each statement's output. Supports nested if/for
      * blocks; loop variables are pushed onto the executor's scope stack.
      */
-    public void instantiateTemplateBody(CadetteCommandParser.TemplateBodyContext body,
+    public void instantiateTemplateBody(CadetteCommandParser.DefineBlockContext body,
                                         Assembly assembly,
                                         List<Part> createdParts,
                                         StringBuilder output) {
-        for (var stmt : body.templateStatement()) {
-            executeTemplateStatement(stmt, assembly, createdParts, output);
+        for (var stmt : body.statement()) {
+            executeStatement(stmt, assembly, createdParts, output);
         }
     }
 
     /**
-     * Walk a templateBody outside a template-instantiation context. Used when
-     * the user writes `for` or `if` at top-level (script or REPL). Same
-     * statement-dispatch as inside a template body; no assembly to collect
-     * parts into, so the command branch skips that bookkeeping.
+     * Execute one top-level statement (script or REPL) — a command, or an
+     * `if`/`for` block. No assembly to collect parts into, so the command
+     * branch skips that bookkeeping. Returns the statement's output.
      */
-    public String executeTopLevelBlock(CadetteCommandParser.TemplateBodyContext body) {
+    public String executeStatement(CadetteCommandParser.StatementContext stmt) {
         StringBuilder output = new StringBuilder();
-        for (var stmt : body.templateStatement()) {
-            executeTemplateStatement(stmt, null, null, output);
-        }
+        executeStatement(stmt, null, null, output);
         return output.toString().stripTrailing();
     }
 
     /**
-     * Dispatch one templateStatement. Null assembly/createdParts signal
-     * top-level execution — the command branch then skips the
-     * add-to-assembly step. Output indentation also differs between the
-     * two contexts.
+     * Dispatch one statement. Null assembly/createdParts signal top-level
+     * execution — the command branch then skips the add-to-assembly step.
+     * Output indentation also differs between the two contexts.
      */
-    private void executeTemplateStatement(CadetteCommandParser.TemplateStatementContext stmt,
-                                          Assembly assembly,
-                                          List<Part> createdParts,
-                                          StringBuilder output) {
+    private void executeStatement(CadetteCommandParser.StatementContext stmt,
+                                  Assembly assembly,
+                                  List<Part> createdParts,
+                                  StringBuilder output) {
         if (stmt.ifBlock() != null) {
             executeIfBlock(stmt.ifBlock(), assembly, createdParts, output);
         } else if (stmt.forBlock() != null) {
@@ -2608,11 +2578,11 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                                 List<Part> createdParts,
                                 StringBuilder output) {
         double cond = evaluateExpression(ctx.expression());
-        List<CadetteCommandParser.TemplateStatementContext> branch =
+        List<CadetteCommandParser.StatementContext> branch =
                 cond != 0 ? ctx.thenBody : ctx.elseBody;
         if (branch == null) return;
         for (var s : branch) {
-            executeTemplateStatement(s, assembly, createdParts, output);
+            executeStatement(s, assembly, createdParts, output);
         }
     }
 
@@ -2631,8 +2601,8 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
         try {
             for (long i = from; i <= to; i++) {
                 executor.setInCurrentScope(varName, (double) i);
-                for (var s : ctx.templateStatement()) {
-                    executeTemplateStatement(s, assembly, createdParts, output);
+                for (var s : ctx.statement()) {
+                    executeStatement(s, assembly, createdParts, output);
                 }
             }
         } finally {

@@ -26,6 +26,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
 import org.antlr.v4.runtime.*;
+import org.antlr.v4.runtime.misc.Interval;
 import org.antlr.v4.runtime.tree.ParseTreeWalker;
 
 import java.io.IOException;
@@ -124,21 +125,12 @@ public class CommandExecutor {
     /** Callback to open a save-file dialog. Accepts a description and extensions. Returns null if cancelled. */
     @Setter private BiFunction<String, String[], Path> saveFileChooser;
 
-    // -- Template recording state --
-    private boolean definingTemplate = false;
-    private String definingTemplateName = null;
-    private List<String> definingParamNames = null;
-    private Map<String, String> definingParamAliases = null;
-    private Map<String, CadetteCommandParser.ExpressionContext> definingParamDefaults = null;
-    private List<String> definingBodyLines = null;
-
-    // -- Top-level if/for block collection state --
-    // Mirrors the define-recording flow: when the user enters `if` or `for`
-    // at top level (script or REPL), subsequent lines are collected until the
-    // matching `end if` / `end for` arrives, then parsed as a templateBody
-    // and walked via the visitor. Nested blocks deepen the depth counter.
-    private int blockCollectionDepth = 0;
-    private List<String> blockCollectionLines = null;
+    // -- REPL line accumulation --
+    // The REPL feeds input one line at a time. A multi-line construct
+    // (`for`/`if`/`define`) isn't complete until its `end` arrives, so lines
+    // accumulate here until they parse as a complete `program`. ANTLR — not
+    // string matching — decides when the buffer is complete: see parseProgram.
+    private final List<String> pendingLines = new ArrayList<>();
 
     // Suppress individual undo pushes during template instantiation or script runs
     private boolean suppressUndo = false;
@@ -146,7 +138,7 @@ public class CommandExecutor {
     private List<UndoableAction> collectingActions = null;
 
     // When non-null, the loader is reading a .cds file and any template
-    // registered via `finishDefine` gets this string tagged as its source.
+    // registered via `registerDefine` gets this string tagged as its source.
     private String currentLoadingSource = null;
 
     // Template-expansion context: when non-null, the visitor prefixes object-name
@@ -304,139 +296,166 @@ public class CommandExecutor {
         }
     }
 
+    /**
+     * Execute one REPL submission. The REPL feeds input a line at a time, so
+     * a `for`/`if`/`define` block arrives across several calls — lines
+     * accumulate in {@code pendingLines} until they parse as a complete
+     * {@code program}. ANTLR decides completeness (see {@link #parseProgram});
+     * there is no keyword string-matching here.
+     */
     public String execute(String input) {
-        try {
-            String trimmed = input.trim();
-            if (trimmed.isEmpty()) return "";
-            String lower = trimmed.toLowerCase();
-
-            // -- Template recording mode --
-            if (definingTemplate && lower.equals("end define")) {
-                return finishDefine();
+        pendingLines.add(input);
+        ParseOutcome outcome = parseProgram(String.join("\n", pendingLines));
+        switch (outcome.status()) {
+            case INCOMPLETE -> {
+                // An open for/if/define block — keep buffering until its `end`.
+                return "";
             }
-            if (definingTemplate) {
-                definingBodyLines.add(trimmed);
-                return "  (recorded)";
+            case ERROR -> {
+                pendingLines.clear();
+                return outcome.errors() + "\nType 'help' for usage.";
             }
-
-            // -- Top-level if/for block collection --
-            // (Only reached outside define-mode — inside a define, blocks are
-            // just more lines of the template body and get parsed together
-            // when `end define` fires.)
-            if (blockCollectionDepth > 0) {
-                return continueBlockCollection(trimmed, lower);
-            }
-            if (isBlockStart(lower)) {
-                return startBlockCollection(trimmed);
-            }
-
-            // -- Normal ANTLR parsing --
-            CharStream chars = CharStreams.fromString(trimmed);
-            CadetteCommandLexer lexer = new CadetteCommandLexer(chars);
-            lexer.removeErrorListeners();
-
-            CommonTokenStream tokens = new CommonTokenStream(lexer);
-            CadetteCommandParser parser = new CadetteCommandParser(tokens);
-            parser.removeErrorListeners();
-
-            StringBuilder errors = new StringBuilder();
-            parser.addErrorListener(new BaseErrorListener() {
-                @Override
-                public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol,
-                                        int line, int charPos, String msg, RecognitionException e) {
-                    // Single-line parse — line is always 1, only the column is useful.
-                    errors.append("Parse error at column ").append(charPos + 1)
-                            .append(": ").append(msg)
-                            .append(pointerLine(trimmed, charPos));
+            default -> {
+                pendingLines.clear();
+                try {
+                    return executeProgram(outcome.program());
+                } catch (Exception e) {
+                    return "Error: " + e.getMessage() + "\nType 'help' for usage.";
                 }
-            });
-
-            CadetteCommandParser.InputContext inputCtx = parser.input();
-
-            if (!errors.isEmpty()) {
-                return errors + "\nType 'help' for usage.";
             }
-
-            // Pure-comment or whitespace-only lines produce no command.
-            if (inputCtx.command() == null) return "";
-
-            CommandVisitor visitor = new CommandVisitor(this, scene);
-            return visitor.visit(inputCtx.command());
-
-        } catch (Exception e) {
-            return "Error: " + e.getMessage() + "\nType 'help' for usage.";
         }
+    }
+
+    // ======================== Program parsing ========================
+
+    private enum ParseStatus { OK, INCOMPLETE, ERROR }
+
+    /**
+     * Result of parsing accumulated input as a {@code program}. INCOMPLETE
+     * means the input ended inside an unclosed block and more lines are
+     * expected; ERROR carries a formatted message; OK carries the tree.
+     */
+    private record ParseOutcome(ParseStatus status,
+                                CadetteCommandParser.ProgramContext program,
+                                String errors) {
+        static ParseOutcome ok(CadetteCommandParser.ProgramContext p) {
+            return new ParseOutcome(ParseStatus.OK, p, null);
+        }
+        static ParseOutcome incomplete() {
+            return new ParseOutcome(ParseStatus.INCOMPLETE, null, null);
+        }
+        static ParseOutcome error(String e) {
+            return new ParseOutcome(ParseStatus.ERROR, null, e);
+        }
+    }
+
+    /**
+     * Parse {@code source} as a {@code program}. The grammar is the sole
+     * authority on block structure: if the first syntax error is at EOF while
+     * the parser is still inside a {@code forBlock}/{@code ifBlock}/{@code
+     * defineBlock}, the input is INCOMPLETE (needs more lines); any other
+     * error is a genuine syntax error, reported fail-fast at its position.
+     */
+    private ParseOutcome parseProgram(String source) {
+        CadetteCommandLexer lexer = new CadetteCommandLexer(CharStreams.fromString(source));
+        lexer.removeErrorListeners();
+        CommonTokenStream tokens = new CommonTokenStream(lexer);
+        CadetteCommandParser parser = new CadetteCommandParser(tokens);
+        parser.removeErrorListeners();
+
+        String[] sourceLines = source.split("\n", -1);
+        StringBuilder errors = new StringBuilder();
+        boolean[] incomplete = {false};
+        boolean[] sawError = {false};
+        parser.addErrorListener(new BaseErrorListener() {
+            @Override
+            public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol,
+                                    int line, int charPos, String msg, RecognitionException e) {
+                if (sawError[0]) return;   // only the first error is meaningful
+                sawError[0] = true;
+                Token tok = offendingSymbol instanceof Token t ? t : null;
+                boolean atEof = tok != null && tok.getType() == Token.EOF;
+                List<String> ruleStack = ((Parser) recognizer).getRuleInvocationStack();
+                boolean insideBlock = ruleStack.contains("forBlock")
+                        || ruleStack.contains("ifBlock")
+                        || ruleStack.contains("defineBlock");
+                if (atEof && insideBlock) {
+                    incomplete[0] = true;
+                    return;
+                }
+                String src = (line >= 1 && line <= sourceLines.length)
+                        ? sourceLines[line - 1] : "";
+                // A single-line submission (the common REPL case) needs no
+                // line number — column alone is unambiguous.
+                String where = sourceLines.length > 1
+                        ? "line " + line + ", column " + (charPos + 1)
+                        : "column " + (charPos + 1);
+                errors.append("Parse error at ").append(where)
+                        .append(": ").append(msg)
+                        .append(pointerLine(src, charPos));
+            }
+        });
+
+        CadetteCommandParser.ProgramContext program = parser.program();
+        if (incomplete[0]) return ParseOutcome.incomplete();
+        if (!errors.isEmpty()) return ParseOutcome.error(errors.toString());
+        return ParseOutcome.ok(program);
+    }
+
+    /**
+     * Walk a parsed program, executing each top-level statement in order.
+     * A {@code defineBlock} registers a template; any other statement (a
+     * command, or an {@code if}/{@code for} block) runs via the visitor.
+     */
+    String executeProgram(CadetteCommandParser.ProgramContext program) {
+        CommandVisitor visitor = new CommandVisitor(this, scene);
+        StringBuilder output = new StringBuilder();
+        for (var tls : program.topLevelStatement()) {
+            String result = tls.defineBlock() != null
+                    ? registerDefine(tls.defineBlock())
+                    : visitor.executeStatement(tls.statement());
+            if (result != null && !result.isEmpty()) {
+                if (!output.isEmpty()) output.append("\n");
+                output.append(result);
+            }
+        }
+        return output.toString();
     }
 
     // ======================== Template Define ========================
 
     /**
-     * Enter template-recording mode. Called by the visitor after ANTLR parses
-     * the define header. Subsequent lines are collected until "end define".
+     * Build and register a Template from a parsed {@code defineBlock}. The
+     * whole block is parsed in one pass as part of the enclosing program, so
+     * there is no recording mode — the parse tree is the template body.
      */
-    String beginDefine(String name, List<String> paramNames, Map<String, String> paramAliases,
-                       Map<String, CadetteCommandParser.ExpressionContext> paramDefaults) {
-        definingTemplateName = name;
-        definingParamNames = new ArrayList<>(paramNames);
-        definingParamAliases = new LinkedHashMap<>(paramAliases);
-        definingParamDefaults = new LinkedHashMap<>(paramDefaults);
-        definingBodyLines = new ArrayList<>();
-        definingTemplate = true;
-
-        String paramDesc = definingParamNames.stream()
-                .map(pName -> pName
-                        + aliasSuffix(pName, definingParamAliases)
-                        + defaultSuffix(pName, definingParamDefaults))
-                .collect(Collectors.joining(", "));
-
-        return "Defining template '" + definingTemplateName + "'"
-                + (definingParamNames.isEmpty() ? "..." : " (params: " + paramDesc + ")...");
-    }
-
-    private static String aliasSuffix(String pName, Map<String, String> aliases) {
-        return aliases.entrySet().stream()
-                .filter(e -> e.getValue().equals(pName))
-                .findFirst()
-                .map(e -> "(" + e.getKey() + ")")
-                .orElse("");
-    }
-
-    private static String defaultSuffix(String pName,
-                                        Map<String, CadetteCommandParser.ExpressionContext> defaults) {
-        CadetteCommandParser.ExpressionContext def = defaults.get(pName);
-        return def != null ? "=" + def.getText() : "";
-    }
-
-    private String finishDefine() {
+    String registerDefine(CadetteCommandParser.DefineBlockContext ctx) {
+        String name = CommandVisitor.templateRefText(ctx.templateRef());
+        List<String> paramNames = ctx.paramDecl().stream()
+                .map(d -> d.paramName().get(0).getText().toLowerCase())
+                .toList();
+        Map<String, String> paramAliases = ctx.paramDecl().stream()
+                .filter(d -> d.paramName().size() > 1)
+                .collect(Collectors.toMap(
+                        d -> d.paramName().get(1).getText().toLowerCase(),
+                        d -> d.paramName().get(0).getText().toLowerCase(),
+                        (a, b) -> b,
+                        LinkedHashMap::new));
+        // Defaults are stored as unevaluated ExpressionContext so they can
+        // reference prior params at instantiation time (e.g. `height = $width * 2`).
+        Map<String, CadetteCommandParser.ExpressionContext> paramDefaults =
+                ctx.paramDecl().stream()
+                        .filter(d -> d.expression() != null)
+                        .collect(Collectors.toMap(
+                                d -> d.paramName().get(0).getText().toLowerCase(),
+                                CadetteCommandParser.ParamDeclContext::expression,
+                                (a, b) -> b,
+                                LinkedHashMap::new));
+        List<String> bodyLines = extractDefineBodyLines(ctx);
         String src = currentLoadingSource != null ? currentLoadingSource : "interactive";
 
-        // Snapshot define state now so we can clear it up front regardless of
-        // parse outcome — that way an error won't leave us stuck in define mode.
-        String name = definingTemplateName;
-        List<String> paramNames = definingParamNames;
-        Map<String, String> paramAliases = definingParamAliases;
-        Map<String, CadetteCommandParser.ExpressionContext> paramDefaults = definingParamDefaults;
-        List<String> bodyLines = List.copyOf(definingBodyLines);
-        definingTemplate = false;
-        definingTemplateName = null;
-        definingParamNames = null;
-        definingParamAliases = null;
-        definingParamDefaults = null;
-        definingBodyLines = null;
-
-        CadetteCommandParser.TemplateBodyContext parsedBody;
-        StringBuilder parseErrors = new StringBuilder();
-        try {
-            parsedBody = parseTemplateBody(bodyLines, parseErrors);
-        } catch (Exception e) {
-            return "Error: template '" + name + "' rejected — body parse error:" + e.getMessage();
-        }
-        if (!parseErrors.isEmpty()) {
-            return "Error: template '" + name + "' rejected — body parse error:" + parseErrors;
-        }
-
         Template template = new Template(name, paramNames, paramAliases,
-                paramDefaults, bodyLines, parsedBody, src);
+                paramDefaults, bodyLines, ctx, src);
         TemplateRegistry.instance().register(template);
 
         return "Template '" + name + "' defined ("
@@ -444,73 +463,32 @@ public class CommandExecutor {
                 + paramNames.size() + " params).";
     }
 
-    // -- Top-level block collection helpers --
+    /**
+     * Recover the raw body lines of a define block — everything the user typed
+     * between the header and {@code end define}, comments included — from the
+     * original source, so {@code show template} can round-trip the definition.
+     */
+    private static List<String> extractDefineBodyLines(CadetteCommandParser.DefineBlockContext ctx) {
+        int defineLine = ctx.getStart().getLine();
+        int endLine = ctx.END().getSymbol().getLine();
+        Token lastHeaderTok = ctx.paramDecl().isEmpty()
+                ? ctx.templateRef().getStop()
+                : ctx.paramDecl(ctx.paramDecl().size() - 1).getStop();
+        int headerLine = lastHeaderTok.getLine();
 
-    /** True if this line starts an if or for block at top level. */
-    private static boolean isBlockStart(String lower) {
-        return lower.startsWith("if ") || lower.startsWith("for ");
-    }
+        String blockText = ctx.getStart().getInputStream().getText(
+                Interval.of(ctx.getStart().getStartIndex(), ctx.getStop().getStopIndex()));
+        String[] blockLines = blockText.split("\n", -1);
 
-    /** True if this line is the closing keyword for an if or for block. */
-    private static boolean isBlockEnd(String lower) {
-        return lower.equals("end if") || lower.equals("end for");
-    }
-
-    private String startBlockCollection(String trimmed) {
-        blockCollectionDepth = 1;
-        blockCollectionLines = new ArrayList<>();
-        blockCollectionLines.add(trimmed);
-        // Return empty so scripts don't log an uninteresting "collecting…"
-        // line for every statement inside the block.
-        return "";
-    }
-
-    private String continueBlockCollection(String trimmed, String lower) {
-        blockCollectionLines.add(trimmed);
-        if (isBlockStart(lower)) blockCollectionDepth++;
-        else if (isBlockEnd(lower)) blockCollectionDepth--;
-        if (blockCollectionDepth > 0) return "";
-
-        List<String> lines = blockCollectionLines;
-        blockCollectionLines = null;
-
-        StringBuilder parseErrors = new StringBuilder();
-        CadetteCommandParser.TemplateBodyContext parsed;
-        try {
-            parsed = parseTemplateBody(lines, parseErrors);
-        } catch (Exception e) {
-            return "Error: block parse error — " + e.getMessage();
-        }
-        if (!parseErrors.isEmpty()) {
-            return "Error: block parse error — " + parseErrors;
-        }
-        CommandVisitor visitor = new CommandVisitor(this, scene);
-        return visitor.executeTopLevelBlock(parsed);
-    }
-
-    /** Parse a multi-line body as a single templateBody unit. */
-    private static CadetteCommandParser.TemplateBodyContext parseTemplateBody(
-            List<String> bodyLines, StringBuilder errorsOut) {
-        String bodyText = String.join("\n", bodyLines);
-        CadetteCommandLexer lexer = new CadetteCommandLexer(CharStreams.fromString(bodyText));
-        lexer.removeErrorListeners();
-        CommonTokenStream tokens = new CommonTokenStream(lexer);
-        CadetteCommandParser parser = new CadetteCommandParser(tokens);
-        parser.removeErrorListeners();
-        parser.addErrorListener(new BaseErrorListener() {
-            @Override
-            public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol,
-                                    int line, int charPos, String msg, RecognitionException e) {
-                if (!errorsOut.isEmpty()) errorsOut.append("; ");
-                String src = (line >= 1 && line <= bodyLines.size())
-                        ? bodyLines.get(line - 1) : "";
-                errorsOut.append("body line ").append(line)
-                        .append(", column ").append(charPos + 1)
-                        .append(": ").append(msg)
-                        .append(pointerLine(src, charPos));
+        List<String> body = new ArrayList<>();
+        for (int ln = headerLine + 1; ln < endLine; ln++) {
+            int idx = ln - defineLine;
+            if (idx >= 0 && idx < blockLines.length) {
+                String trimmed = blockLines[idx].trim();
+                if (!trimmed.isEmpty()) body.add(trimmed);
             }
-        });
-        return parser.templateBody();
+        }
+        return body;
     }
 
     /**
@@ -588,7 +566,7 @@ public class CommandExecutor {
             // Tree-walking instantiation: the body parsed once at define time;
             // each instantiation walks the tree with the active scope stack.
             // Loop iterations and if-branches push/pop their own scopes on top.
-            CadetteCommandParser.TemplateBodyContext parsed = template.getParsedBody();
+            CadetteCommandParser.DefineBlockContext parsed = template.getParsedBody();
             if (parsed != null) {
                 CommandVisitor visitor = new CommandVisitor(this, scene);
                 visitor.instantiateTemplateBody(parsed, assembly, createdParts, output);
@@ -861,8 +839,8 @@ public class CommandExecutor {
     /**
      * After loading, walk every template's stored parse tree and flag
      * {@code create <template>} references that resolve nowhere in the
-     * registry. Syntax errors are caught earlier, at {@code finishDefine}
-     * time — broken templates never register, so everything we see here is
+     * registry. Syntax errors are caught earlier, when the define block is
+     * parsed — broken templates never register, so everything we see here is
      * a well-formed parse tree.
      *
      * ParseTreeWalker recurses into nested ifBlock / forBlock bodies for
@@ -996,25 +974,21 @@ public class CommandExecutor {
         suppressUndo = true;
         currentLoadingSource = (isClasspath ? "classpath:" : "") + file.toString();
         try {
-            lines.stream()
-                    .map(String::trim)
-                    .filter(trimmed -> !trimmed.isEmpty())
-                    .forEach(trimmed -> {
-                        String result = execute(trimmed);
-                        // Surface anything that looks like an error so bad files don't fail silently.
-                        if (result != null && (result.startsWith("Parse error:") || result.startsWith("Error:"))) {
-                            recordLoaderMessage("Template '" + file + "': " + result.split("\n", 2)[0]);
-                        }
-                    });
-            // If the file left us in define-recording mode, bail out cleanly.
-            if (definingTemplate) {
+            // Parse the whole file as one program. A template file is normally
+            // a single `define` block; whatever it contains, ANTLR validates it
+            // in one pass and the loader surfaces any failure.
+            ParseOutcome outcome = parseProgram(String.join("\n", lines));
+            if (outcome.status() == ParseStatus.INCOMPLETE) {
                 recordLoaderMessage("Template '" + file + "' did not end its define block.");
-                definingTemplate = false;
-                definingTemplateName = null;
-                definingParamNames = null;
-                definingParamAliases = null;
-                definingParamDefaults = null;
-                definingBodyLines = null;
+            } else if (outcome.status() == ParseStatus.ERROR) {
+                recordLoaderMessage("Template '" + file + "': "
+                        + outcome.errors().split("\n", 2)[0]);
+            } else {
+                try {
+                    executeProgram(outcome.program());
+                } catch (Exception e) {
+                    recordLoaderMessage("Template '" + file + "': Error: " + e.getMessage());
+                }
             }
         } finally {
             suppressUndo = prevSuppress;
@@ -1167,19 +1141,43 @@ public class CommandExecutor {
                 .ifPresent(first -> output.append("  Warning: first-line shebang does not identify this as a ")
                         .append("CADette script — expected '#! cadette'. Proceeding anyway.\n"));
 
+        // Parse the whole file as one program — ANTLR catches every syntax
+        // error up front, so a malformed script runs nothing rather than
+        // half-applying. (Runtime errors still surface per-statement below.)
+        ParseOutcome outcome = parseProgram(String.join("\n", lines));
+        if (outcome.status() == ParseStatus.INCOMPLETE) {
+            output.append("  Error: unterminated block — missing `end for`, ")
+                    .append("`end if`, or `end define`.\n")
+                    .append("Done. (").append(file.getFileName()).append(")");
+            return output.toString();
+        }
+        if (outcome.status() == ParseStatus.ERROR) {
+            output.append("  ").append(outcome.errors().replace("\n", "\n  ")).append("\n")
+                    .append("Done. (").append(file.getFileName()).append(")");
+            return output.toString();
+        }
+
         // Collect all individual actions into a single composite undo action
         List<UndoableAction> previousCollecting = collectingActions;
         collectingActions = new ArrayList<>();
 
         try {
-            int lineNum = 0;
-            for (String line : lines) {
-                lineNum++;
-                String trimmed = line.trim();
-                if (trimmed.isEmpty()) continue;
-                String result = execute(trimmed);
-                if (result.isEmpty()) continue;  // comment line
-                output.append(String.format("  [%d] %s → %s%n", lineNum, trimmed, result));
+            CommandVisitor visitor = new CommandVisitor(this, scene);
+            for (var tls : outcome.program().topLevelStatement()) {
+                int lineNum = tls.getStart().getLine();
+                String echo = (lineNum >= 1 && lineNum <= lines.size())
+                        ? lines.get(lineNum - 1).trim() : "";
+                String result;
+                try {
+                    result = tls.defineBlock() != null
+                            ? registerDefine(tls.defineBlock())
+                            : visitor.executeStatement(tls.statement());
+                } catch (Exception e) {
+                    result = "Error: " + e.getMessage();
+                }
+                if (result != null && !result.isEmpty()) {
+                    output.append(String.format("  [%d] %s → %s%n", lineNum, echo, result));
+                }
             }
         } finally {
             List<UndoableAction> collected = collectingActions;

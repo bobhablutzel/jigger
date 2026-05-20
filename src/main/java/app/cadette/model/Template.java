@@ -50,10 +50,11 @@ public class Template {
     /** Raw body lines as the user wrote them — preserves comments and source formatting. */
     private final List<String> bodyLines;
     /**
-     * Parsed body. Walked by the visitor at every instantiation. Null only for
-     * legacy test Templates that bypass the loader and have no parse tree.
+     * Parsed {@code define} block — header plus body statements. Walked by the
+     * visitor at every instantiation. Null only for legacy test Templates that
+     * bypass the loader and have no parse tree.
      */
-    private final CadetteCommandParser.TemplateBodyContext parsedBody;
+    private final CadetteCommandParser.DefineBlockContext parsedBody;
     // Human-readable pointer to where this template came from, for `show templates`
     // and `which`. Conventions: "classpath:<path>" for bundled, the absolute path
     // for filesystem, "interactive" for REPL defines, null if unknown.
@@ -79,7 +80,7 @@ public class Template {
     public Template(String name, List<String> paramNames, Map<String, String> paramAliases,
                     Map<String, CadetteCommandParser.ExpressionContext> paramDefaults,
                     List<String> bodyLines,
-                    CadetteCommandParser.TemplateBodyContext parsedBody,
+                    CadetteCommandParser.DefineBlockContext parsedBody,
                     String source) {
         this.name = name;
         this.paramNames = List.copyOf(paramNames);

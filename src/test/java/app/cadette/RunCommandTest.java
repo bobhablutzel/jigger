@@ -111,4 +111,45 @@ class RunCommandTest extends HeadlessTestBase {
         String result = exec("run");
         assertTrue(result.contains("No file chooser available"), "Should report missing chooser: " + result);
     }
+
+    @Test
+    void runScriptWithTopLevelForLoop() throws IOException {
+        // A script is parsed as one program — a top-level `for` block spans
+        // several lines of the file and runs without any line-by-line glue.
+        Path script = writeScript(
+                "for $i = 1 to 3",
+                "  create part \"shelf_$i\" size 10, 10 at 0, 0, 0",
+                "end for");
+        String result = exec("run " + script);
+        assertTrue(result.contains("Running"), "Should confirm start: " + result);
+        assertNotNull(sceneManager.getPart("shelf_1"));
+        assertNotNull(sceneManager.getPart("shelf_2"));
+        assertNotNull(sceneManager.getPart("shelf_3"));
+    }
+
+    @Test
+    void runScriptWithDefineBlock() throws IOException {
+        // A `define` block in a script registers a usable template.
+        Path script = writeScript(
+                "define acme/run_box params width",
+                "  create part \"panel\" size $width, 100 at 0, 0, 0",
+                "end define",
+                "create acme/run_box \"B\" width 50");
+        String result = exec("run " + script);
+        assertTrue(result.contains("Running"), "Should confirm start: " + result);
+        assertNotNull(sceneManager.getAssembly("B"), "templated assembly should exist: " + result);
+    }
+
+    @Test
+    void runScriptWithSyntaxErrorRunsNothing() throws IOException {
+        // Whole-file parse: a syntax error is caught before execution, so a
+        // malformed script applies none of its statements.
+        Path script = writeScript(
+                "create part \"good\" size 10, 10 at 0, 0, 0",
+                "this is not a valid command");
+        String result = exec("run " + script);
+        assertTrue(result.contains("Parse error"), "Should report the parse error: " + result);
+        assertNull(sceneManager.getPart("good"),
+                "a script with a syntax error should apply nothing: " + result);
+    }
 }

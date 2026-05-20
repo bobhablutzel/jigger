@@ -49,17 +49,17 @@ class ParseErrorPositionTest extends HeadlessTestBase {
     }
 
     @Test
-    void templateBodyParseErrorIncludesLineColumnAndPointer() {
-        // Body line 2 is gibberish; the column on that line is what we want
-        // surfaced (along with the line index inside the body).
+    void defineBlockParseErrorIncludesLineColumnAndPointer() {
+        // The REPL accumulates the open `define` block; a gibberish body line
+        // fails fast — the error surfaces the moment that line is entered,
+        // with its line and column inside the accumulated input.
         String badLine = "  this line is not a valid cadette command at all";
         exec("define acme/broken params width");
         exec("  create part \"side\" size $width, 100 at 0, 0, 0");
-        exec(badLine);
-        String result = exec("end define");
+        String result = exec(badLine);
 
-        assertTrue(result.contains("body line ") && result.contains("column "),
-                "template-body parse error should include line and column: " + result);
+        assertTrue(result.contains("line ") && result.contains("column "),
+                "define-body parse error should include line and column: " + result);
         assertTrue(result.contains(badLine.trim()),
                 "error should echo the offending body line: " + result);
         assertTrue(result.contains("^"),
@@ -68,14 +68,13 @@ class ParseErrorPositionTest extends HeadlessTestBase {
 
     @Test
     void topLevelBlockParseErrorIncludesLineColumnAndPointer() {
-        // The block is collected and parsed as a unit at `end if`; a bad
-        // line inside the block should surface with line+column.
+        // A bad line inside an open top-level `if` block fails fast with
+        // line+column, rather than waiting for `end if`.
         String badLine = "  this line is not a valid cadette command at all";
         exec("if 1 == 1 then");
-        exec(badLine);
-        String result = exec("end if");
+        String result = exec(badLine);
 
-        assertTrue(result.contains("body line ") && result.contains("column "),
+        assertTrue(result.contains("line ") && result.contains("column "),
                 "top-level block parse error should include line and column: " + result);
         assertTrue(result.contains(badLine.trim()),
                 "error should echo the offending block line: " + result);

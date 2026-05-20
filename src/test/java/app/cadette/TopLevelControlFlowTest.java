@@ -25,10 +25,10 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * if/for blocks at top level (scripts, REPL) — not just inside a template
- * body. The executor collects lines until the matching `end`, parses the
- * block as a templateBody, and walks the tree via the visitor. Also covers
- * arithmetic inside {@code ${…}} string interpolation, which is what makes
- * back-referencing previous iterations (`"b${$i - 1}"`) actually work.
+ * body. The REPL accumulates lines until they parse as a complete `program`,
+ * then the visitor walks the tree. Also covers arithmetic inside {@code ${…}}
+ * string interpolation, which is what makes back-referencing previous
+ * iterations (`"b${$i - 1}"`) actually work.
  */
 class TopLevelControlFlowTest extends HeadlessTestBase {
 
@@ -163,5 +163,34 @@ class TopLevelControlFlowTest extends HeadlessTestBase {
         assertNotNull(sceneManager.getAssembly("b_1"));
         assertNotNull(sceneManager.getAssembly("b_2"));
         assertNotNull(sceneManager.getAssembly("b_3"));
+    }
+
+    // ---- line accumulation: only blocks continue across lines ----
+
+    @Test
+    void truncatedSimpleCommandErrorsRatherThanWaitingForMore() {
+        // A bare `create box` ends at EOF, but the parser is NOT inside an
+        // open for/if/define — so it must report a parse error immediately,
+        // not silently buffer the line waiting for a continuation that a
+        // single-line command will never get.
+        String result = exec("create box");
+
+        assertTrue(result.contains("Parse error"),
+                "a truncated simple command must error, not buffer: " + result);
+    }
+
+    @Test
+    void failFastOnBadLineInsideOpenBlock() {
+        // A syntax error inside an open block surfaces the moment the bad
+        // line is entered — the block is abandoned rather than swallowed
+        // until `end for`.
+        exec("for $i = 1 to 3");
+        String result = exec("  thisisnotacommand foo bar");
+
+        assertTrue(result.contains("Parse error"),
+                "a bad line inside a block should fail fast: " + result);
+        // The buffer is cleared, so a normal command runs cleanly afterward.
+        exec("create part \"after_error\" size 5, 5 at 0, 0, 0");
+        assertNotNull(sceneManager.getPart("after_error"));
     }
 }

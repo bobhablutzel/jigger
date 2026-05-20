@@ -22,29 +22,41 @@ options {
     tokenVocab = CadetteCommandLexer;
 }
 
-// Top-level entry: a single input may be empty (e.g. a pure-comment line, since
-// LINE_COMMENT is skipped at lex time) or a single command.
-input
-    : command? EOF
+// Top-level entry: a program is a flat sequence of statements, used uniformly
+// for REPL submissions, .cds scripts, and template bodies. ANTLR is the single
+// authority on block structure — `for`, `if`, and `define` are first-class
+// grammar productions, not string-matched directives. A program may be empty
+// (e.g. a pure-comment line, since LINE_COMMENT is skipped at lex time).
+program
+    : topLevelStatement* EOF
     ;
 
-// Separate entry point used when a template body is parsed as a single unit
-// (after `end define` collects its stored lines). A body is a sequence of
-// commands and nested control-flow blocks. Loops and conditionals are
-// first-class grammar productions rather than string-matched directives.
-templateBody
-    : templateStatement* EOF
+// `define` may appear only at the top level: a defineBlock is not a
+// `statement`, so the grammar itself forbids nesting a template definition
+// inside a loop, conditional, or another define.
+topLevelStatement
+    : defineBlock
+    | statement
     ;
 
-templateStatement
+statement
     : ifBlock
     | forBlock
     | command
     ;
 
+// `define <name> [params ...] ... end define`. The body is a `statement`
+// sequence, so it cannot contain a nested defineBlock — templates can't
+// define templates, and nesting scope questions never arise.
+defineBlock
+    : DEFINE templateRef (PARAMS paramDecl (COMMA paramDecl)*)?
+      statement*
+      END DEFINE
+    ;
+
 ifBlock
-    : IF expression THEN thenBody+=templateStatement*
-      (ELSE elseBody+=templateStatement*)?
+    : IF expression THEN thenBody+=statement*
+      (ELSE elseBody+=statement*)?
       END IF
     ;
 
@@ -53,7 +65,7 @@ ifBlock
 // the body via the executor's scope stack.
 forBlock
     : FOR VAR_REF ASSIGN expression TO expression
-      templateStatement*
+      statement*
       END FOR
     ;
 
@@ -83,7 +95,6 @@ command
     | redoCommand
     | helpCommand
     | exitCommand
-    | defineCommand
     | usingCommand
     | whichCommand
     | statsCommand
@@ -438,10 +449,6 @@ helpCommand
 
 exitCommand
     : EXIT
-    ;
-
-defineCommand
-    : DEFINE templateRef (PARAMS paramDecl (COMMA paramDecl)*)?
     ;
 
 // `using standard/cabinets` — scopes bare template references so

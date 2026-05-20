@@ -179,7 +179,7 @@ class TemplateValidationTest extends HeadlessTestBase {
 
     @Test
     void syntaxErrorInBodyLineRejectsTemplateAtDefineTime() throws IOException {
-        // Bodies are parsed as one unit at `end define`. A malformed line
+        // The whole file is parsed as one program. A malformed body line
         // rejects the whole template — it never registers, and the error
         // surfaces via the loader's error channel.
         Path root = writeTree(
@@ -195,7 +195,7 @@ class TemplateValidationTest extends HeadlessTestBase {
         List<String> loadMessages = executor.drainLoaderMessages();
 
         assertTrue(loadMessages.stream().anyMatch(m ->
-                        m.contains("acme/syntactically_broken") && m.contains("body parse error")),
+                        m.contains("acme/syntactically_broken") && m.contains("Parse error")),
                 "define-time parse error should surface through the loader: " + loadMessages);
         assertNull(TemplateRegistry.instance().get("acme/syntactically_broken"),
                 "broken template must not register");
@@ -267,7 +267,7 @@ class TemplateValidationTest extends HeadlessTestBase {
         List<String> loadMessages = executor.drainLoaderMessages();
 
         assertTrue(loadMessages.stream().anyMatch(m ->
-                        m.contains("acme/dynamic_ref") && m.contains("body parse error")),
+                        m.contains("acme/dynamic_ref") && m.contains("Parse error")),
                 "$var in template-ref position should reject the template: " + loadMessages);
         assertNull(TemplateRegistry.instance().get("acme/dynamic_ref"),
                 "rejected template must not register");
