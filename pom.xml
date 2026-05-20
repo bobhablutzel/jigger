@@ -20,6 +20,8 @@
         <antlr4.version>4.13.1</antlr4.version>
         <lombok.version>1.18.38</lombok.version>
         <lemur.version>1.16.0</lemur.version>
+        <!-- Matches the LWJGL pulled in transitively by jme3-lwjgl3 3.9.0. -->
+        <lwjgl.version>3.3.6</lwjgl.version>
         <!-- JVM arg for the exec:exec launch. Default is a harmless
              system-property no-op; the mac-thread profile overrides this
              to -XstartOnFirstThread when running on macOS, where GLFW
@@ -101,6 +103,47 @@
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
             <version>2.4</version>
+        </dependency>
+
+        <!-- LWJGL TinyFileDialogs — native OS open/save dialogs for the
+             `run` and `export` commands. Used instead of AWT's JFileChooser
+             because the macOS build runs java.awt.headless=true (so AWT
+             coexists with LWJGL3's -XstartOnFirstThread); tinyfd needs no
+             AWT and no display thread of its own. LWJGL itself is already
+             on the classpath via jme3-lwjgl3 — only the tinyfd module and
+             its natives are added here. -->
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-tinyfd</artifactId>
+            <version>${lwjgl.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-tinyfd</artifactId>
+            <version>${lwjgl.version}</version>
+            <classifier>natives-windows</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-tinyfd</artifactId>
+            <version>${lwjgl.version}</version>
+            <classifier>natives-linux</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-tinyfd</artifactId>
+            <version>${lwjgl.version}</version>
+            <classifier>natives-macos</classifier>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.lwjgl</groupId>
+            <artifactId>lwjgl-tinyfd</artifactId>
+            <version>${lwjgl.version}</version>
+            <classifier>natives-macos-arm64</classifier>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- Lombok — code generation for boilerplate (getters, builders, etc). -->

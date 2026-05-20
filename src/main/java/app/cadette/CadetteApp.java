@@ -25,7 +25,11 @@ import com.jme3.system.AppSettings;
 import com.simsilica.lemur.GuiGlobals;
 import com.simsilica.lemur.style.BaseStyles;
 import com.simsilica.lemur.style.Styles;
+import org.lwjgl.PointerBuffer;
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.util.tinyfd.TinyFileDialogs;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -95,6 +99,9 @@ public class CadetteApp extends SceneManager {
         CommandExecutor executor = new CommandExecutor(this);
         executor.loadTemplates();
         executor.setOnExit(this::stop);
+        // Native file dialogs for `run` (no path) and `export` (no filename).
+        executor.setFileChooser(CadetteApp::chooseScriptToOpen);
+        executor.setSaveFileChooser(CadetteApp::chooseExportTarget);
 
         // SelectionManager is the single source of truth for what's
         // selected. The 3D viewport's CameraController and the Lemur
@@ -149,6 +156,58 @@ public class CadetteApp extends SceneManager {
         }
 
         System.err.println("[cadette] init complete");
+    }
+
+    // ---------------------------------------------------------------------
+    // Native file dialogs (LWJGL TinyFileDialogs)
+    //
+    // Used instead of AWT's JFileChooser: the macOS build runs
+    // java.awt.headless=true so AWT can coexist with LWJGL3's
+    // -XstartOnFirstThread, which makes any AWT dialog throw HeadlessException.
+    // tinyfd is a thin native shim with no AWT and no display thread of its
+    // own. The dialog blocks the calling thread (the jME main thread, where
+    // command execution runs) — that thread is also the right one for a
+    // native modal dialog on macOS.
+    // ---------------------------------------------------------------------
+
+    /**
+     * Native open dialog for the {@code run} command. Returns the chosen
+     * {@code .cds} file, or null if the user cancelled.
+     */
+    private static Path chooseScriptToOpen() {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            PointerBuffer filters = stack.mallocPointer(1);
+            filters.put(stack.UTF8("*.cds")).flip();
+            String picked = TinyFileDialogs.tinyfd_openFileDialog(
+                    "Open CADette Script", "", filters,
+                    "CADette scripts (*.cds)", false);
+            return picked == null ? null : Path.of(picked);
+        }
+    }
+
+    /**
+     * Native save dialog for {@code export} commands. {@code extensions} is
+     * the format's extension(s) (e.g. {@code ["pdf"]}); the primary one is
+     * appended if the user types a bare filename. Returns null if cancelled.
+     */
+    private static Path chooseExportTarget(String description, String[] extensions) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            PointerBuffer filters = stack.mallocPointer(Math.max(1, extensions.length));
+            for (String ext : extensions) {
+                filters.put(stack.UTF8("*." + ext));
+            }
+            filters.flip();
+            String picked = TinyFileDialogs.tinyfd_saveFileDialog(
+                    "Export Cut Sheet", "",
+                    extensions.length > 0 ? filters : null, description);
+            if (picked == null) return null;
+            Path path = Path.of(picked);
+            // Auto-append the primary extension if the user typed none.
+            if (extensions.length > 0 && !path.getFileName().toString().contains(".")) {
+                path = path.resolveSibling(path.getFileName() + "." + extensions[0]);
+            }
+            return path;
+        }
     }
 
     /** Mirror SelectionManager state into 3D viewport highlights. */
