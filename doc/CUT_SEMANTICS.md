@@ -1,14 +1,19 @@
 # Understanding Cuts
 
-The `cut` command removes material from a part. Five shape variants cover almost everything you'll want to do: `rect`, `circle`, `polygon`, `spline`, and reusable named `shape`s. This doc explains the mental models behind cuts so you can read your own commands accurately and avoid the common gotchas.
+The `cut` command removes material from a part. Four shape variants cover almost everything you'll want to do: `rect`, `circle`, `polygon`, and `spline`. Additionally, you can create reusable and named `shape`s; this are 
+most useful for complex curves and polygons. This doc explains the mental models behind cuts so you can read your own commands accurately and avoid the common gotchas.
 
 For non-cut-specific scripting gotchas (parenthesis grouping, duplicate names, error-message positions, etc.), see [SCRIPTING_PITFALLS.md](SCRIPTING_PITFALLS.md).
 
 ## The mental model: cuts remove material *inside* a closed boundary
 
-Every cut defines a **closed 2D region** in the part's local coordinate space, and removes the material inside that region. There is no such thing as an "open curve" cut — physically, a cut along a zero-width line wouldn't remove any material, so the grammar doesn't have one.
+Every cut defines a **closed 2D region** in the part's local coordinate space, and removes the material inside that region projected into the material along that face. By default, cuts are 
+through the material, but you can optionally specify a depth. Along the face, there is no such thing as an "open curve" cut — physically, a cut along a zero-width line wouldn't remove any material, so the grammar doesn't have one. 
 
 This polarity matters most for polygons and splines. If you trace a curve along the outline of the *shape you want to keep*, the cut removes the wrong region — it removes whatever is bounded by your curve plus its periodic closure, which is rarely what you intended. To shape a part with cuts, **trace the boundary of the material you want to remove**, not the boundary of the material you want to keep.
+
+Cuts are currently through the face of a board. Roundovers, ogees, and other
+profiles that run along the *edge* of a board aren't implemented yet.
 
 ## The five shapes
 
@@ -21,6 +26,8 @@ This polarity matters most for polygons and splines. If you trace a curve along 
 | `shape` | `shape <name> at ax, ay` | Reuse a previously-named polygon or spline. |
 
 All variants accept an optional `depth N` clause to make a partial-depth pocket instead of a through-cut.
+
+Two further cut shapes exist for specialised work: `curve` (a Bézier-segment outline) and `miter` (a corner wedge sized by an angle, for picture-frame and brace miters). They follow the same "remove the enclosed region" model as the rest; see [SCRIPTING.md](SCRIPTING.md) for their syntax.
 
 **When in doubt, use `rect`** for axis-aligned rectangles. It's just `at x, y size w, h` — three numbers, no vertex-ordering or closure footguns. Polygon is for shapes a rectangle can't express.
 
@@ -83,7 +90,13 @@ cut "panel" rect at 50, 50 size 30, 30           # through-cut
 cut "panel" rect at 50, 50 size 30, 30 depth 10  # 10 mm deep pocket
 ```
 
-Front face is the default. To pocket from the back instead, the model supports a `face` field but the grammar doesn't yet expose it — you'd need to construct the cut programmatically through a template.
+Front face is the default. To pocket from the back instead, add a `face back` clause:
+
+```
+cut "panel" rect at 50, 50 size 30, 30 depth 10 face back  # pocket from the back
+```
+
+Valid values are `front` and `back`. (Side faces — left/right/top/bottom — aren't supported yet.)
 
 ## Cuts compose by union
 
@@ -142,7 +155,8 @@ The note isn't an error — it's flagging that what gets cut may not match what 
 
 The cut face is a 2D plane local to the part, with origin at one corner and axes running along the part's width and height. All cuts use this local frame; scene-level rotations and translations don't affect cut coordinates. A `cut at 50, 100` means "50 units along the part's width, 100 units along its height", regardless of where the part is positioned in the world.
 
-The unit is whatever `set units` is currently configured to. With `set units cm` (the default for many users), `cut "panel" rect at 10, 5 size 20, 30` means 10 cm × 5 cm origin and 20 cm × 30 cm extent.
+The unit is whatever `set units` is currently configured to. With `set units cm` (the default for many users), `cut "panel" rect at 10, 5 size 20, 30` means 10 cm × 5 cm origin and 20 cm × 30 cm extent. You can also be explicit: 
+`cut "panel" rect at 10cm, 5cm size 20cm, 30cm`
 
 ## Common patterns
 
@@ -181,7 +195,9 @@ cut "side" shape pin at 50, 164 depth 10
 # ...
 ```
 
-(A `for`-loop over the spacing is the next ergonomic improvement here, but as of this doc you list them explicitly.)
+(A `for`-loop over the spacing is tidier than listing each hole — `for` works
+at the top level of a script, not just inside a template. See
+[SCRIPTING.md](SCRIPTING.md) for the loop syntax.)
 
 ## Mental model checklist
 
