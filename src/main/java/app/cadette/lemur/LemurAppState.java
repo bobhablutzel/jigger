@@ -74,6 +74,7 @@ import com.simsilica.lemur.text.DocumentModel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import org.lwjgl.glfw.GLFW;
+import org.lwjgl.glfw.GLFWErrorCallback;
 
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
@@ -993,26 +994,41 @@ public class LemurAppState extends BaseAppState {
     /** System clipboard text, or null if empty / unavailable.
      *
      *  <p>Uses GLFW's clipboard — the native clipboard bound to the app
-     *  window — rather than AWT's {@code Toolkit.getSystemClipboard()}.
-     *  AWT's clipboard is unreliable from inside an LWJGL/GLFW process:
-     *  no AWT window services X11 selection requests, and it can clash
-     *  with GLFW on macOS, which silently broke paste. GLFW clipboard
+     *  window — rather than AWT's {@code Toolkit.getSystemClipboard()},
+     *  which throws HeadlessException here (the app runs
+     *  java.awt.headless=true for macOS LWJGL coexistence). GLFW clipboard
      *  calls must run on the main render thread — every caller here does
      *  (key actions and button clicks are dispatched on it). The window
      *  argument is unused by GLFW 3.3+, so NULL (0L) is fine. */
     private static String clipboardText() {
-        try {
-            return GLFW.glfwGetClipboardString(0L);
-        } catch (Exception e) {
-            return null;
-        }
+        return runGlfwClipboardCall(() -> GLFW.glfwGetClipboardString(0L), null);
     }
 
     private static void setClipboardText(String text) {
-        try {
+        runGlfwClipboardCall(() -> {
             GLFW.glfwSetClipboardString(0L, text);
+            return null;
+        }, null);
+    }
+
+    /** Run a GLFW clipboard call with jME3's error callback detached.
+     *
+     *  <p>GLFW's macOS backend reports an empty or non-text pasteboard by
+     *  invoking the GLFW <em>error callback</em>, not merely returning
+     *  null. jME3 installs an error callback that throws — and because
+     *  that throw originates inside the native call, a {@code try/catch}
+     *  around the GLFW call never sees it; it surfaces later via jME3's
+     *  {@code handleError} and crashes the app on a plain Cmd+V over an
+     *  empty clipboard. So we detach the error callback for the duration
+     *  of the call and restore it afterward. */
+    private static <T> T runGlfwClipboardCall(java.util.function.Supplier<T> call, T fallback) {
+        GLFWErrorCallback previous = GLFW.glfwSetErrorCallback(null);
+        try {
+            return call.get();
         } catch (Exception e) {
-            // clipboard unavailable — nothing useful to do
+            return fallback;
+        } finally {
+            GLFW.glfwSetErrorCallback(previous);
         }
     }
 
