@@ -125,6 +125,10 @@ public class CommandExecutor {
     /** Callback to open a save-file dialog. Accepts a description and extensions. Returns null if cancelled. */
     @Setter private BiFunction<String, String[], Path> saveFileChooser;
 
+    /** Supplies a snapshot of the command output log (set by the UI). Used
+     *  by the `save output as` command; null when running headless. */
+    @Setter private Supplier<List<String>> outputLogSupplier;
+
     // -- REPL line accumulation --
     // The REPL feeds input one line at a time. A multi-line construct
     // (`for`/`if`/`define`) isn't complete until its `end` arrives, so lines
@@ -248,6 +252,12 @@ public class CommandExecutor {
     public Path chooseSaveFile(String description, String... extensions) {
         if (saveFileChooser == null) return null;
         return saveFileChooser.apply(description, extensions);
+    }
+
+    /** Snapshot of the command output log, or empty when no UI is attached
+     *  (e.g. headless script runs). */
+    public List<String> getOutputLog() {
+        return outputLogSupplier == null ? List.of() : outputLogSupplier.get();
     }
 
     /** Clear the undo/redo stacks. */

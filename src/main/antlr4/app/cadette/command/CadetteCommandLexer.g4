@@ -22,6 +22,12 @@ options {
     caseInsensitive = true;
 }
 
+// Shared identifier character classes. The grammar is caseInsensitive, so
+// `a-z` already folds in `A-Z` — spelling both out is what triggered
+// ANTLR warning(180). NAME_START opens an identifier; NAME_PART continues it.
+fragment NAME_START : [a-z_] ;
+fragment NAME_PART  : [a-z0-9_] ;
+
 // ---- Default mode (command keywords and identifiers) ----
 
 CREATE     : 'create' | 'cr' ;
@@ -64,6 +70,13 @@ PDF        : 'pdf' ;
 PNG        : 'png' ;
 JPEG       : 'jpeg' | 'jpg' ;
 CSV        : 'csv' ;
+SAVE       : 'save' ;
+OUTPUT     : 'output' ;
+// AS introduces the file path in `save output as <path>`. Like RUN, it
+// switches the lexer to PATH_MODE so the path can be given unquoted
+// (slashes, dots) as well as quoted. AS appears in no other command, so
+// the unconditional mode push is safe.
+AS         : 'as' -> pushMode(PATH_MODE) ;
 LAYOUT     : 'layout' | 'layouts' ;
 KERF       : 'kerf' ;
 ALIGN      : 'align' ;
@@ -180,15 +193,15 @@ COMMA      : ',' ;
 NUMBER     : [0-9]+ ('.' [0-9]*)? | '.' [0-9]+ ;
 // Template / loop variable reference, e.g. $width, $i. Resolved at evaluation
 // time via the visitor's scope stack.
-VAR_REF    : '$' [a-zA-Z_] [a-zA-Z0-9_]* ;
-HEX_COLOR  : '#' [0-9a-fA-F]+ ;
+VAR_REF    : '$' NAME_START NAME_PART* ;
+HEX_COLOR  : '#' [0-9a-f]+ ;
 STRING     : '"' ~["]* '"' ;
 // Slash-qualified identifier (e.g. "standard/cabinets/base_cabinet"). Each
 // segment is Java-identifier-like; at least one slash is required so a bare
 // name still lexes as ID. Longest-match rule picks QUALIFIED_NAME when a
 // slash follows the first segment.
-QUALIFIED_NAME : [a-zA-Z_] [a-zA-Z0-9_]* ('/' [a-zA-Z_] [a-zA-Z0-9_]*)+ ;
-ID         : [a-zA-Z_] [a-zA-Z0-9_]* ;
+QUALIFIED_NAME : NAME_START NAME_PART* ('/' NAME_START NAME_PART*)+ ;
+ID         : NAME_START NAME_PART* ;
 WS         : [ \t\r\n]+ -> skip ;
 LINE_COMMENT : '#' ~[\r\n]* -> skip ;
 
@@ -204,6 +217,6 @@ mode PATH_MODE;
 PATH_NEWLINE  : [\r\n]+ -> popMode, skip ;
 PATH_WS       : [ \t]+ -> skip ;
 PATH_COMMENT  : '#' ~[\r\n]* -> skip ;
-PATH_VAR      : '$' [a-zA-Z_] [a-zA-Z0-9_]* ;
+PATH_VAR      : '$' NAME_START NAME_PART* ;
 PATH_QUOTED   : '"' ~["\r\n]* '"' ;
-PATH_LITERAL  : [a-zA-Z0-9_./\\~:+=@-]+ ;
+PATH_LITERAL  : [a-z0-9_./\\~:+=@-]+ ;

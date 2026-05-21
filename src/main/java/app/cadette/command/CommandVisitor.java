@@ -1625,6 +1625,39 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
     }
 
     @Override
+    public String visitSaveOutputCommand(CadetteCommandParser.SaveOutputCommandContext ctx) {
+        var log = executor.getOutputLog();
+        if (log.isEmpty()) {
+            return "No command output to save.";
+        }
+
+        Path outputPath;
+        if (ctx.pathExpr() != null) {
+            String path = ctx.pathExpr().pathSegment().stream()
+                    .map(CommandVisitor::pathSegmentText)
+                    .collect(Collectors.joining());
+            outputPath = Path.of(path);
+            // Default the extension to .txt when the file name has none.
+            if (outputPath.getFileName() == null
+                    || !outputPath.getFileName().toString().contains(".")) {
+                outputPath = Path.of(path + ".txt");
+            }
+        } else {
+            outputPath = executor.chooseSaveFile("Text files", "txt");
+            if (outputPath == null) {
+                return "Save cancelled.";
+            }
+        }
+
+        try {
+            java.nio.file.Files.write(outputPath, log);
+            return "Saved output to " + outputPath.toAbsolutePath();
+        } catch (java.io.IOException e) {
+            return "Could not save output: " + e.getMessage();
+        }
+    }
+
+    @Override
     public String visitUndoCommand(CadetteCommandParser.UndoCommandContext ctx) {
         return executor.undo();
     }
@@ -2992,6 +3025,9 @@ public class CommandVisitor extends CadetteCommandParserBaseVisitor<String> {
                   export cutsheet png [file]      — export cut sheets to PNG image
                   export cutsheet jpg [file]      — export cut sheets to JPEG image
                   export cutlist csv [file]       — export cut list as CSV (one row per part)
+                  save output [as <file>]         — save the command output log to a .txt file
+                                                     (file may be quoted or unquoted; opens a
+                                                      save dialog when no file is given)
                       units: """ + UnitSystem.allNames() + """
 
                   run [file]                       — run a .cds script (opens file dialog if omitted)

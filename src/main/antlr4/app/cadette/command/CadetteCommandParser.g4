@@ -91,6 +91,7 @@ command
     | showCommand
     | setCommand
     | exportCommand
+    | saveOutputCommand
     | undoCommand
     | redoCommand
     | helpCommand
@@ -433,6 +434,16 @@ exportFormat
     | PNG
     | JPEG
     | CSV
+    ;
+
+// Write the command output log to a text file. Phrased with "as" (rather
+// than bare "save output") so it reads distinctly from a future "save
+// project as". Both the "as" clause and the path within it are optional:
+// `save output`, `save output as`, and `save output as <path>` are all
+// valid; the first two open a native save dialog. AS switches the lexer
+// to PATH_MODE, so the path may be quoted or unquoted (see runCommand).
+saveOutputCommand
+    : SAVE OUTPUT (AS pathExpr?)?
     ;
 
 undoCommand

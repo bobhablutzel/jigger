@@ -33,6 +33,10 @@ import com.jme3.app.SimpleApplication;
 import com.jme3.app.state.BaseAppState;
 import com.jme3.input.InputManager;
 import com.jme3.input.KeyInput;
+import com.jme3.input.MouseInput;
+import com.jme3.input.event.KeyInputEvent;
+import com.jme3.input.event.MouseButtonEvent;
+import com.jme3.input.event.MouseMotionEvent;
 import com.jme3.math.ColorRGBA;
 import com.jme3.math.Vector2f;
 import com.jme3.math.Vector3f;
@@ -41,6 +45,7 @@ import com.jme3.scene.Spatial;
 import com.jme3.texture.Texture2D;
 import com.jme3.texture.plugins.AWTLoader;
 import com.simsilica.lemur.Axis;
+import com.simsilica.lemur.Button;
 import com.simsilica.lemur.Container;
 import com.simsilica.lemur.FillMode;
 import com.simsilica.lemur.GuiGlobals;
@@ -62,8 +67,13 @@ import com.simsilica.lemur.event.MouseEventControl;
 import com.simsilica.lemur.event.MouseListener;
 import com.simsilica.lemur.event.KeyAction;
 import com.simsilica.lemur.event.KeyActionListener;
+import com.simsilica.lemur.event.KeyInterceptState;
+import com.simsilica.lemur.event.KeyListener;
+import com.simsilica.lemur.event.PopupState;
+import com.simsilica.lemur.text.DocumentModel;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import org.lwjgl.glfw.GLFW;
 
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
@@ -77,6 +87,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.function.BiConsumer;
 
 /**
  * Lemur UI shell. Hosts:
@@ -349,6 +360,10 @@ public class LemurAppState extends BaseAppState {
         sceneManager.addSceneChangeListener(this::refreshPartsList);
         selectionManager.addSelectionListener(this::onSelectionChanged);
 
+        // Give the executor a window into the output log so the
+        // `save output as` command can write the current transcript.
+        executor.setOutputLogSupplier(() -> new ArrayList<>(outputModel));
+
 
         // Populate from whatever's already in the scene (zero on a fresh launch).
         refreshPartsList();
@@ -357,7 +372,31 @@ public class LemurAppState extends BaseAppState {
         appendOutput(BuildInfo.instance().getDisplayString());
         appendOutput("Type 'help' or start adding parts. 'show about' for license + links.");
 
+        runStartupScript();
+
         installCutSheetInputHandlers(app);
+    }
+
+    /**
+     * Run {@code ~/.cadette/startup.cds} if it exists, echoing its output into
+     * the command panel as if the user had typed {@code run}. The executor
+     * suppresses undo for startup commands, so they stay out of the undo
+     * history. Run here, at the tail of {@link #initialize}, so the command
+     * panel exists to receive the output and scene listeners are already
+     * wired to refresh the parts list.
+     */
+    private void runStartupScript() {
+        try {
+            String result = executor.runStartupScript();
+            if (result != null && !result.isEmpty()) {
+                appendOutput("[startup] running ~/.cadette/startup.cds");
+                for (String line : result.split("\n", -1)) {
+                    appendOutput(line);
+                }
+            }
+        } catch (Throwable t) {
+            appendOutput("Error in startup.cds: " + t.getMessage());
+        }
     }
 
     private boolean shiftHeldForCutSheet = false;
@@ -765,8 +804,216 @@ public class LemurAppState extends BaseAppState {
         commandInput.getActionMap().put(new KeyAction(KeyInput.KEY_DOWN),
                 (src, key) -> recallHistory(+1));
 
+        // Clipboard: Ctrl+C / Ctrl+V / Ctrl+X. Bound through the TextField's
+        // actionMap — when a KeyAction matches, the KeyHandler runs it and
+        // consumes the event, so the modifier combo never falls through to
+        // the default char insert. KeyInterceptState folds the Control
+        // modifier into a bit on every platform, so this covers Windows,
+        // Linux, and Ctrl+V on macOS.
+        commandInput.getActionMap().put(
+                new KeyAction(KeyInput.KEY_C, KeyAction.CONTROL_DOWN),
+                (src, key) -> copyFromCommand());
+        commandInput.getActionMap().put(
+                new KeyAction(KeyInput.KEY_V, KeyAction.CONTROL_DOWN),
+                (src, key) -> pasteIntoCommand());
+        commandInput.getActionMap().put(
+                new KeyAction(KeyInput.KEY_X, KeyAction.CONTROL_DOWN),
+                (src, key) -> cutFromCommand());
+
+        // macOS users reach for Cmd, not Ctrl. Lemur's KeyInterceptState only
+        // folds Shift/Ctrl/Alt into modifier bits — never META — so the
+        // actionMap above can't see Cmd+key. Track META ourselves with a
+        // global key listener, gated to macOS so Windows/Linux Super+key
+        // (often a WM shortcut) is left alone.
+        if (isMac()) {
+            installMacClipboardKeys();
+        }
+
+        // Right-click context menus: Cut/Copy/Paste on the input field,
+        // Copy/Paste on the output log (for grabbing text into bug reports).
+        MouseEventControl.addListenersToSpatial(commandInput,
+                rightClickListener(this::showInputContextMenu));
+        MouseEventControl.addListenersToSpatial(outputList,
+                rightClickListener(this::showOutputContextMenu));
+
         GuiGlobals.getInstance().requestFocus(commandInput);
         return panel;
+    }
+
+    private static boolean isMac() {
+        return System.getProperty("os.name", "").toLowerCase().contains("mac");
+    }
+
+    /** Register a global key listener that maps Cmd+C/V/X to the clipboard
+     *  actions while the command field has focus. Needed only on macOS —
+     *  see {@link #buildCommandPanel()} for why the actionMap can't do it. */
+    private void installMacClipboardKeys() {
+        KeyInterceptState keys = getApplication().getStateManager()
+                .getState(KeyInterceptState.class);
+        if (keys == null) return;
+        keys.addKeyListener(new KeyListener() {
+            private boolean meta;
+            @Override
+            public void onKeyEvent(KeyInputEvent evt) {
+                int code = evt.getKeyCode();
+                if (code == KeyInput.KEY_LMETA || code == KeyInput.KEY_RMETA) {
+                    meta = evt.isPressed();
+                    return;
+                }
+                if (!meta || !evt.isPressed() || evt.isRepeating()) return;
+                if (GuiGlobals.getInstance().getFocusManagerState().getFocus()
+                        != commandInput) return;
+                switch (code) {
+                    case KeyInput.KEY_C -> { copyFromCommand();  evt.setConsumed(); }
+                    case KeyInput.KEY_V -> { pasteIntoCommand(); evt.setConsumed(); }
+                    case KeyInput.KEY_X -> { cutFromCommand();   evt.setConsumed(); }
+                    default -> { }
+                }
+            }
+        });
+    }
+
+    /** A MouseListener that opens a context menu on right-button press. */
+    private MouseListener rightClickListener(BiConsumer<Float, Float> openMenu) {
+        return new MouseListener() {
+            @Override
+            public void mouseButtonEvent(MouseButtonEvent evt, Spatial target, Spatial capture) {
+                if (evt.getButtonIndex() == MouseInput.BUTTON_RIGHT && evt.isPressed()) {
+                    openMenu.accept((float) evt.getX(), (float) evt.getY());
+                    evt.setConsumed();
+                }
+            }
+            @Override public void mouseEntered(MouseMotionEvent e, Spatial t, Spatial c) { }
+            @Override public void mouseExited(MouseMotionEvent e, Spatial t, Spatial c) { }
+            @Override public void mouseMoved(MouseMotionEvent e, Spatial t, Spatial c) { }
+        };
+    }
+
+    /** One entry in a context menu — a label and the action it runs. */
+    private record MenuItem(String label, Runnable action) { }
+
+    /** Cut/Copy/Paste menu for the command input field. */
+    private void showInputContextMenu(float screenX, float screenY) {
+        showContextMenu(screenX, screenY, List.of(
+                new MenuItem("Cut",   this::cutFromCommand),
+                new MenuItem("Copy",  this::copyFromCommand),
+                new MenuItem("Paste", this::pasteIntoCommand)));
+    }
+
+    /** Copy menu for the output log. Output is read-only — no Cut, and no
+     *  Paste (pasting belongs to the input field's menu). */
+    private void showOutputContextMenu(float screenX, float screenY) {
+        showContextMenu(screenX, screenY, List.of(
+                new MenuItem("Copy", this::copyOutput)));
+    }
+
+    /** Show a small button popup at the given screen coordinates (origin
+     *  bottom-left, matching the Lemur GUI node). Each item runs its action,
+     *  dismisses the menu, and returns focus to the command field. */
+    private void showContextMenu(float screenX, float screenY, List<MenuItem> items) {
+        PopupState popup = getApplication().getStateManager().getState(PopupState.class);
+        if (popup == null) {
+            popup = new PopupState();
+            getApplication().getStateManager().attach(popup);
+        }
+        final PopupState popupState = popup;
+
+        Container menu = new Container(new SpringGridLayout(Axis.Y, Axis.X));
+        for (MenuItem item : items) {
+            Button button = menu.addChild(new Button(item.label()));
+            button.addClickCommands(src -> {
+                item.action().run();
+                popupState.closePopup(menu);
+                GuiGlobals.getInstance().requestFocus(commandInput);
+            });
+        }
+        menu.setLocalTranslation(screenX, screenY, 100f);
+        popupState.showPopup(menu);
+        // clampToGui keeps the menu on-screen when right-clicked near an edge.
+        popupState.clampToGui(menu);
+    }
+
+    /** Insert the clipboard's text at the caret. Line breaks collapse to a
+     *  single space so multi-line clipboard content flattens into this
+     *  single-line field without losing the word gap at each break; any
+     *  other control characters are dropped by DefaultDocumentModel.insert. */
+    private void pasteIntoCommand() {
+        String text = clipboardText();
+        if (text == null || text.isEmpty()) return;
+        commandInput.getDocumentModel().insert(text.replaceAll("\\R+", " "));
+    }
+
+    /** Copy the selection if there is one, otherwise the whole line. */
+    private void copyFromCommand() {
+        DocumentModel doc = commandInput.getDocumentModel();
+        String selection = selectedText(doc);
+        setClipboardText(selection != null ? selection : doc.getText());
+    }
+
+    /** Cut the selection if there is one, otherwise the whole line. */
+    private void cutFromCommand() {
+        DocumentModel doc = commandInput.getDocumentModel();
+        String text = doc.getText();
+        String selection = selectedText(doc);
+        if (selection != null) {
+            setClipboardText(selection);
+            int start = clamp(Math.min(doc.getCarat(), doc.getAnchor()), text.length());
+            int end   = clamp(Math.max(doc.getCarat(), doc.getAnchor()), text.length());
+            doc.setText(text.substring(0, start) + text.substring(end));
+        } else {
+            setClipboardText(text);
+            doc.setText("");
+        }
+    }
+
+    /** Copy the highlighted output line, or the whole log if no line is
+     *  selected — sized for capturing output into a defect report. */
+    private void copyOutput() {
+        String line = outputList.getSelectedItem();
+        setClipboardText(line != null ? line : String.join("\n", outputModel));
+    }
+
+    /** The selected substring, or null when caret == anchor (no selection).
+     *  Lemur's TextField tracks a selection anchor for mouse-drag selection;
+     *  when none is active getAnchor() equals getCarat(). */
+    private static String selectedText(DocumentModel doc) {
+        int carat = doc.getCarat();
+        int anchor = doc.getAnchor();
+        if (carat == anchor) return null;
+        String text = doc.getText();
+        int start = clamp(Math.min(carat, anchor), text.length());
+        int end   = clamp(Math.max(carat, anchor), text.length());
+        return start < end ? text.substring(start, end) : null;
+    }
+
+    private static int clamp(int value, int max) {
+        return Math.max(0, Math.min(value, max));
+    }
+
+    /** System clipboard text, or null if empty / unavailable.
+     *
+     *  <p>Uses GLFW's clipboard — the native clipboard bound to the app
+     *  window — rather than AWT's {@code Toolkit.getSystemClipboard()}.
+     *  AWT's clipboard is unreliable from inside an LWJGL/GLFW process:
+     *  no AWT window services X11 selection requests, and it can clash
+     *  with GLFW on macOS, which silently broke paste. GLFW clipboard
+     *  calls must run on the main render thread — every caller here does
+     *  (key actions and button clicks are dispatched on it). The window
+     *  argument is unused by GLFW 3.3+, so NULL (0L) is fine. */
+    private static String clipboardText() {
+        try {
+            return GLFW.glfwGetClipboardString(0L);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static void setClipboardText(String text) {
+        try {
+            GLFW.glfwSetClipboardString(0L, text);
+        } catch (Exception e) {
+            // clipboard unavailable — nothing useful to do
+        }
     }
 
     private Container buildCutSheetPanel() {
@@ -1677,11 +1924,11 @@ public class LemurAppState extends BaseAppState {
     private void appendOutput(String line) {
         outputModel.add(line);
         if (outputList != null) {
-            outputList.getSelectionModel().setSelection(outputModel.size() - 1);
-            // ListBox doesn't auto-scroll on selection change — its slider
-            // model is bound to a "topmost-visible-index" RangedValueModel.
-            // Drive it to the minimum (which in Lemur's Y-up GUI means
-            // bottom-of-list visible) so the most recent line is showing.
+            // Deliberately no setSelection here: a programmatic selection
+            // would make the output's right-click "Copy" always grab that
+            // line instead of falling back to the whole log. Selection is
+            // left for the user's clicks; scrolling is driven directly off
+            // the slider model (it doesn't track selection anyway).
             scrollOutputToBottom();
         }
     }
@@ -1718,8 +1965,8 @@ public class LemurAppState extends BaseAppState {
         java.util.List<String> snapshot = new ArrayList<>(outputModel);
         outputModel.clear();
         outputModel.addAll(snapshot);
-        // Restore the scroll-to-bottom selection (clear cleared it).
-        outputList.getSelectionModel().setSelection(outputModel.size() - 1);
+        // Re-pin to the bottom — the clear/addAll above resets the slider.
+        scrollOutputToBottom();
     }
 
     private void recallHistory(int direction) {
