@@ -14,7 +14,7 @@ This example has two flavors:
 
 ## Run it
 
-In the Cadette command panel:
+In the CADette command panel:
 
 ```
 run examples/island/island.cds
@@ -41,7 +41,7 @@ run examples/island/island2.cds
 
 ## Reading the script
 
-[`island.cds`](island.cds) is short but exercises several Cadette
+[`island.cds`](island.cds) is short but exercises several CADette
 idioms:
 
 - `create base_cabinet b w 80cm h 60cm d 40cm` — instantiate a

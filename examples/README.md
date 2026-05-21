@@ -1,10 +1,10 @@
-# Cadette Examples
+# CADette Examples
 
-Real-world projects that show what Cadette can do. Each subdirectory
+Real-world projects that show what CADette can do. Each subdirectory
 covers one example with a `README.md` explaining the command(s), the
 parameters you can tweak, and what to look at in the result.
 
-Run any command in the Cadette command panel at the bottom of the
+Run any command in the CADette command panel at the bottom of the
 window. Type `help` for the full command reference, or the example's
 README for a guided walkthrough.
 
@@ -12,7 +12,7 @@ README for a guided walkthrough.
 
 | Example | One-liner | What it shows |
 |---------|-----------|---------------|
-| [Cross-cut sled](cross-cut-sled/) | `create crosscut_sled S w 70cm l 60cm fh 12cm` | Single-command template, spline-curved handle, fence + base composition |
+| [Cross-cut sled](cross-cut-sled/) | `create crosscut_sled S w 80cm l 60cm fh 12cm` | Single-command template, spline-curved handle, fence + base composition |
 | [Fence gate](fence-gate/) | `create fence_gate G w 100cm h 180cm` | Dimensional lumber (2x4s), diagonal brace, mitered cuts, dollar-cost lumber packing |
 | [Base cabinet](base-cabinet/) | `create base_cabinet K w 50cm h 60cm d 40cm` | Cabinet template with side dadoes, back rabbet, optional toe-kick — the foundation for kitchen islands |
 | [Island](island/) | `run examples/island/island.cds` | Multi-template composition: two cabinets + counter |
@@ -40,7 +40,7 @@ standard/jigs/crosscut_sled` (or the path you want).
 
 ## Writing your own
 
-Cadette projects are scripts. The `island.cds` example shows the
+CADette projects are scripts. The `island.cds` example shows the
 composition pattern — instantiate templates, attach parts, run
 operations. Save your work to a `.cds` file and re-run it with `run
 my-project.cds`.

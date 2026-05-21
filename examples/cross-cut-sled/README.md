@@ -2,13 +2,13 @@
 
 A table-saw cross-cut sled — MDF base with butt-joined front and rear
 fences, plus a laminated handle profiled with a curve. Demonstrates
-spline cutouts (the curved handle), a stop-block T-slot, and Cadette's
+spline cutouts (the curved handle), a stop-block T-slot, and CADette's
 joint inference.
 
 ## Run it
 
 ```
-create crosscut_sled S w 70cm l 60cm fh 12cm
+create crosscut_sled S w 80cm l 60cm fh 12cm
 ```
 
 Parameters:
@@ -41,6 +41,6 @@ top of the fence).
 
 Cross-cut sleds are a near-universal table-saw jig and a good
 exemplar of "real woodworking project that benefits from a digital
-build." The curved handle exercises Cadette's spline cutouts, the
+build." The curved handle exercises CADette's spline cutouts, the
 T-slot exercises rect cutouts, and the laminated handle shows the
 glue-up modeling pattern.

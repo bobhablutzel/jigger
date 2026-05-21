@@ -1,7 +1,7 @@
 # Fence gate
 
 A wooden fence gate built from 2x4s — two stiles, two rails, and a
-diagonal brace with miter-cut ends. Demonstrates Cadette's
+diagonal brace with miter-cut ends. Demonstrates CADette's
 dimensional-lumber support: the dollar-cost packer picks the
 cheapest mix of 8'/10'/12'/16' boards for the parts.
 
@@ -47,4 +47,4 @@ The fence gate was the test case that motivated the dollar-cost
 packer. With its 5 parts totaling about 153" of 2x4, a naive
 "minimize linear feet" algorithm picks one expensive 16' board.
 Real woodworkers know that 2×8' boards are cheaper, fit in a car,
-and are easier to handle. Cadette's optimizer agrees.
+and are easier to handle. CADette's optimizer agrees.

@@ -3,28 +3,28 @@
 # https://github.com/bobhablutzel/cadette
 #
 # First tutorial - creating a simple 60cm x 100cm x 20cm plywood box,
-# joined with pocket screws.
+# made up of 18mm plywood, joined with pocket screws.
 
 
-# Part 1
-create part s1 size 60,20
-move s1 to 0,0,98.2
+# First part
+create part s1 material "plywood-18mm" size 60cm,20cm
+move s1 to 0cm,0cm,98.2cm
 
-# Part 2
-create part s2 size 96.4,20
+# Second part
+create part s2 material "plywood-18mm" size 96.4cm,20cm
 rotate s2 0,270,0
-move s2 to 60,0,1.8
+move s2 to 60cm,0,1.8cm
 
-# Part 3
-create part s3 size 96.4,20
+# Third part
+create part s3 material "plywood-18mm" size 96.4cm,20cm
 rotate s3 0,270,0
-move s3 to 1.8,0,1.8
+move s3 to 1.8cm,0,1.8cm
 
-# Part 4
-create part s4 size 60,20
+# Fourth part
+create part s4 material "plywood-18mm" size 60cm,20cm
 
 # Joinery
-join s2 to s1 with pocket screws 2
-join s3 to s1 with pocket screws 2
-join s2 to s4 with pocket screws 2
-join s3 to s4 with pocket screws 2
+join s2 to s1 with pocket_screw screws 2
+join s3 to s1 with pocket_screw screws 2
+join s2 to s4 with pocket_screw screws 2
+join s3 to s4 with pocket_screw screws 2
