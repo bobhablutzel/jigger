@@ -40,7 +40,7 @@ To set the release version, edit `pom.xml`:
 (Keep the qualifier here too — it shows up in `show about` and `build-info.properties`
 via the git-commit-id plugin, so users can see they're on a beta.)
 
-## 2. Commit and tag
+## 2. Commit, tag, and push
 
 ```bash
 # On main, with a clean tree and tests green:
@@ -48,16 +48,25 @@ mvn test
 git add pom.xml
 git commit -m "Release v1.0.0-beta.1"
 git tag -a v1.0.0-beta.1 -m "CADette v1.0.0-beta.1"
+git push origin main
+git push origin v1.0.0-beta.1
 ```
 
-Don't push the tag yet — build and smoke-test the installers first so a bad
-build doesn't leave a published tag pointing at it. If something is wrong you
-can still `git tag -d v1.0.0-beta.1` and redo the commit.
+The commit and tag must be pushed now — `jpackage` can't cross-build, so each
+OS builds from its own checkout of the **tagged commit**, and they can only get
+identical source once the tag is on the remote.
+
+Pushing the tag here is safe: nothing is public until `gh release create`
+(step 4), and a bare tag with no Release attached is near-invisible. If a build
+turns out bad, delete the tag locally and on the remote
+(`git tag -d v1.0.0-beta.1` and `git push origin :refs/tags/v1.0.0-beta.1`),
+fix the problem, then re-commit, re-tag, and re-push.
 
 ## 3. Build the installer on each platform
 
-Check out the **tagged commit** on each machine (`git checkout v1.0.0-beta.1`)
-so all three installers are built from identical source.
+Check out the **tagged commit** on each machine (`git fetch --tags`, then
+`git checkout v1.0.0-beta.1`) so all three installers are built from identical
+source.
 
 The `package-app` Maven profile auto-detects the host OS and produces the
 right installer type. Use `verify`, **not** `package` — the macOS build needs
@@ -94,15 +103,10 @@ Collect all three artifacts onto one machine for the upload step.
 
 ## 4. Create the GitHub Release
 
-Use the `gh` CLI (authenticated as a repo maintainer). Push the tag first so
-the release attaches to it:
-
-```bash
-git push origin main
-git push origin v1.0.0-beta.1
-```
-
-Then create the release and upload all three installers in one command:
+The commit and tag were already pushed in step 2. With all three installers
+built and smoke-tested, use the `gh` CLI (authenticated as a repo maintainer)
+to create the release — it attaches to the existing tag and uploads all three
+installers in one command:
 
 ```bash
 gh release create v1.0.0-beta.1 \
@@ -151,11 +155,11 @@ Write `release-notes.md` covering, at minimum:
 [ ] pom.xml version set to release version
 [ ] Version-bump commit made
 [ ] Tag created (v<version>)
+[ ] Tag + main pushed
 [ ] Linux .deb built + smoke-tested
 [ ] macOS .dmg built + smoke-tested
 [ ] Windows .msi built + smoke-tested
 [ ] release-notes.md written
-[ ] Tag + main pushed
 [ ] gh release create run with all 3 artifacts
 [ ] Releases page verified
 [ ] pom.xml bumped back to -SNAPSHOT
