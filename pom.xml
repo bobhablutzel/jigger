@@ -18,7 +18,10 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <jme3.version>3.9.0-stable</jme3.version>
         <antlr4.version>4.13.1</antlr4.version>
-        <lombok.version>1.18.38</lombok.version>
+        <!-- 1.18.40+ required for JDK 25: Lombok patches javac internals,
+             and pre-1.18.40 against release=25 causes intermittent compiler
+             crashes. Keep this >= the targeted JDK's Lombok support. -->
+        <lombok.version>1.18.46</lombok.version>
         <lemur.version>1.16.0</lemur.version>
         <!-- Matches the LWJGL pulled in transitively by jme3-lwjgl3 3.9.0. -->
         <lwjgl.version>3.3.6</lwjgl.version>
